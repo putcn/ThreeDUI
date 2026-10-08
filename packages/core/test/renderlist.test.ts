@@ -28,7 +28,7 @@ describe('buildRenderList', () => {
     expect(rl.panels.map(p => p.node.id)).toEqual(['card'])
     expect(rl.panels[0]).toMatchObject({ rect: { x: 20, y: 20, width: 200, height: 100 }, radius: theme.radius.lg, elevation: 0 })
     expect(rl.glass).toHaveLength(1)
-    expect(rl.glass[0]).toMatchObject({ rect: { x: 30, y: 30, width: 120, height: 40 }, radius: 20, elevation: 4, clip: { x: 20, y: 20, width: 200, height: 100 } })
+    expect(rl.glass[0]).toMatchObject({ rect: { x: 30, y: 30, width: 120, height: 40 }, radius: 20, elevation: 4, clip: { x: 20, y: 20, width: 200, height: 100, radius: theme.radius.lg } })
     expect(rl.glass[0]!.params.glow).toMatchObject({ strength: 1.1 }); expect(rl.glass[0]!.params.fillet).toBe(theme.glass.fillet)
     expect(rl.decorations.map(d => d.kind).sort()).toEqual(['pool', 'rim'])
     expect(rl.text[0]).toMatchObject({ text: '创建账号', align: 'center', elevation: 4 })
@@ -83,10 +83,13 @@ describe('buildRenderList rules', () => {
       box('box', 'clear', { bg: 'glass-clear', left: 0, width: 100, height: 40, radius: 12 }),
       box('box', 'tinted', { bg: 'glass', left: 120, width: 100, height: 40, glass: { glow: { color: 'accent', strength: 1 } } }),
       box('glass', 'plain', { left: 240, width: 100, height: 40, glass: { variant: 'clear' } }),
+      box('box', 'forced', { bg: 'glass-clear', top: 60, width: 100, height: 40, glass: { variant: 'regular' } }),
     ))
     const rl = buildRenderList(s, theme, 'light')
     expect(rl.panels).toEqual([])
-    expect(rl.glass.map(g => [g.node.id, g.params.scatter])).toEqual([['clear', 0.02], ['tinted', theme.glass.scatter], ['plain', 0.02]])
+    expect(rl.glass.map(g => [g.node.id, g.params.variant, g.params.scatter])).toEqual([
+      ['clear', 'clear', 0.02], ['tinted', 'regular', theme.glass.scatter], ['plain', 'clear', 0.02], ['forced', 'regular', theme.glass.scatter],
+    ])
     const pool = (id: string) => rl.decorations.find(d => d.kind === 'pool' && d.node.id === id)!
     expect(pool('clear')).toMatchObject({ color: [1, 1, 1, 1], strength: 0.28, radius: 12 })
     expect(pool('tinted')).toMatchObject({ color: resolveColor('accent', theme, 'light'), strength: 0.5 })
@@ -96,6 +99,15 @@ describe('buildRenderList rules', () => {
       scatter: theme.glass.scatter, lift: theme.glass.lift, edgeGlow: theme.glass.edgeGlow, ior: theme.glass.ior,
       dispersion: theme.glass.dispersion, roughness: theme.glass.roughness, tint: null, absorption: 0,
       glow: { color: resolveColor('accent', theme, 'light'), strength: 1 }, cornerExponent: 4.5,
+      envIntensity: 1, specularIntensity: 1, innerGlow: 0, adaptive: true, variant: 'regular',
+    })
+  })
+
+  it('takes glass defaults, including the variant, from the theme', () => {
+    const custom = { ...theme, glass: { ...theme.glass, variant: 'clear' as const, envIntensity: 0.7, specularIntensity: 1.5, innerGlow: 0.2, adaptive: false } }
+    const s = layout(surface(box('box', 'g', { bg: 'glass', width: 100, height: 40 })))
+    expect(buildRenderList(s, custom, 'light').glass[0]!.params).toMatchObject({
+      variant: 'clear', scatter: 0.02, envIntensity: 0.7, specularIntensity: 1.5, innerGlow: 0.2, adaptive: false,
     })
   })
 
@@ -103,11 +115,13 @@ describe('buildRenderList rules', () => {
     const s = layout(surface(box('glass', 'g', { width: 100, height: 40, glass: {
       thickness: 9, fillet: 2, filletBottom: 1, profile: 'lens', scatter: 0.3, lift: 0.2, edgeGlow: 0.1, ior: 1.33,
       dispersion: 0, roughness: 0.5, tint: 'accent', absorption: 0.4, glow: { color: '#ff0000', strength: 0.7, split: 0.5 }, cornerExponent: 3,
+      envIntensity: 0.5, specularIntensity: 2, innerGlow: 0.3, adaptive: false, variant: 'clear',
     } })))
     expect(buildRenderList(s, theme, 'dark').glass[0]!.params).toEqual({
       thickness: 9, fillet: 2, filletBottom: 1, profile: 'lens', scatter: 0.3, lift: 0.2, edgeGlow: 0.1, ior: 1.33,
       dispersion: 0, roughness: 0.5, tint: resolveColor('accent', theme, 'dark'), absorption: 0.4,
       glow: { color: [1, 0, 0, 1], strength: 0.7, split: 0.5 }, cornerExponent: 3,
+      envIntensity: 0.5, specularIntensity: 2, innerGlow: 0.3, adaptive: false, variant: 'clear',
     })
   })
 
@@ -138,10 +152,12 @@ describe('buildRenderList rules', () => {
   it('clips to the intersection of overflow hidden/scroll ancestors and scroll nodes, decorations included', () => {
     const g = box('glass', 'g', { left: 0, top: 50, width: 80, height: 40 })
     const img = box('image', 'img', { left: 0, top: 0, width: 30, height: 30 }); img.setProp('src', 'a.png')
-    const list = box('scroll', 'list', { left: 10, top: 10, width: 100, height: 100 }, g, img); list.setProp('scrollY', 30)
-    const outer = box('box', 'outer', { left: 50, top: 0, width: 300, height: 60, overflow: 'scroll' }, list)
+    const list = box('scroll', 'list', { left: 10, top: 10, width: 100, height: 100, radius: 10 }, g, img); list.setProp('scrollY', 30)
+    const side = box('box', 'side', { left: 200, top: 0, width: 20, height: 20, bg: 'fill' })
+    const outer = box('box', 'outer', { left: 50, top: 0, width: 300, height: 60, radius: 20, overflow: 'scroll' }, list, side)
     const rl = buildRenderList(layout(surface(outer)), theme, 'light')
-    const clip = { x: 60, y: 10, width: 100, height: 50 }
+    const clip = { x: 60, y: 10, width: 100, height: 50, radius: 10 }   // the inner rect intersection, the innermost radius
+    expect(rl.panels.find(p => p.node.id === 'side')!.clip).toEqual({ x: 50, y: 0, width: 300, height: 60, radius: 20 })
     expect(rl.glass[0]).toMatchObject({ rect: { x: 60, y: 30, width: 80, height: 40 }, clip })
     expect(rl.decorations.map(d => d.clip)).toEqual([clip, clip])
     expect(rl.images[0]).toMatchObject({ src: 'a.png', rect: { x: 60, y: -20, width: 30, height: 30 }, clip, elevation: 0 })
@@ -173,6 +189,21 @@ describe('buildRenderList rules', () => {
   it('clamps radii to half the shorter side', () => {
     const s = layout(surface(box('box', 'thin', { width: 100, height: 10, radius: 'xl', bg: 'fill' })))
     expect(buildRenderList(s, theme, 'light').panels[0]!.radius).toBe(5)
+  })
+
+  it('gives text its content box: the effective padding, specific edges over X/Y over all', () => {
+    const t = box('text', 't', { left: 10, top: 20, width: 100, height: 40, padding: 8 })
+    const mixed = box('text', 'mixed', { left: 0, top: 100, width: 100, height: 40, padding: 2, paddingX: 4, paddingTop: 6, paddingRight: 1 })
+    // Layout reads the base style, so branch padding can exceed the box: the content box clamps at 0.
+    const over = box('text', 'over', { left: 0, top: 200, width: 100, height: 40, focused: { paddingY: 30 } }); over.state.focused = true
+    const s = layout(surface(t, mixed, over))
+    expect(buildRenderList(s, theme, 'light').text.map(x => x.rect)).toEqual([
+      { x: 18, y: 28, width: 84, height: 24 },
+      { x: 4, y: 106, width: 95, height: 32 },
+      { x: 0, y: 230, width: 100, height: 0 },
+    ])
+    t.setStyle({ hover: { padding: 10 } }); t.state.hover = true
+    expect(buildRenderList(s, theme, 'light').text[0]!.rect).toEqual({ x: 20, y: 30, width: 80, height: 20 })
   })
 
   it('resolves text defaults and forwards optional typography only when set', () => {

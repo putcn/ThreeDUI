@@ -45,4 +45,10 @@ describe('theme', () => {
     expect(defaultTheme.metrics).toMatchObject({ controlPadding: 26, icon: 28, iconGap: 14, groupGap: 12, checkbox: 44, checkboxRadius: 12, switchWidth: 136, switchHeight: 62, knob: 48, knobMargin: 7 })
     expect(Object.keys(defaultTheme.springs)).toEqual(['snappy', 'smooth', 'bouncy'])
   })
+  it('ships a default for every glass parameter the theme owns', () => {
+    expect(defaultTheme.glass).toEqual({
+      thickness: 16, fillet: 5, filletBottom: 3, scatter: 0.05, lift: 0.1, edgeGlow: 0.8, ior: 1.5, dispersion: 0.8, roughness: 0.06,
+      envIntensity: 1, specularIntensity: 1, innerGlow: 0, adaptive: true, variant: 'regular',
+    })
+  })
 })

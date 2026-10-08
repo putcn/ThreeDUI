@@ -9,14 +9,17 @@ import type { SurfaceModel } from './surface'
 // pre-order index over the visible tree (root 0); `elevation` is the node's own plus every ancestor's;
 // `clip` is the intersection of the rects of `overflow: hidden|scroll` and `scroll` ancestors, absent when none.
 
-export interface ResolvedGlass { thickness: number; fillet: number; filletBottom: number; profile: 'fillet' | 'lens'; scatter: number; lift: number; edgeGlow: number; ior: number; dispersion: number; roughness: number; tint: RGBA | null; absorption: number; glow: { color: RGBA; strength: number; split?: number } | null; cornerExponent: number }
-export interface PanelInstance { node: Node; rect: Rect; radius: number; color: RGBA; border?: { width: number; color: RGBA }; clip?: Rect; z: number; elevation: number; opacity: number }
-export interface GlassInstance { node: Node; rect: Rect; radius: number; z: number; elevation: number; params: ResolvedGlass; clip?: Rect }
-/** `maxLines`, `lineHeight`, `letterSpacing` and `wrap` are present only when the style sets them. */
-export interface TextInstance { node: Node; rect: Rect; text: string; font: { family: string; size: number; weight: number }; color: RGBA; align: 'left' | 'center' | 'right'; maxLines?: number; lineHeight?: number; letterSpacing?: number; wrap?: boolean; z: number; elevation: number; clip?: Rect }
+/** A clip region: the intersected ancestor rects, rounded by the innermost clipping ancestor's (clamped) radius. */
+export interface ClipRect extends Rect { radius: number }
+
+export interface ResolvedGlass { thickness: number; fillet: number; filletBottom: number; profile: 'fillet' | 'lens'; scatter: number; lift: number; edgeGlow: number; ior: number; dispersion: number; roughness: number; tint: RGBA | null; absorption: number; glow: { color: RGBA; strength: number; split?: number } | null; cornerExponent: number; envIntensity: number; specularIntensity: number; innerGlow: number; adaptive: boolean; variant: 'regular' | 'clear' }
+export interface PanelInstance { node: Node; rect: Rect; radius: number; color: RGBA; border?: { width: number; color: RGBA }; clip?: ClipRect; z: number; elevation: number; opacity: number }
+export interface GlassInstance { node: Node; rect: Rect; radius: number; z: number; elevation: number; params: ResolvedGlass; clip?: ClipRect }
+/** `rect` is the content box (the node's rect minus its padding); `maxLines`, `lineHeight`, `letterSpacing` and `wrap` are present only when the style sets them. */
+export interface TextInstance { node: Node; rect: Rect; text: string; font: { family: string; size: number; weight: number }; color: RGBA; align: 'left' | 'center' | 'right'; maxLines?: number; lineHeight?: number; letterSpacing?: number; wrap?: boolean; z: number; elevation: number; clip?: ClipRect }
 /** Rides on its glass node: `rim` just above it (`z + 0.5`), `pool` just below it (`z - 0.25`), same elevation and clip. */
-export interface DecorationInstance { node: Node; kind: 'rim' | 'pool'; rect: Rect; radius: number; color: RGBA; strength: number; z: number; elevation: number; clip?: Rect }
-export interface ImageInstance { node: Node; rect: Rect; src: unknown; radius: number; z: number; elevation: number; clip?: Rect }
+export interface DecorationInstance { node: Node; kind: 'rim' | 'pool'; rect: Rect; radius: number; color: RGBA; strength: number; z: number; elevation: number; clip?: ClipRect }
+export interface ImageInstance { node: Node; rect: Rect; src: unknown; radius: number; z: number; elevation: number; clip?: ClipRect }
 export interface RenderList { panels: PanelInstance[]; glass: GlassInstance[]; text: TextInstance[]; decorations: DecorationInstance[]; images: ImageInstance[] }
 
 /** `o` without its `undefined` entries, so optional fields stay absent under exactOptionalPropertyTypes. */
@@ -24,10 +27,18 @@ function defined<T extends Record<string, unknown>>(o: T): { [K in keyof T]?: Ex
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as { [K in keyof T]?: Exclude<T[K], undefined> }
 }
 
-function intersect(a: Rect | undefined, b: Rect): Rect {
-  if (!a) return b
+/** The clip for the children of a clipping node at `b` with corner `radius`, inside the inherited clip `a`. */
+function clipTo(a: ClipRect | undefined, b: Rect, radius: number): ClipRect {
+  if (!a) return { x: b.x, y: b.y, width: b.width, height: b.height, radius }
   const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y)
-  return { x, y, width: Math.max(0, Math.min(a.x + a.width, b.x + b.width) - x), height: Math.max(0, Math.min(a.y + a.height, b.y + b.height) - y) }
+  return { x, y, width: Math.max(0, Math.min(a.x + a.width, b.x + b.width) - x), height: Math.max(0, Math.min(a.y + a.height, b.y + b.height) - y), radius }
+}
+
+/** `r` minus the padding `s` sets, resolved as yoga does: a specific edge, then X/Y, then `padding`. */
+function contentBox(r: Rect, s: Style): Rect {
+  const left = s.paddingLeft ?? s.paddingX ?? s.padding ?? 0, right = s.paddingRight ?? s.paddingX ?? s.padding ?? 0
+  const top = s.paddingTop ?? s.paddingY ?? s.padding ?? 0, bottom = s.paddingBottom ?? s.paddingY ?? s.padding ?? 0
+  return { x: r.x + left, y: r.y + top, width: Math.max(0, r.width - left - right), height: Math.max(0, r.height - top - bottom) }
 }
 
 /** How far `layout` sits inside a `width × height` parent at its nearest edge: the gap a concentric radius subtracts. */
@@ -38,15 +49,17 @@ function inset(layout: Rect, width: number, height: number): number {
 function resolveGlass(s: Style, theme: Theme, scheme: ColorScheme): ResolvedGlass {
   const g = s.glass ?? {}
   const d = theme.glass
-  const clear = g.variant !== undefined ? g.variant === 'clear' : s.bg === 'glass-clear'
+  const variant = g.variant ?? (s.bg === 'glass-clear' ? 'clear' : d.variant)   // explicit, else glass-clear, else the theme's
   return {
     thickness: g.thickness ?? d.thickness, fillet: g.fillet ?? d.fillet, filletBottom: g.filletBottom ?? d.filletBottom, profile: g.profile ?? 'fillet',
-    scatter: g.scatter ?? (clear ? 0.02 : d.scatter), lift: g.lift ?? d.lift, edgeGlow: g.edgeGlow ?? d.edgeGlow,
+    scatter: g.scatter ?? (variant === 'clear' ? 0.02 : d.scatter), lift: g.lift ?? d.lift, edgeGlow: g.edgeGlow ?? d.edgeGlow,
     ior: g.ior ?? d.ior, dispersion: g.dispersion ?? d.dispersion, roughness: g.roughness ?? d.roughness,
     tint: g.tint ? resolveColor(g.tint, theme, scheme) : null, absorption: g.absorption ?? 0,
     glow: g.glow ? { color: resolveColor(g.glow.color, theme, scheme), strength: g.glow.strength, ...defined({ split: g.glow.split }) } : null,
     // Spec §5.2: 4–5 approximates Apple's continuous corners; a capsule is circular (2).
     cornerExponent: g.cornerExponent ?? (s.radius === 'capsule' ? 2 : 4.5),
+    envIntensity: g.envIntensity ?? d.envIntensity, specularIntensity: g.specularIntensity ?? d.specularIntensity,
+    innerGlow: g.innerGlow ?? d.innerGlow, adaptive: g.adaptive ?? d.adaptive, variant,
   }
 }
 
@@ -61,7 +74,7 @@ function resolveGlass(s: Style, theme: Theme, scheme: ColorScheme): ResolvedGlas
 export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: ColorScheme): RenderList {
   const rl: RenderList = { panels: [], glass: [], text: [], decorations: [], images: [] }
   let z = 0
-  const visit = (n: Node, clip: Rect | undefined, parentElevation: number, parentRadius: number, parentW: number, parentH: number): void => {
+  const visit = (n: Node, clip: ClipRect | undefined, parentElevation: number, parentRadius: number, parentW: number, parentH: number): void => {
     const s = effectiveStyle(n)
     if (s.display === 'none') return
     const rect = absoluteRect(n)
@@ -84,7 +97,7 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
     }
     if (n.type === 'text') {
       rl.text.push({
-        node: n, rect, text: String(n.props.value ?? ''),
+        node: n, rect: contentBox(rect, s), text: String(n.props.value ?? ''),
         font: { family: s.font ?? 'system', size: resolveFontSize(s.fontSize, theme), weight: s.fontWeight ?? 500 },
         color: resolveColor(s.color ?? 'label', theme, scheme), align: s.textAlign ?? 'left',
         ...defined({ maxLines: s.maxLines, lineHeight: s.lineHeight, letterSpacing: s.letterSpacing, wrap: s.wrap }),
@@ -92,7 +105,7 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
       })
     }
     if (n.type === 'image') rl.images.push({ node: n, rect, src: n.props.src, radius, z: myZ, elevation, ...clipped })
-    const childClip = s.overflow === 'hidden' || s.overflow === 'scroll' || n.type === 'scroll' ? intersect(clip, rect) : clip
+    const childClip = s.overflow === 'hidden' || s.overflow === 'scroll' || n.type === 'scroll' ? clipTo(clip, rect, radius) : clip
     for (const c of n.children) visit(c, childClip, elevation, radius, rect.width, rect.height)
   }
   visit(surface.root, undefined, 0, surface.cornerRadius, surface.width, surface.height)
