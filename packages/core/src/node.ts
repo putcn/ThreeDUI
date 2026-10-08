@@ -1,4 +1,5 @@
 import type { Style } from './style/schema'   // created in Task 4; until then declare `export type Style = Record<string, unknown>` in a stub file
+import { GlassUIError } from './errors'
 
 export type NodeType = 'box' | 'text' | 'image' | 'glass' | 'scroll' | 'portal' | 'anchor'
 export interface Rect { x: number; y: number; width: number; height: number }
@@ -30,9 +31,14 @@ export class Node {
   appendChild(child: Node): void { this.insertBefore(child, null) }
 
   insertBefore(child: Node, ref: Node | null): void {
+    // Validate everything before mutating, so a failed call leaves the tree unchanged.
+    if (ref === child) throw new GlassUIError('Node.insertBefore', 'ref 不能是 child 自身')
+    for (let n: Node | null = this; n; n = n.parent) {
+      if (n === child) throw new GlassUIError('Node.insertBefore', '不能把祖先节点插入其后代（会形成环）')
+    }
+    if (ref && ref.parent !== this) throw new GlassUIError('Node.insertBefore', `ref ${ref.id} 不是 ${this.id} 的子节点`)
     if (child.parent) child.parent.removeChild(child)
     const idx = ref ? this.children.indexOf(ref) : -1
-    if (ref && idx < 0) throw new Error(`insertBefore: ref ${ref.id} is not a child of ${this.id}`)
     if (idx < 0) this.children.push(child); else this.children.splice(idx, 0, child)
     child.parent = this
     this.markDirty('tree'); this.markDirty('layout')

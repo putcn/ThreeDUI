@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { Node } from '../src/node'
+import { GlassUIError } from '../src/errors'
 
 describe('Node tree', () => {
   it('appends, inserts before, and removes children while keeping parent pointers', () => {
@@ -41,5 +42,32 @@ describe('Node tree', () => {
   })
   it('generates unique ids when none is given', () => {
     expect(new Node('box').id).not.toBe(new Node('box').id)
+  })
+  it('insertBefore(x, x) throws a GlassUIError and leaves x in place', () => {
+    const p = new Node('box', 'p'), x = new Node('box', 'x')
+    p.appendChild(x)
+    expect(() => p.insertBefore(x, x)).toThrow(GlassUIError)
+    expect(() => p.insertBefore(x, x)).toThrow('[Node.insertBefore] ref 不能是 child 自身')
+    expect(p.children).toEqual([x])
+    expect(x.parent).toBe(p)
+  })
+  it('insertBefore with a ref that is not a child throws and leaves the tree unchanged', () => {
+    const old = new Node('box', 'old'), p = new Node('box', 'p')
+    const x = new Node('box', 'x'), stranger = new Node('box', 's')
+    old.appendChild(x)
+    expect(() => p.insertBefore(x, stranger)).toThrow(GlassUIError)
+    expect(old.children).toEqual([x])
+    expect(x.parent).toBe(old)
+    expect(p.children).toHaveLength(0)
+  })
+  it('refuses to insert a node into itself or its own descendant', () => {
+    const a = new Node('box', 'a'), b = new Node('box', 'b'), c = new Node('box', 'c')
+    a.appendChild(b); b.appendChild(c)
+    expect(() => c.appendChild(a)).toThrow(GlassUIError)
+    expect(() => c.appendChild(a)).toThrow('[Node.insertBefore] 不能把祖先节点插入其后代（会形成环）')
+    expect(() => a.appendChild(a)).toThrow(GlassUIError)
+    expect(a.parent).toBeNull()
+    expect(b.children).toEqual([c])
+    expect(c.root).toBe(a)
   })
 })
