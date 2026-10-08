@@ -115,3 +115,37 @@ export function glow(w: number, h: number, color: string, alpha = 0.3) {
   m.renderOrder = 0.5
   return m
 }
+
+/** rim decal: thin bright outline + brighter lower band (light caught by the bottom round-over) */
+export function rimDecal(w: number, h: number, r: number, strength = 1) {
+  const W = Math.ceil(w * PX_PER_UNIT), H = Math.ceil(h * PX_PER_UNIT)
+  const cv = document.createElement('canvas')
+  cv.width = W; cv.height = H
+  const ctx = cv.getContext('2d')!
+  const rr = Math.min(r * PX_PER_UNIT, W / 2, H / 2)
+  // lower band: clipped to the shape, vertical gradient
+  ctx.save()
+  ctx.beginPath(); ctx.roundRect(1, 1, W - 2, H - 2, rr); ctx.clip()
+  const g = ctx.createLinearGradient(0, H * 0.55, 0, H)
+  g.addColorStop(0, 'rgba(255,255,255,0)')
+  g.addColorStop(0.85, `rgba(255,255,255,${0.10 * strength})`)
+  g.addColorStop(1, `rgba(255,255,255,${0.42 * strength})`)
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H)
+  const gt = ctx.createLinearGradient(0, 0, 0, H * 0.35)
+  gt.addColorStop(0, `rgba(255,255,255,${0.22 * strength})`)
+  gt.addColorStop(1, 'rgba(255,255,255,0)')
+  ctx.fillStyle = gt; ctx.fillRect(0, 0, W, H)
+  ctx.restore()
+  // outline
+  ctx.strokeStyle = `rgba(255,255,255,${0.75 * strength})`
+  ctx.lineWidth = 2.5
+  ctx.beginPath(); ctx.roundRect(1.5, 1.5, W - 3, H - 3, rr); ctx.stroke()
+  const tex = new CanvasTexture(cv)
+  tex.colorSpace = SRGBColorSpace
+  tex.minFilter = LinearFilter
+  tex.generateMipmaps = false
+  const mat = new MeshBasicNodeMaterial({ map: tex, transparent: true, depthWrite: false })
+  const m = new Mesh(new PlaneGeometry(w, h), mat)
+  m.renderOrder = 9
+  return m
+}

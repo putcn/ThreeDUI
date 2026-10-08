@@ -61,3 +61,13 @@
 - **面板反射组件**：TSL `reflector({ resolutionScale: 0.5, generateMipmaps: true })`，`target` 挂在面板网格上（局部 +Z = 镜面法线），`.level(2.5)` 取模糊反射，按 `alpha × 强度` 混入透射项（不乘 alpha 会把镜面的空背景混成灰）。代价：每帧多一次全场景镜像渲染（149 draws / 53 fps，vs 不开 85 draws / 90 fps）；正式实现里面板空间的内容层 RT 可以直接拿来做反射，不必再渲染一遍场景。
 - **不再往墙上投影**：面板 `castShadow=false`，墙不 `receiveShadow`。组件只投到面板上。
 - **平面元素**：checkbox 方块、滑块钮、小圆点、Modal 灰段、卡片与环内的白方块都是 Canvas2D 平面贴图，挂在对应 slab 的顶面上。结论：不是所有东西都该是几何，"面板上的小装饰"用 2D 更干净，spec §5.5 要加"平面装饰层"。
+
+---
+
+# Spike ②e：透明玻璃块与"内部发光"
+
+- 清色玻璃：散射 ≈5%，上下圆角（厚 18px / 顶圆角 10px / 底圆角 6px，按参考图比例），背面先画（BackSide，renderOrder 1）、正面后画并采样含背面的画面（第三个 viewport 拷贝）；边缘按 Fresnel 加内发光。
+- **内部发光玻璃**（Primary / Secondary / 卡片 / 开关左半）：不用实心吸收色，而是 `emissive = color × (0.55 + 1.2·Fresnel) × strength`（可按 uv.x 做软分割），tint 只保留 15% 吸收。开关的紫色段因此是材质内的发光而不是贴片，任何角度都没有覆盖错误。
+- **装饰层**（Canvas2D 平面贴片）：元素外轮廓细亮线 + 底边亮带（`rimDecal`）、元素下方叠加混合的透射光晕（`glow`）、checkbox/滑块钮/搜索圆钮/Modal 小片。结论写入 spec：真 3D 负责形体/厚度/投影/反射/透视，"晶莹感"的光学特征作为可配置装饰层叠在几何上。
+- 面板磨砂减弱（roughness 0.4 / scatter 0.12），背景墙加斜向光束，让折射有可弯折的渐变。
+- 性能：237 draws / 44 fps（每个元素 2 遍 + 装饰贴片 + 面板反射），正式实现用实例化 + 内容层 RT 解决。

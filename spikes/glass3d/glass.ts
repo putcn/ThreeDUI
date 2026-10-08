@@ -9,7 +9,7 @@ import { MeshPhysicalNodeMaterial } from 'three/webgpu'
 import {
   Fn, uniform, vec2, vec3, vec4, float, positionView, positionViewDirection, normalView,
   positionLocal, modelViewMatrix, cameraProjectionMatrix, viewportMipTexture, refract,
-  normalize, dot, max, min, exp, mix, uv, clamp, pow,
+  normalize, dot, max, min, exp, mix, uv, clamp, pow, smoothstep,
 } from 'three/tsl'
 
 export interface Glass3DOptions {
@@ -30,6 +30,7 @@ export interface Glass3DOptions {
   reflection?: { node: any; strength: number }   // planar reflection node (TSL reflector)
   side?: Side
   edgeGlow?: number          // fake internal reflection: brighten steep (edge) normals
+  innerGlow?: { color: Color; strength: number; split?: number }   // light inside the glass; split = only left of this uv.x
 }
 
 export function createGlass3DMaterial(o: Glass3DOptions) {
@@ -99,8 +100,17 @@ export function createGlass3DMaterial(o: Glass3DOptions) {
     const glow = exp(dot(d, d).negate().div(u.glowRadius.mul(u.glowRadius))).mul(u.press)
     // edge glow: light trapped in the slab leaks out at the steep round-overs
     const NdotV = clamp(dot(normalView, positionViewDirection), 0, 1)
-    const rim = pow(float(1).sub(NdotV), 2.5).mul(o.edgeGlow ?? 0)
-    return vec3(glow.mul(0.45)).add(u.tint.mul(glow.mul(0.25))).add(mix(vec3(1), u.tint, 0.5).mul(rim))
+    const fres = pow(float(1).sub(NdotV), 2.5)
+    const rim = fres.mul(o.edgeGlow ?? 0)
+    let e: any = vec3(glow.mul(0.45)).add(u.tint.mul(glow.mul(0.25))).add(mix(vec3(1), u.tint, 0.5).mul(rim))
+    if (o.innerGlow) {
+      // light trapped inside the slab: soft fill, stronger where the glass is thick/steep, optional left-only mask
+      const gc = vec3(o.innerGlow.color.r, o.innerGlow.color.g, o.innerGlow.color.b)
+      const mask = o.innerGlow.split !== undefined ? smoothstep(float(o.innerGlow.split).add(0.04), float(o.innerGlow.split).sub(0.04), uv().x) : float(1)
+      const body = float(0.55).add(fres.mul(1.2))
+      e = e.add(gc.mul(body).mul(o.innerGlow.strength).mul(mask))
+    }
+    return e
   })()
 
   // transmitted (coloured) shadow: the light that passes through this glass

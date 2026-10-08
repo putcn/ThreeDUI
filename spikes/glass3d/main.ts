@@ -12,7 +12,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { createSlabGeometry } from './slab'
 import { createGlass3DMaterial } from './glass'
 import { createStudioScene } from './studio'
-import { label, icon, roundedRect, circle, glow, type IconName } from './text'
+import { label, icon, roundedRect, circle, glow, rimDecal, type IconName } from './text'
 
 const params = new URLSearchParams(location.search)
 const forceWebGL = params.has('webgl')
@@ -57,8 +57,8 @@ let key!: DirectionalLight
     blob(0.55, 0.55, 0.30, [0.84, 0.80, 0.95], 0.5)
     // diagonal light beam across the wall (as in the reference) so refraction has gradients to bend
     const beam = q.x.mul(0.55).add(q.y.mul(0.85))
-    c = mix(c, vec3(1.0, 0.98, 0.95), smoothstep(0.55, 0.75, beam).mul(float(1).sub(smoothstep(0.95, 1.2, beam))).mul(0.55))
-    c = mix(c, vec3(0.30, 0.28, 0.36), smoothstep(0.45, 0.2, beam).mul(0.45))
+    c = mix(c, vec3(1.0, 0.98, 0.95), smoothstep(0.55, 0.75, beam).mul(float(1).sub(smoothstep(0.95, 1.2, beam))).mul(0.8))
+    c = mix(c, vec3(0.30, 0.28, 0.36), smoothstep(0.45, 0.2, beam).mul(0.6))
     const vign = float(1).sub(smoothstep(0.4, 1.0, length(q.sub(vec2(0.45, 0.62))).mul(0.9)))
     return c.mul(0.95).mul(float(0.8).add(vign.mul(0.25)))
   })()
@@ -95,7 +95,7 @@ const buttonBackdrop = viewportMipTexture()  // sees the panel (used by back fac
 const frontBackdrop = viewportMipTexture()   // sees panel + back faces (used by front faces)
 
 type SlabOpts = {
-  radius?: number; fillet?: number; filletBottom?: number; bezel?: number; thickness?: number; profile?: 'fillet' | 'squircle' | 'circle'; edgeGlow?: number; twoSided?: boolean
+  radius?: number; fillet?: number; filletBottom?: number; bezel?: number; thickness?: number; profile?: 'fillet' | 'squircle' | 'circle'; edgeGlow?: number; twoSided?: boolean; innerGlow?: { color: Color; strength: number; split?: number }; rim?: number
   roughness?: number; scatter?: number; diffuse?: number; lift?: number; env?: number; specularRoughness?: number
   tint?: Color; absorption?: number; dispersion?: number; iridescence?: number; backdrop?: ReturnType<typeof viewportMipTexture>
   cornerExponent?: number; castShadow?: boolean; shadowOpacity?: number; interactive?: boolean; reflection?: { node: any; strength: number }
@@ -109,7 +109,7 @@ function slab(parent: Object3D, w: number, h: number, x: number, y: number, z: n
   const geo = createSlabGeometry({ width: w, height: h, radius, thickness, fillet, filletBottom, bezel: o.bezel, cornerExponent, profile: o.profile ?? 'fillet' })
   const matOpts = {
     thickness, roughness: o.roughness ?? 0.3, scatter: o.scatter, diffuse: o.diffuse, lift: o.lift, envIntensity: o.env, specularRoughness: o.specularRoughness,
-    tint: o.tint, absorption: o.absorption ?? 0, dispersion: o.dispersion ?? 0.3, iridescence: o.iridescence, edgeGlow: o.edgeGlow,
+    tint: o.tint, absorption: o.absorption ?? 0, dispersion: o.dispersion ?? 0.3, iridescence: o.iridescence, edgeGlow: o.edgeGlow, innerGlow: o.innerGlow,
     shadowOpacity: o.shadowOpacity, reflection: o.reflection,
   }
   const { material, uniforms } = createGlass3DMaterial({ ...matOpts, backdrop: o.backdrop ?? (o.twoSided ? frontBackdrop : buttonBackdrop) })
@@ -140,7 +140,7 @@ const Y = (py: number) => (642 - py) / 244
 const refl = reflector({ resolutionScale: 0.5, generateMipmaps: true, bounces: false })
 const PANEL = slab(panel, U(885), U(1045), 0, 0, 0, {
   radius: U(48), thickness: 0.10, fillet: 0.03, profile: 'fillet',
-  roughness: 0.75, scatter: 0.22, diffuse: 1.0, lift: 0.10, specularRoughness: 0.3, env: 1.0, iridescence: 0.15, edgeGlow: 0.25,
+  roughness: 0.4, scatter: 0.12, diffuse: 1.0, lift: 0.07, specularRoughness: 0.3, env: 1.0, iridescence: 0.15, edgeGlow: 0.3,
   backdrop: panelBackdrop, castShadow: false, interactive: false,
   reflection: { node: refl.level(2.5), strength: 0.18 },
 })
@@ -152,15 +152,18 @@ const LIFT = 0.04
 // style presets (measured from the reference)
 const WHITE: SlabOpts = { roughness: 0.06, scatter: 0.05, diffuse: 0.5, lift: 0.10, env: 2.2, iridescence: 0.5, dispersion: 0.8, specularRoughness: 0.07, edgeGlow: 0.8, twoSided: true, thickness: U(18), fillet: U(10), filletBottom: U(6), dispersion: 1.0 }
 const BLUE = new Color(0x6b63f5), CYAN = new Color(0x74e2dc), LAVENDER = new Color(0xc2b3f3), ORANGE = '#f2a340'
+const GLOWING = (color: Color, strength = 0.7, split?: number): SlabOpts => ({ tint: color.clone().lerp(new Color(1, 1, 1), 0.15), absorption: 1.4, innerGlow: { color, strength, split }, roughness: 0.1, scatter: 0.06, diffuse: 0.4, lift: 0.0, env: 1.6, iridescence: 0, dispersion: 0.6, specularRoughness: 0.08, edgeGlow: 0.5, twoSided: true, thickness: U(18), fillet: U(10), filletBottom: U(6) })
 const TINTED = (tint: Color, absorption: number, solid = false): SlabOpts => ({ tint, absorption, roughness: solid ? 0.5 : 0.15, scatter: solid ? 0.6 : 0.1, diffuse: solid ? 0.8 : 0.5, env: 1.5, iridescence: 0, dispersion: 0.6, specularRoughness: 0.1, edgeGlow: 0.4, twoSided: !solid, thickness: U(18), fillet: U(10), filletBottom: solid ? 0 : U(6) })
 
 function pill(w: number, h: number, cx: number, cy: number, o: SlabOpts = {}, z = TOP + LIFT) {
   const opts = { ...WHITE, ...o }
   const col = opts.tint ? '#' + opts.tint.getHexString() : '#ffffff'
-  const g = glow(U(w + 50), U(h + 50), col, opts.tint ? 0.6 : 0.4)
-  g.position.set(X(cx), Y(cy + 16), TOP + 0.003)
+  const g = glow(U(w + 24), U(h + 28), col, opts.tint ? 0.5 : 0.28)
+  g.position.set(X(cx), Y(cy + 9), TOP + 0.003)
   panel.add(g)
-  return slab(panel, U(w), U(h), X(cx), Y(cy), z, opts)
+  const r = slab(panel, U(w), U(h), X(cx), Y(cy), z, opts)
+  put(r.mesh, rimDecal(U(w), U(h), opts.radius ?? U(h) / 2, opts.rim ?? 1), 0, 0, r.thickness, 0.002)
+  return r
 }
 /** place a flat quad on a slab's top surface; dx/dy in reference px relative to the slab centre */
 function put(parent: Mesh, m: Mesh, dx: number, dy: number, thickness: number, lift = 0.004) {
@@ -183,9 +186,9 @@ for (const [cx, name] of [[806, 'arrow-left'], [878, 'plus']] as [number, IconNa
 }
 // row 1
 {
-  const p = pill(214, 80, 229, 350, TINTED(BLUE, 3.4, true))
+  const p = pill(214, 80, 229, 350, GLOWING(BLUE, 1.1))
   put(p.mesh, label('Primary', { size: U(24), color: '#ffffff' }), 0, 0, p.thickness)
-  const s = pill(216, 80, 490, 350, TINTED(CYAN, 1.4))
+  const s = pill(216, 80, 490, 350, GLOWING(CYAN, 0.9))
   put(s.mesh, label('Secondary', { size: U(24), color: '#1c2a2a' }), 0, 0, s.thickness)
   const q = pill(255, 86, 778, 356)
   put(q.mesh, label('Search projects…', { size: U(22), weight: 500, color: '#3a3a48' }), 0, 0, q.thickness)
@@ -195,8 +198,8 @@ for (const [cx, name] of [[806, 'arrow-left'], [878, 'plus']] as [number, IconNa
 {
   const c = pill(476, 78, 360, 508)
   put(c.mesh, label('Create workspace…', { size: U(24), color: '#1c1c22' }), -60, 0, c.thickness)
-  const go = slab(c.mesh, U(64), U(64), U(552 - 360), 0, c.thickness + 0.005, { ...TINTED(BLUE, 3.4, true), thickness: 0.04, interactive: false })
-  put(go.mesh, icon('search', U(30), '#ffffff', 0.11), 0, 0, go.thickness)
+  put(c.mesh, circle(U(64), '#6b63f5', { shadow: 0.012 }), 552 - 360, 0, c.thickness, 0.004)
+  put(c.mesh, icon('search', U(30), '#ffffff', 0.11), 552 - 360, 0, c.thickness, 0.006)
   const sel = pill(255, 78, 778, 513)
   put(sel.mesh, label('Select', { size: U(24), color: '#1c1c22' }), -55, 0, sel.thickness)
   put(sel.mesh, icon('arrow-right', U(30), '#1c1c22'), 865 - 778, 0, sel.thickness)
@@ -211,7 +214,7 @@ for (const [cx, name] of [[806, 'arrow-left'], [878, 'plus']] as [number, IconNa
   put(t.mesh, label('text', { size: U(22), weight: 500, color: '#3a3a48' }), 530 - 493, 0, t.thickness)
   const modal = pill(255, 78, 778, 690)
   put(modal.mesh, label('Modal', { size: U(24), color: '#1c1c22' }), 720 - 778, 0, modal.thickness)
-  put(modal.mesh, roundedRect(U(105), U(78), U(39), '#c9ced8', { alpha: 0.9 }), 853 - 778, 0, modal.thickness, 0.003)
+  put(modal.mesh, roundedRect(U(72), U(50), U(25), '#dfe3ea', { shadow: 0.012, edge: 'rgba(0,0,0,0.06)' }), 858 - 778, 0, modal.thickness, 0.004)
   put(modal.mesh, icon('menu', U(30), '#3a3a48'), 858 - 778, 0, modal.thickness, 0.006)
 }
 // row 4
@@ -225,7 +228,7 @@ for (const [cx, name] of [[806, 'arrow-left'], [878, 'plus']] as [number, IconNa
 }
 // card
 {
-  const card = pill(250, 300, 780, 950, { ...TINTED(LAVENDER, 1.2), radius: U(34), thickness: 0.06, fillet: 0.022, scatter: 0.25, diffuse: 0.8 })
+  const card = pill(250, 300, 780, 950, { ...GLOWING(LAVENDER, 0.7), radius: U(34), thickness: U(16), fillet: U(8), filletBottom: U(5) })
   put(card.mesh, label('Plan details', { size: U(16), weight: 600, color: '#5a5470', align: 'left' }), 690 - 780, 835 - 950, card.thickness)
   put(card.mesh, roundedRect(U(75), U(75), U(16), '#ffffff', { shadow: 0.02, edge: 'rgba(0,0,0,0.05)' }), 0, 940 - 950, card.thickness)
   put(card.mesh, icon('check', U(50), '#6b63f5', 0.13), 0, 940 - 950, card.thickness, 0.006)
@@ -244,8 +247,7 @@ for (const [cx, name] of [[806, 'arrow-left'], [878, 'plus']] as [number, IconNa
 }
 // toggle (3D track, flat knob) + output
 {
-  const tg = pill(210, 70, 490, 920, { ...WHITE })
-  put(tg.mesh, roundedRect(U(120), U(70), U(35), '#7a72f0', { alpha: 0.9 }), (445 - 490), 0, tg.thickness, 0.002)
+  const tg = pill(210, 70, 490, 920, GLOWING(BLUE, 1.1, 0.58))
   put(tg.mesh, circle(U(60), ORANGE, { shadow: 0.015 }), 497 - 490, 0, tg.thickness)
   const out = pill(210, 70, 490, 1058)
   put(out.mesh, label('Output', { size: U(22), weight: 500, color: '#3a3a48' }), 455 - 490, 0, out.thickness)
