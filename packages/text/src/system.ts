@@ -12,11 +12,17 @@ const PAD = 2
 /** A glyph cell is 1.3 em tall: the em box plus 0.15 em above and below for accents and descenders. */
 const CELL_EM = 1.3
 /** The common Chinese system stack (macOS, Windows, Linux), then the platform UI font. */
-const DEFAULT_FALLBACK = ['PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', 'Noto Sans CJK SC', 'system-ui', 'sans-serif']
+const DEFAULT_FALLBACK = ['PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', 'Noto Sans SC', 'system-ui', 'sans-serif']
+/** 避头尾 (kinsoku): a line never starts with a closing mark… */
+const NO_START = new Set([...'，。、；：！？）】》」』”’…%,.;:!?)]}'])
+/** …and never ends with an opening one. */
+const NO_END = new Set([...'（【《「『“‘([{'])
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const isHardBreak = (s: string) => s === '\n' || s === '\r\n' || s === '\r'
 const quote = (family: string) => (family.includes(' ') ? `"${family}"` : family)
+/** Whether cluster `s` (advance `w`) fits on a row already `x` wide: within `limit`, or as one closing mark hanging past it. */
+const fits = (x: number, w: number, s: string, limit: number) => x + w <= limit || (NO_START.has(s) && x <= limit)
 
 /** A grapheme cluster: its text, UTF-16 offset in the run, and advance in pt (letter spacing included). */
 interface Cluster { s: string; i: number; w: number }
@@ -62,7 +68,10 @@ function rowAt(rows: Row[], index: number): Row {
  *   selections, and always fall on grapheme-cluster boundaries; a cluster (é, 👍🏽, 🇨🇳) is one glyph.
  * - With a `maxWidth`, lines wrap greedily: after a space, between two CJK characters, and at a CJK/non-CJK boundary
  *   (so a Latin word next to CJK moves to the next line whole when it fits); a word wider than the line is broken by
- *   cluster. Spaces at a line end hang: they never overflow or start the next line and are excluded from `Line.width`.
+ *   cluster. 避头尾: no break before a closing mark (，。、；：！？）】》」』”’…% ,.;:!?)]}) or after an opening one
+ *   (（【《「『“‘ ([{), except as the last resort for a word wider than the line. A single closing mark that would
+ *   overflow hangs past the edge instead of moving down, so that line's `width` may exceed `maxWidth` by the mark.
+ *   Spaces at a line end hang: they never overflow or start the next line and are excluded from `Line.width`.
  *   `\n` and `\r\n` force a break. An infinite `maxWidth` means unconstrained.
  * - Line height defaults to round(1.3 × size); glyph quads are centred vertically in the line box. Without a
  *   `maxWidth`, centre/right alignment is relative to the widest line.
@@ -80,7 +89,7 @@ export class SystemFontEngine implements TextEngine {
   /**
    * @param opts.pageSize / opts.maxPages atlas page edge in px and page count (defaults 2048 / 4)
    * @param opts.fallbackFamilies tried after `FontSpec.family` (default: PingFang SC, Hiragino Sans GB, Microsoft YaHei,
-   *   Noto Sans SC, Noto Sans CJK SC, system-ui, sans-serif)
+   *   Noto Sans CJK SC, Noto Sans SC, system-ui, sans-serif)
    * @param opts.oversample atlas px per pt, a positive number (default 2)
    */
   constructor(opts: { createCanvas: CanvasFactory; pageSize?: number | undefined; maxPages?: number | undefined; fallbackFamilies?: string[] | undefined; oversample?: number | undefined }) {
@@ -124,10 +133,13 @@ export class SystemFontEngine implements TextEngine {
       const { s, w } = clusters[k]!
       if (isHardBreak(s)) { push(c0, k, false); c0 = k + 1; x = 0; brk = -1; continue }
       if (s === ' ') { x += w; continue }
-      if (k > c0) { const p = clusters[k - 1]!.s; if (p === ' ' || CJK.test(s) || CJK.test(p)) brk = k }
-      if (limit !== undefined && x + w > limit && k > c0) {
+      if (k > c0) {
+        const p = clusters[k - 1]!.s
+        if ((p === ' ' || CJK.test(s) || CJK.test(p)) && !NO_START.has(s) && !NO_END.has(p)) brk = k
+      }
+      if (limit !== undefined && k > c0 && !fits(x, w, s, limit)) {
         if (brk > c0) { push(c0, brk, true); c0 = brk; x = 0; for (let j = c0; j < k; j++) x += clusters[j]!.w }
-        if (x + w > limit && k > c0) { push(c0, k, true); c0 = k; x = 0 }   // still too wide: break the word by cluster
+        if (k > c0 && !fits(x, w, s, limit)) { push(c0, k, true); c0 = k; x = 0 }   // still too wide: break the word by cluster
         brk = -1
       }
       x += w

@@ -62,20 +62,39 @@ describe('SystemFontEngine wrapping', () => {
     expect(m.lines[0]!.text).toBe('i ')
     for (const l of m.lines) expect(l.width).toBeLessThanOrEqual(max)
   })
-  it('keeps every line within maxWidth, loses no text and never starts a wrapped line with a space', () => {
+  it('keeps every line within maxWidth (bar one hanging closing mark), loses no text and honours 避头尾', () => {
     const e = engine()
-    const text = 'GlassUI 用户名userName必填，请输入 supercalifragilistic 文本 ok'
+    const text = 'GlassUI 用户名userName必填，请输入「验证码」。 supercalifragilistic 文本 ok'
+    const closing = /[，。、；：！？）】》」』”’…%,.;:!?)\]}]$/u, opening = /[（【《「『“‘([{]$/u
     for (const maxWidth of [25, 40, 60, 90, 130, 200]) {
       const { lines } = e.measure({ text, font }, { maxWidth })
       expect(lines.map(l => l.text).join('')).toBe(text)
       lines.forEach((l, k) => {
-        expect(l.width).toBeLessThanOrEqual(maxWidth)
+        const body = l.text.trimEnd(), unhung = closing.test(body) ? body.slice(0, -1) : body
+        expect(e.measure({ text: unhung, font }, {}).width).toBeLessThanOrEqual(maxWidth)
         expect(text.slice(l.start, l.end)).toBe(l.text)
         expect(l.start).toBe(k === 0 ? 0 : lines[k - 1]!.end)
         expect(l.y).toBe(k * 26)
         if (k > 0) expect(l.text.startsWith(' ')).toBe(false)
+        // From two CJK glyphs per line up, 避头尾 is always satisfiable (25pt only fits one glyph: the last-resort break applies).
+        if (maxWidth >= 40 && k > 0) expect(closing.test(l.text[0]!)).toBe(false)
+        if (maxWidth >= 40 && k < lines.length - 1) expect(opening.test(body)).toBe(false)
       })
     }
+  })
+  it('避头尾: a closing mark that would start a line hangs on the previous one; a second one moves down with its character', () => {
+    const e = engine()
+    const max = e.measure({ text: '一二三四五', font }, {}).width
+    const hung = e.measure({ text: '一二三四五，六七', font }, { maxWidth: max }).lines
+    expect(hung.map(l => l.text)).toEqual(['一二三四五，', '六七'])
+    expect(hung[0]!.width).toBeGreaterThan(max)   // the line overflows by exactly the hanging mark
+    expect(e.measure({ text: '一二三四五。」六', font }, { maxWidth: max }).lines.map(l => l.text)).toEqual(['一二三四', '五。」六'])
+  })
+  it('避头尾: an opening mark is carried to the next line with the text it opens', () => {
+    const e = engine()
+    const max = e.measure({ text: '一二三四五', font }, {}).width
+    expect(e.measure({ text: '一二三四「五六」', font }, { maxWidth: max }).lines.map(l => l.text)).toEqual(['一二三四', '「五六」'])
+    expect(e.measure({ text: '一二三四(五六)', font }, { maxWidth: max }).lines.map(l => l.text)).toEqual(['一二三四', '(五六)'])
   })
   it('starts a new line at each hard break, keeping empty lines', () => {
     const m = engine().measure({ text: 'ab\n\ncd\r\nef', font }, {})
