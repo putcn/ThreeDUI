@@ -23,6 +23,12 @@ export function defaultTier(env: { touch: boolean; reducedTransparency: boolean 
  * tier change starts them over. Reduced transparency pins `minimal` (and stops sampling) until cleared; a `set` while
  * pinned keeps `minimal` and only records where clearing the pin returns (at most the cap; without one, the cap).
  * Listeners hear every change in order, even one a listener makes itself; one that throws is reported and skipped.
+ *
+ * Flip-flop back-off: a tier that is over budget while the one below fits would otherwise be re-probed every few
+ * seconds (each change rebuilds every Surface's glass). So the controller counts its sampled step-downs from each tier
+ * this session (`set` is not one); stepping back up into a tier stepped down from `d` times takes `5 · 2^(d − 1)` fast
+ * windows (5 for the first retry, then 10), and after its third step-down that tier is never probed again — `set` and
+ * clearing the reduced-transparency pin can still reach it.
  */
 export class QualityController {
   private current: QualityTier
@@ -32,6 +38,8 @@ export class QualityController {
   private resume: QualityTier | null = null
   private readonly window: number
   private acc = 0; private n = 0; private slow = 0; private fast = 0
+  /** Sampled step-downs from each tier this session (the back-off). */
+  private readonly demotions: Record<QualityTier, number> = { high: 0, medium: 0, low: 0, minimal: 0 }
   private readonly listeners = new Set<(tier: QualityTier, prev: QualityTier) => void>()
   private readonly queue: [tier: QualityTier, prev: QualityTier][] = []
   constructor(opts: { initial?: QualityTier; cap?: QualityTier; reducedTransparency?: boolean; window?: number } = {}) {
@@ -83,9 +91,20 @@ export class QualityController {
     if (this.n < this.window) return null
     const avg = this.acc / this.n; this.acc = 0; this.n = 0
     const idx = ORDER.indexOf(this.current)
-    if (avg > 20) { this.fast = 0; if (++this.slow >= 2 && idx > 0) { this.change(ORDER[idx - 1]!); return this.current } }
-    else if (avg < 10) { this.slow = 0; if (++this.fast >= 5 && idx < ORDER.indexOf(this.cap)) { this.change(ORDER[idx + 1]!); return this.current } }
-    else { this.slow = 0; this.fast = 0 }
+    if (avg > 20) {
+      this.fast = 0
+      if (++this.slow >= 2 && idx > 0) { this.demotions[this.current]++; this.change(ORDER[idx - 1]!); return this.current }
+    } else if (avg < 10) {
+      this.slow = 0
+      const up = ORDER[idx + 1]
+      if (++this.fast >= this.fastWindowsInto(up) && idx < ORDER.indexOf(this.cap)) { this.change(up!); return this.current }
+    } else { this.slow = 0; this.fast = 0 }
     return null
+  }
+
+  /** Fast windows a step up into `tier` takes: 5, doubling with each step-down from it after the first; never after three. */
+  private fastWindowsInto(tier: QualityTier | undefined): number {
+    const d = tier ? this.demotions[tier] : 0
+    return d >= 3 ? Infinity : 5 * 2 ** Math.max(0, d - 1)
   }
 }

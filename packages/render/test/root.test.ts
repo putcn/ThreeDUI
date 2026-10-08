@@ -209,6 +209,20 @@ describe('createUIRoot', () => {
       expect(root.quality.tier).toBe('high')                      // the fifth fast window
     } finally { restore() }
   })
+  it('auto quality backs off a tier that is over budget while the one below fits, then settles below it', async () => {
+    const { root, restore } = await timedRoot(2)
+    try {
+      root.quality.set('medium')                                  // not a step down: high is probed as usual
+      const changes: string[] = []
+      root.on('quality', e => changes.push(e.tier))
+      let t = 0
+      root.frame(t)
+      while (t < 120_000) root.frame(t += root.quality.tier === 'high' ? 1000 / 30 : 1000 / 60)   // high drops every other refresh
+      // retries after 5, 5, then 10 fast windows; after the third step down high is never probed again
+      expect(changes).toEqual(['high', 'medium', 'high', 'medium', 'high', 'medium'])
+      expect(root.quality.tier).toBe('medium')
+    } finally { restore() }
+  })
   it('applies reduced motion to the shared animation runtime', async () => {
     expect((await createUIRoot({ ...base(), reducedMotion: true })).anim.reducedMotion).toBe(true)
     expect((await createUIRoot(base())).anim.reducedMotion).toBe(false)   // no matchMedia under Node

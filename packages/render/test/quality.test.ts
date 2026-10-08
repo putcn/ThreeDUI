@@ -171,4 +171,31 @@ describe('QualityController', () => {
     expect(() => { q.tier = 'low' }).toThrow(TypeError)
     expect(q.tier).toBe<QualityTier>('high')
   })
+  /** Fast windows until a step up (at most `max`), or null. */
+  const windowsToStepUp = (q: QualityController, max: number) => { for (let i = 1; i <= max; i++) if (fast(q)) return i; return null }
+  it('backs off re-probing a tier it keeps stepping down from: twice the fast windows each time', () => {
+    const q = new QualityController({ initial: 'high' })
+    slow(q); slow(q); expect(q.tier).toBe('medium')
+    expect(windowsToStepUp(q, 50)).toBe(5)                     // the first retry: the usual five
+    slow(q); slow(q); expect(q.tier).toBe('medium')            // over budget again
+    expect(windowsToStepUp(q, 50)).toBe(10)                    // the second retry: ten
+  })
+  it('stops probing a tier after three step-downs from it, for the session; other tiers keep their own counts', () => {
+    const q = new QualityController({ initial: 'high' })
+    for (const windows of [5, 10]) { slow(q); slow(q); expect(windowsToStepUp(q, 50)).toBe(windows) }
+    slow(q); slow(q); expect(q.tier).toBe('medium')            // the third step down from high
+    expect(windowsToStepUp(q, 100)).toBeNull(); expect(q.tier).toBe('medium')
+    slow(q); slow(q); expect(q.tier).toBe('low')               // medium's first step down
+    expect(windowsToStepUp(q, 50)).toBe(5); expect(q.tier).toBe('medium')
+  })
+  it('set still reaches a tier probing gave up on, and is not counted as a step down', () => {
+    const q = new QualityController({ initial: 'high' })
+    for (let i = 0; i < 3; i++) { slow(q); slow(q); fast(q, 30 * 10) }
+    expect(q.tier).toBe('medium'); expect(windowsToStepUp(q, 100)).toBeNull()
+    q.set('high'); expect(q.tier).toBe('high')
+    const fresh = new QualityController({ initial: 'high' })
+    for (let i = 0; i < 5; i++) { fresh.set('medium'); fresh.set('high') }
+    fresh.set('medium')
+    expect(windowsToStepUp(fresh, 50)).toBe(5)                 // no step downs from high were sampled
+  })
 })
