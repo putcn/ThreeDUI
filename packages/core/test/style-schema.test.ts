@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { validateStyle, STYLE_KEYS } from '../src/style/schema'
+import type { Length } from '../src/style/schema'
 
 describe('validateStyle', () => {
   it('accepts a valid flex style with tokens and state branches', () => {
@@ -57,13 +58,13 @@ describe('validateStyle: nested keys, nested values and union errors', () => {
     expect(() => validateStyle({ bg: 5 }))
       .toThrow('[style.bg] 非法取值 "5"。允许值：glass, glass-clear, none, <颜色 token 或 #hex>')
     expect(() => validateStyle({ radius: true }))
-      .toThrow('[style.radius] 非法取值 "true"。允许值：number, capsule, concentric, <radius token>')
+      .toThrow('[style.radius] 非法取值 "true"。允许值：number(pt), capsule, concentric, <radius token>')
     expect(() => validateStyle({ width: '10px' }))
       .toThrow('[style.width] 非法取值 "10px"。允许值：number(pt), "N%", auto')
     expect(() => validateStyle({ hover: { inset: true } }))
       .toThrow('[style.hover.inset] 非法取值 "true"。允许值：number(pt), "N%", auto')
     expect(() => validateStyle({ fontSize: true }))
-      .toThrow('[style.fontSize] 非法取值 "true"。允许值：number, <fontSize token>')
+      .toThrow('[style.fontSize] 非法取值 "true"。允许值：number(pt), <fontSize token>')
     const transitionAllowed = '允许值：snappy, smooth, bouncy, {stiffness,damping,mass?}, {response,dampingFraction}, {duration,easing}'
     expect(() => validateStyle({ transition: { opacity: 'snapy' } }))
       .toThrow(`[style.transition.opacity] 非法取值 "snapy"。${transitionAllowed}。你可能想要：snappy`)
@@ -76,5 +77,34 @@ describe('validateStyle: nested keys, nested values and union errors', () => {
     expect(s.transition?.bg).toBe('smooth')
     expect(() => validateStyle({ transition: { opacityy: 'snappy' } }))
       .toThrow('[style.transition] 未知键 "opacityy"。允许值：x, y, width, height, scale, opacity, color, bg, radius, glass, elevation, tilt。你可能想要：opacity')
+  })
+
+  it('reports an unknown key before a missing required field it was meant to be', () => {
+    expect(() => validateStyle({ border: { width: 1, colr: 'red' } }))
+      .toThrow('[style.border] 未知键 "colr"。允许值：width, color。你可能想要：color')
+  })
+
+  it('never lets value formatting throw, and truncates long values', () => {
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+    expect(() => validateStyle({ transition: { opacity: cyclic } }))
+      .toThrow('[style.transition.opacity] 非法取值 "[object Object]"')
+    expect(() => validateStyle({ width: 'x'.repeat(200) }))
+      .toThrow(`[style.width] 非法取值 "${'x'.repeat(79)}…"。`)
+  })
+})
+
+describe('Length', () => {
+  it('is typed number | `${number}%` | auto and keeps percent strings at runtime', () => {
+    const ok: Length[] = [12, '50%', '-2.5%', 'auto']
+    // @ts-expect-error -- an arbitrary string is not a Length
+    const bad: Length = '10px'
+    void ok; void bad
+    expect(validateStyle({ width: '50%' }).width).toBe('50%')
+    expect(validateStyle({ height: '-2.5%', flexBasis: 'auto', minWidth: 0 }))
+      .toEqual({ height: '-2.5%', flexBasis: 'auto', minWidth: 0 })
+    for (const width of ['10px', '50 %', '%', '.5%', '1e2%', 'Infinity%']) {
+      expect(() => validateStyle({ width })).toThrow('[style.width]')
+    }
   })
 })

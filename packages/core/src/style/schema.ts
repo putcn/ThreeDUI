@@ -1,7 +1,9 @@
 import { z } from 'zod'
 import { GlassUIError } from '../errors'
 
-const Length = z.union([z.number(), z.string().regex(/^-?\d+(\.\d+)?%$/, 'length must be a number (pt) or "N%"'), z.literal('auto')])
+// templateLiteral types the percent branch as `${number}%`; zod's number part matches /^-?\d+(?:\.\d+)?$/.
+const Percent = z.templateLiteral([z.number(), z.literal('%')], 'length must be a number (pt) or "N%"')
+const Length = z.union([z.number(), Percent, z.literal('auto')])
 const Pt = z.number()
 const Token = z.string()   // design-token name or literal colour; resolved by theme.ts
 
@@ -93,8 +95,8 @@ const LENGTH_ALLOWED = ['number(pt)', '"N%"', 'auto']
 /** Readable allowed forms for union-typed keys (zod's union issues carry no usable value list). */
 const UNION_ALLOWED: Record<string, readonly string[]> = {
   bg: ['glass', 'glass-clear', 'none', '<颜色 token 或 #hex>'],
-  radius: ['number', 'capsule', 'concentric', '<radius token>'],
-  fontSize: ['number', '<fontSize token>'],
+  radius: ['number(pt)', 'capsule', 'concentric', '<radius token>'],
+  fontSize: ['number(pt)', '<fontSize token>'],
   transition: ['snappy', 'smooth', 'bouncy', '{stiffness,damping,mass?}', '{response,dampingFraction}', '{duration,easing}'],
   ...Object.fromEntries(Object.entries(Base.shape).filter(([, s]) => s.unwrap() === Length).map(([k]) => [k, LENGTH_ALLOWED])),
 }
@@ -115,12 +117,22 @@ function valueAt(input: unknown, path: readonly PropertyKey[]): unknown {
   return v
 }
 
-const show = (v: unknown): string => (typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v))
+/** Short printable form of an offending value; never throws (cycles, BigInt, hostile toString). */
+function show(v: unknown): string {
+  let s: string
+  try {
+    s = typeof v === 'object' && v !== null ? JSON.stringify(v) ?? Object.prototype.toString.call(v) : String(v)
+  } catch {
+    s = Object.prototype.toString.call(v)
+  }
+  return s.length > 80 ? `${s.slice(0, 79)}…` : s
+}
 
 export function validateStyle(style: unknown, scope = 'style'): Style {
   const r = StyleSchema.safeParse(style)
   if (r.success) return r.data
-  const issue = r.error.issues[0]!
+  // An unknown key is usually a typo of a field that is then also reported missing; the typo is the useful error.
+  const issue = r.error.issues.find((i) => i.code === 'unrecognized_keys') ?? r.error.issues[0]!
   const path = issue.path.map(String)
   const at = (p: readonly string[]): string => (p.length ? `${scope}.${p.join('.')}` : scope)
   if (issue.code === 'unrecognized_keys') {
