@@ -5,7 +5,7 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b packages/core packages/text",
+    "typecheck": "tsc -b packages/core packages/text && tsc -p packages/core/tsconfig.test.json && tsc -p packages/text/tsconfig.test.json",
     "spike:glass": "vite spikes/glass",
     "spike:glass3d": "vite spikes/glass3d --port 5174"
   },
