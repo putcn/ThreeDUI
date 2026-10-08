@@ -12,7 +12,8 @@ export interface SlabParams {
   radius: number
   thickness: number
   profile?: 'fillet' | 'squircle' | 'circle'
-  fillet?: number              // fillet profile: round-over radius (≤ thickness)
+  fillet?: number              // fillet profile: top round-over radius
+  filletBottom?: number        // fillet profile: bottom round-over radius (0 = sharp)
   bezel?: number               // lens profiles: width of the bevel band
   cornerExponent?: number      // 2 = circle, ~4.5 = continuous corner
   cornerSegments?: number
@@ -64,14 +65,23 @@ export function createSlabGeometry(p: SlabParams): BufferGeometry {
 
   // (inset, z) samples of the profile, from the bottom rim up to the plateau edge
   const prof: [number, number][] = []
+  let bottomInset = 0
   if (profile === 'fillet') {
-    const f = Math.min(p.fillet ?? p.thickness * 0.4, p.thickness, maxInset)
-    const wall = p.thickness - f
-    prof.push([0, 0])
-    if (wall > 1e-5) prof.push([0, wall])              // straight side wall (separate ring → crisp edge)
-    for (let k = 1; k <= K; k++) {                      // quarter-circle round-over
+    const fb = Math.min(p.filletBottom ?? 0, p.thickness * 0.5, maxInset)
+    const f = Math.min(p.fillet ?? p.thickness * 0.4, p.thickness - fb, maxInset)
+    const wall = p.thickness - f - fb
+    bottomInset = fb
+    if (fb > 1e-5) {
+      for (let k = 0; k < K; k++) {                     // bottom round-over: from the back face up to the wall
+        const a = (k / K) * (Math.PI / 2)
+        prof.push([fb - fb * Math.sin(a), fb - fb * Math.cos(a)])
+      }
+    }
+    prof.push([0, fb])
+    if (wall > 1e-5) prof.push([0, fb + wall])          // straight side wall
+    for (let k = 1; k <= K; k++) {                      // top round-over
       const a = (k / K) * (Math.PI / 2)
-      prof.push([f - f * Math.cos(a), wall + f * Math.sin(a)])
+      prof.push([f - f * Math.cos(a), fb + wall + f * Math.sin(a)])
     }
   } else {
     const bezel = Math.min(p.bezel ?? maxInset * 0.6, maxInset)
@@ -81,17 +91,7 @@ export function createSlabGeometry(p: SlabParams): BufferGeometry {
     }
   }
 
-  // side wall gets its own vertices so the wall/round-over crease stays sharp
-  let rings: number[] = []
-  if (profile === 'fillet' && prof.length > 2 && prof[1][0] === 0) {
-    const r0 = pushRing(contour(p, 0, n, S), prof[0][1])
-    const r1 = pushRing(contour(p, 0, n, S), prof[1][1])
-    connect(r0, r1)
-    rings = [pushRing(contour(p, 0, n, S), prof[1][1])]
-    for (let k = 2; k < prof.length; k++) rings.push(pushRing(contour(p, prof[k][0], n, S), prof[k][1]))
-  } else {
-    rings = prof.map(([inset, z]) => pushRing(contour(p, inset, n, S), z))
-  }
+  const rings = prof.map(([inset, z]) => pushRing(contour(p, inset, n, S), z))
   for (let k = 0; k < rings.length - 1; k++) connect(rings[k], rings[k + 1])
 
   // plateau fan
@@ -101,7 +101,7 @@ export function createSlabGeometry(p: SlabParams): BufferGeometry {
   for (let i = 0; i < M; i++) indices.push(centerF, top + i, top + (i + 1) % M)
 
   if (p.backFace ?? true) {
-    const back = pushRing(contour(p, 0, n, S), 0)
+    const back = pushRing(contour(p, bottomInset, n, S), 0)
     const centerB = positions.length / 3
     positions.push(0, 0, 0); uvs.push(0.5, 0.5)
     for (let i = 0; i < M; i++) indices.push(centerB, back + (i + 1) % M, back + i)

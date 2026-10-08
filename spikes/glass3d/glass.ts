@@ -4,12 +4,12 @@
 // transmitted term: the refracted backdrop sampled through the real thickness,
 // optionally mixed with a planar reflection of what sits on top (for the panel).
 
-import { Color } from 'three'
+import { Color, FrontSide, type Side } from 'three'
 import { MeshPhysicalNodeMaterial } from 'three/webgpu'
 import {
   Fn, uniform, vec2, vec3, vec4, float, positionView, positionViewDirection, normalView,
   positionLocal, modelViewMatrix, cameraProjectionMatrix, viewportMipTexture, refract,
-  normalize, dot, max, min, exp, mix, uv,
+  normalize, dot, max, min, exp, mix, uv, clamp, pow,
 } from 'three/tsl'
 
 export interface Glass3DOptions {
@@ -28,6 +28,8 @@ export interface Glass3DOptions {
   shadowOpacity?: number     // alpha of the transmitted shadow this glass casts
   backdrop?: ReturnType<typeof viewportMipTexture>
   reflection?: { node: any; strength: number }   // planar reflection node (TSL reflector)
+  side?: Side
+  edgeGlow?: number          // fake internal reflection: brighten steep (edge) normals
 }
 
 export function createGlass3DMaterial(o: Glass3DOptions) {
@@ -48,6 +50,7 @@ export function createGlass3DMaterial(o: Glass3DOptions) {
   const m = new MeshPhysicalNodeMaterial()
   m.transparent = true
   m.depthWrite = true
+  m.side = o.side ?? FrontSide
   m.roughness = o.specularRoughness ?? 0.07
   m.metalness = 0
   m.envMapIntensity = o.envIntensity ?? 1.0
@@ -94,7 +97,10 @@ export function createGlass3DMaterial(o: Glass3DOptions) {
     const p = uv().sub(0.5)
     const d = p.sub(u.touch)
     const glow = exp(dot(d, d).negate().div(u.glowRadius.mul(u.glowRadius))).mul(u.press)
-    return vec3(glow.mul(0.45)).add(u.tint.mul(glow.mul(0.25)))
+    // edge glow: light trapped in the slab leaks out at the steep round-overs
+    const NdotV = clamp(dot(normalView, positionViewDirection), 0, 1)
+    const rim = pow(float(1).sub(NdotV), 2.5).mul(o.edgeGlow ?? 0)
+    return vec3(glow.mul(0.45)).add(u.tint.mul(glow.mul(0.25))).add(mix(vec3(1), u.tint, 0.5).mul(rim))
   })()
 
   // transmitted (coloured) shadow: the light that passes through this glass

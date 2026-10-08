@@ -1,7 +1,7 @@
 // SPIKE: temporary Canvas2D text, icons and flat shapes → texture quads
 // (the real text engine and panel renderer come in Phase 1/2).
 
-import { CanvasTexture, SRGBColorSpace, LinearFilter, Mesh, PlaneGeometry } from 'three'
+import { CanvasTexture, SRGBColorSpace, LinearFilter, Mesh, PlaneGeometry, AdditiveBlending } from 'three'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
 
 export const PX_PER_UNIT = 512
@@ -91,4 +91,27 @@ export function roundedRect(w: number, h: number, r: number, fill: string, opts:
 
 export function circle(d: number, fill: string, opts: { shadow?: number; edge?: string; alpha?: number } = {}) {
   return roundedRect(d, d, d / 2, fill, opts)
+}
+
+/** additive light pool under a glass element (transmitted light / caustic) */
+export function glow(w: number, h: number, color: string, alpha = 0.3) {
+  const W = Math.ceil(w * PX_PER_UNIT), H = Math.ceil(h * PX_PER_UNIT)
+  const cv = document.createElement('canvas')
+  cv.width = W; cv.height = H
+  const ctx = cv.getContext('2d')!
+  const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) / 2)
+  g.addColorStop(0, color)
+  g.addColorStop(1, 'rgba(0,0,0,0)')
+  ctx.globalAlpha = alpha
+  ctx.fillStyle = g
+  ctx.save(); ctx.scale(1, H / Math.max(W, H)); ctx.translate(0, (Math.max(W, H) - H) / 2 * (Math.max(W, H) / H))
+  ctx.fillRect(0, 0, W, Math.max(W, H)); ctx.restore()
+  const tex = new CanvasTexture(cv)
+  tex.colorSpace = SRGBColorSpace
+  tex.minFilter = LinearFilter
+  tex.generateMipmaps = false
+  const mat = new MeshBasicNodeMaterial({ map: tex, transparent: true, depthWrite: false, blending: AdditiveBlending })
+  const m = new Mesh(new PlaneGeometry(w, h), mat)
+  m.renderOrder = 0.5
+  return m
 }
