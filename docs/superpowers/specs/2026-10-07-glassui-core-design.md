@@ -131,75 +131,86 @@ interface Style {
 
 `core/animation`：弹簧（质量/刚度/阻尼或 Apple 风格 `response/dampingFraction`）与时长缓动两种驱动；可动画属性：位置、尺寸、scale、opacity、颜色、圆角、玻璃参数、elevation、tilt。每帧 `tick` 推进，写回节点的"视觉值"（与布局值分离，避免布局抖动）。`<Transition>` 的 enter/leave 映射到这套系统；玻璃的出现/消失按 Apple 做法调制折射强度与模糊而不是只调 opacity。
 
-## 5. 渲染管线（`@glassui/render`）
+## 5. 渲染管线（`@glassui/render`）—— 真 3D
+
+原则：既然 UI 在 3D 引擎里渲染，厚度、高光、反射、阴影、位移就用引擎的真实几何与光照实现，不在平面上用 shader 伪造。只有"透过玻璃看到后面的像"这一步物理上必须采样 backdrop，予以保留。
 
 ### 5.1 三类表面
 
 1. **内容面（Surface 内容层）**：所有非玻璃节点（box/text/image/scroll 的内容）画到 Surface 自己的 RT。
-2. **贴在内容面上的玻璃**：`glass` 节点与 `bg:'glass'` 的节点在同一 Surface 内，其 backdrop 就是该 Surface 的内容层 RT，在**面板空间**采样——任意 3D 变换下精确、无需屏幕捕获、可缓存。这是默认路径，覆盖绝大多数 UI。
-3. **悬浮玻璃**：`background:'glass'` 的 Surface 自身（例如一块浮在 3D 世界上的玻璃面板，或屏幕层下面是世界场景），需要**屏幕空间 backdrop 捕获**。
+2. **贴在内容面上的玻璃**：`glass` 节点与 `bg:'glass'` 的节点在同一 Surface 内，其 backdrop 就是该 Surface 的内容层 RT；折射射线穿过玻璃后与面板平面求交，交点换算成面板 UV 采样——任意 3D 变换下精确、无需屏幕捕获、可缓存。这是默认路径。
+3. **悬浮玻璃**：`background:'glass'` 的 Surface 自身（浮在 3D 世界上的玻璃面板），折射射线投影到**屏幕空间 backdrop 捕获**。
 
-Apple 规则"玻璃不采样玻璃"按默认遵守：类 2 玻璃只看内容层，不看同层其它玻璃；同一 `glass` 容器内的子形状用 `smin` 融合成一个采样区域。提供 `physicalStacking: true` 选项，允许有限次（质量档上限）子矩形重捕获，用于故意叠玻璃的效果。
+Apple 规则"玻璃不采样玻璃"按默认遵守：类 2 玻璃只看内容层。提供 `physicalStacking: true` 选项，允许有限次（质量档上限）子矩形重捕获，用于故意叠玻璃的效果。
 
-### 5.2 玻璃材质（TSL）
+### 5.2 玻璃几何：`GlassSlab`
+
+每个玻璃元素是一块有厚度、带倒角的实体：平面轮廓为超椭圆圆角矩形（胶囊/圆形用指数 2，固定半径用指数 ≈4.5），边缘为凸起 bezel 剖面（`squircle` / `circle` / `lip`），剖面 8–12 段、圆角 8–12 段，有正面、倒角面、侧面与背面。
+
+网格参数化为 9-slice 形式：顶点携带 `anchor(±1,±1)`、`cornerOffset`（单位圆角上的位置）、`profileT`（剖面参数）属性，实际顶点位置在顶点着色器里由实例参数 `size / radius / bezel / thickness` 计算。因此**一个 Surface 内所有玻璃共用一份几何，用 instancing 一次绘制**；尺寸、圆角、厚度、按压缩放都是逐实例数据。GlassContainer 的形状融合在几何层做：相邻 slab 之间生成过渡几何（Phase 2 后半）。
+
+### 5.3 玻璃材质（TSL，基于 PBR 节点材质）
+
+以 `MeshPhysicalNodeMaterial` 的节点图为基础，替换其 transmission 分支：
+
+- **光照与反射**：高光、Fresnel、环境反射来自宿主场景的灯与 PMREM 环境贴图。无宿主灯时 `UIRoot` 提供一盏默认 UI key light（方向光）和一张内置的小尺寸程序化棚拍环境图。Apple 的"沿光轴两侧细高光"由倒角面的真实法线自然产生，随相机/灯光/元素旋转而移动。
+- **折射**：用真实法线做 Snell 折射，沿折射方向穿过 `thickness` 到达背面，再按 §5.1 投影到 backdrop 采样。
+- **色散**：三通道不同 IOR（`ior ± (ior-1)·k·dispersion`），位移 < 0.25px 时自动退化为单次采样。
+- **磨砂**：`roughness` → backdrop mip lod（与 three transmission 一致）；高质量档用 dual-Kawase 金字塔替代 mip 三线性。
+- **Tint**：按路径长度做 Beer-Lambert 吸收 `exp(-σ·d)`，厚的玻璃颜色更深，大元素"更厚、更深"自动成立。
+- **自适应亮度**：每个玻璃元素在金字塔最小层采样平均亮度，写入"每元素一个 texel"的 ping-pong 纹理并做时间平滑（τ≈0.2s）；前景文字材质读同一 texel 决定明/暗，无 CPU 回读。
+- **按压内发光**：以指尖点为中心的发射项（`emissive`），随 `press` 弹簧变化。
+- 深度测试开、写入关；类 3 玻璃拒绝"捕获深度 < 玻璃深度"的样本。
 
 参数（`GlassParams`，全部有默认值，`theme.glass` 可覆盖，节点 `style.glass` 可覆盖）：
 
 ```ts
 interface GlassParams {
-  variant: 'regular' | 'clear'          // clear 自动加 35% 暗化层（当 backdrop 亮度高时）
-  bezel: number        // 折射带宽度 pt；默认随尺寸：clamp(minSide*0.18, 6, 28)
+  variant: 'regular' | 'clear'    // clear：低 roughness、低吸收，backdrop 亮时自动加 35% 暗化层
+  thickness: number               // pt；默认随尺寸 clamp(minSide*0.08, 2, 10)
+  bezel: number                   // 倒角宽 pt；默认 clamp(minSide*0.18, 6, 28)
   profile: 'squircle' | 'circle' | 'lip'
-  ior: number          // 1.5
-  refract: number      // 折射位移强度（pt）
-  dispersion: number   // 0.02–0.05；位移 < 0.25px 时自动关闭
-  frost: number        // 0–1，磨砂程度（采样模糊金字塔的 lod）
-  tint: ColorToken | null; tintStrength: number
-  saturation: number   // 1.2–1.4
-  glint: { strength: number; lightAngle: number | 'auto' }  // 沿光轴两侧的细高光线
-  rim: number          // Fresnel 边缘量
-  innerGlow: number    // 按压从指尖发光的强度
-  adaptive: boolean    // 根据 backdrop 亮度自动翻转前景明暗（仅小元素）
-  cornerExponent: number // 超椭圆指数 n（4–5 近似 Apple 连续圆角）
+  ior: number                     // 1.5
+  dispersion: number              // 0–1
+  roughness: number               // 0–1 → 磨砂
+  tint: ColorToken | null; absorption: number
+  envIntensity: number; specularIntensity: number
+  innerGlow: number
+  adaptive: boolean
+  cornerExponent: number          // 2 = 圆/胶囊；4–5 ≈ Apple 连续圆角（radius:'capsule' 隐含 2）
 }
 ```
 
-着色（单 quad，面板空间）：
-1. `sd = smin(所有子形状的超椭圆圆角矩形 SDF)`，`g = ∇sd` 归一化；覆盖 `cover = clamp(0.5 - sd/fwidth(sd), 0, 1)`（解析抗锯齿，不依赖 MSAA）。
-2. `x = clamp(-sd/bezel, 0, 1)`；位移幅度来自预计算 1D LUT（高度轮廓 → 法线 → Snell 折射角 → `tan(θi-θt)`）；位移方向 `-g`。
-3. 位移从面板空间经 TBN 投影到 backdrop 空间（类 2 直接是面板 UV；类 3 投到屏幕 UV），三通道各采样一次得色散。
-4. 采样 `B(uv) = mix(sharp, pyramid(lod=frost), frost)`，越界镜像；类 3 还拒绝"捕获深度 < 玻璃深度"的样本。
-5. 饱和度提升 → 与 tint/亮度自适应洗色混合 → Fresnel（Schlick，F0=0.04）× 环境色 → 两侧 glint 线（以亮度/色度提升方式上色，不加纯白）→ 指尖高斯内发光。
-6. 输出 `vec4(c, cover * opacity)`；深度测试开、写入关。
+### 5.4 阴影
 
-**自适应亮度**：每个玻璃元素在金字塔最小层采样一次平均亮度，写入"每元素一个 texel"的 ping-pong 纹理并做时间平滑（τ≈0.2s）；前景文字材质读同一 texel 决定明/暗，全程 GPU 端，无 CPU 回读。
+`UIRoot` 的 UI key light 渲染一张 **VSM**（方差阴影贴图，模糊半径可调，软阴影便宜）；所有 UI 几何（玻璃 slab、填充面板）既投射也接收：按钮投到面板上、面板投到世界几何上、Dialog 投到其下内容上。接触感来自真实的 `elevation` 距离。阴影贴图覆盖范围按可见 UI 包围盒自动拟合。低/minimal 质量档回落到解析高斯阴影贴片（Evan Wallace erf 法）。
 
-### 5.3 每帧流程
+### 5.5 面板、文字、图片
 
-1. `core.tick` → 对每个脏 Surface 生成渲染列表（按 z 顺序的 draw 批次：面板实例、文字实例、图片、玻璃容器、阴影）。
-2. **内容层重绘**：对脏的 Surface，用正交相机把其列表画到该 Surface RT；玻璃不在这里画。若 Surface 有类 2 玻璃，再为该 RT 建 2–4 层 dual-Kawase 金字塔（仅覆盖玻璃矩形并集 + 位移/模糊余量）。
-3. **世界渲染**：宿主场景 + 所有 Surface 内容 quad（深度写入）。
-4. **屏幕 backdrop 捕获**：仅当存在类 3 玻璃；用 TSL `viewportSharedTexture`/`viewportMipTexture` 取当前帧缓冲并建金字塔（scissor 到并集矩形）。
-5. **玻璃与前景**：按从远到近画每个玻璃容器 quad，再画其上的文字/图标（这些带 `elevation` 时用 TBN 偏移），再画解析阴影。
-6. 质量档切换：`QualityController` 用 GPU 计时（可用时）或帧时间迟滞在 `high/medium/low/minimal` 间切换，并响应系统 `prefers-reduced-transparency`/`prefers-reduced-motion`。
+- **填充面板**（非玻璃 box）：薄平面 + 超椭圆 SDF 做形状与抗锯齿，受光材质（能接收阴影），支持填充/边框/渐变/裁剪；一个 Surface 内同层面板 instancing 一次绘制。
+- **文字**：instanced glyph quad，采样字形 atlas，`fwidth` 抗锯齿；不受光（可读性优先，对应 Apple vibrancy）；颜色可读自适应亮度 texel；带 `elevation` 时沿法线抬升。
+- **图片**：第一期单独 draw。
 
-| 档位 | 捕获 | 金字塔 | 效果 | 重捕获上限 |
+### 5.6 每帧流程
+
+1. `core.tick` → 对每个脏 Surface 生成渲染列表与实例缓冲（面板实例、字形实例、玻璃实例、图片）。
+2. **内容层重绘**：对脏的 Surface，用正交相机把其非玻璃列表画到该 Surface RT；若有类 2 玻璃，再为该 RT 建 2–4 层模糊金字塔（仅覆盖玻璃矩形并集 + 位移余量）。
+3. **UI 阴影 pass**：UI key light 视角渲染所有 UI 几何到 VSM（仅在 UI 变换/布局脏时重绘）。
+4. **世界渲染**：宿主场景 + 所有 Surface 内容 quad（深度写入）+ 填充面板。
+5. **屏幕 backdrop 捕获**：仅当存在类 3 玻璃；TSL `viewportSharedTexture`/`viewportMipTexture` 取帧缓冲并建金字塔（scissor 到并集矩形）。
+6. **玻璃与前景**：按从远到近画玻璃实例批次，再画其上的文字/图标。
+7. MSAA 4× 开启（两个后端均支持）；质量档由 `QualityController` 用 GPU 计时或帧时间迟滞切换，并响应 `prefers-reduced-transparency` / `prefers-reduced-motion`。
+
+| 档位 | backdrop | 模糊 | 玻璃 | 阴影 |
 |---|---|---|---|---|
-| high | 全分辨率半浮点 | 4 层 | 色散 + Fresnel + glint | 3 |
-| medium（移动默认） | 半分辨率 RGBA8，DPR≤2 | 3 层 | 色散仅在 ≥0.25px 时 | 1 |
-| low | 四分之一分辨率 | 2 层 | 仅 tint + rim 线，无折射 | 0 |
-| minimal / 降低透明度 | 无 | 无 | 近不透明磨砂填充 + 边框 | 0 |
+| high | 全分辨率半浮点 | dual-Kawase 4 层 | 色散 + 环境反射 + 真实折射 | VSM 2048 |
+| medium（移动默认） | 半分辨率 RGBA8 | mip 3 层 | 色散仅 ≥0.25px 时 | VSM 1024 |
+| low | 四分之一分辨率 | mip 2 层 | 无折射，tint + Fresnel | 解析阴影贴片 |
+| minimal / 降低透明度 | 无 | 无 | 近不透明磨砂填充 + 边框 | 解析阴影贴片 |
 
-### 5.4 面板、文字、阴影材质
+### 5.7 WebGL2 回落
 
-- **面板**：instanced quad + 超椭圆 SDF，支持填充、边框、渐变（线性/径向）、裁剪矩形（父 scroll/overflow 传入）。一次 draw 画一个 Surface 内所有同层面板。
-- **文字**：instanced glyph quad，采样字形 atlas（MSDF 或栅格页），`fwidth` 抗锯齿；颜色可读自适应亮度 texel。
-- **图片**：纹理数组或单独 draw（第一期单独 draw，数量少）。
-- **阴影**：解析高斯圆角矩形阴影（Evan Wallace 的 erf 四采样法），两层：接触阴影（σ 2–4pt，α 0.12–0.2）+ 环境阴影（σ 16–30pt，α 0.06–0.1），随 `elevation` 与尺寸缩放，可带 tint；画在玻璃之后并遮罩到形状外部；世界层中投影到 Surface 平面（第一期不做投到任意世界几何的 shadow map）。
-
-### 5.5 WebGL2 回落
-
-全部材质用 TSL 写，不写 WGSL/GLSL 字面量；不使用 MRT、compute；金字塔用普通 RT ping-pong；以 `forceWebGL: true` 跑同一套视觉回归。
+全部材质用 TSL 写，不写 WGSL/GLSL 字面量；不使用 MRT、compute；金字塔用普通 RT ping-pong；以 `forceWebGL: true` 跑同一套视觉回归。Phase 0 spike 已验证 `viewportMipTexture` 在两个后端行为一致（见 `docs/superpowers/spikes/`）。
 
 ## 6. 文字（`@glassui/text`）
 
