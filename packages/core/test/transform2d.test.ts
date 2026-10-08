@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { IDENTITY, multiply, invert, apply, scaleAbout, isIdentity } from '../src/transform2d'
+import { GlassUIError } from '../src/errors'
 
 describe('Mat2D', () => {
   it('scaleAbout keeps the pivot fixed and scales distances', () => {
@@ -18,6 +19,11 @@ describe('Mat2D', () => {
     const [x, y] = apply(m, 12, 34)
     const [bx, by] = apply(invert(m), x, y)
     expect(bx).toBeCloseTo(12, 9); expect(by).toBeCloseTo(34, 9)
+  })
+  it('invert rejects a singular or non-finite matrix with a GlassUIError', () => {
+    expect(() => invert(scaleAbout(10, 10, 0))).toThrow(GlassUIError)
+    expect(() => invert(scaleAbout(10, 10, 0))).toThrow('[transform2d] 矩阵不可逆（det=0）')
+    expect(() => invert({ ...IDENTITY, a: Number.NaN })).toThrow('不可逆')
   })
   it('isIdentity', () => { expect(isIdentity(IDENTITY)).toBe(true); expect(isIdentity(scaleAbout(1, 1, 0.9))).toBe(false) })
 })

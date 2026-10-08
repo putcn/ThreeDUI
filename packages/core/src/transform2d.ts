@@ -1,3 +1,5 @@
+import { GlassUIError } from './errors'
+
 /** A 2D affine in surface pt: `x' = a·x + c·y + tx`, `y' = b·x + d·y + ty` (CSS matrix convention). */
 export interface Mat2D { a: number; b: number; c: number; d: number; tx: number; ty: number }
 
@@ -12,9 +14,10 @@ export function multiply(p: Mat2D, q: Mat2D): Mat2D {
   }
 }
 
+/** The inverse of `m`; a singular or non-finite matrix throws `GlassUIError`. */
 export function invert(m: Mat2D): Mat2D {
   const det = m.a * m.d - m.b * m.c
-  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) throw new Error(`[transform2d] matrix is singular (det=${det})`)
+  if (!Number.isFinite(det) || Math.abs(det) < 1e-12) throw new GlassUIError('transform2d', `矩阵不可逆（det=${det}）`)
   const a = m.d / det, b = -m.b / det, c = -m.c / det, d = m.a / det
   return { a, b, c, d, tx: -(a * m.tx + c * m.ty), ty: -(b * m.tx + d * m.ty) }
 }
