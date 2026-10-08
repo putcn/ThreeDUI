@@ -38,14 +38,20 @@
 
 ![细节：超薄透明玻璃壳下面的发光层](docs/images/signup-detail.png)
 
-## 本地运行 spike
+## 试一试
 
 ```bash
 pnpm install
-pnpm spike:glass3d      # http://127.0.0.1:5174 ，加 ?webgl 强制 WebGL2 后端
+pnpm playground         # http://127.0.0.1:5176 ，基于 @glassui/core + @glassui/render 的注册表单和世界层场景
 ```
 
-拖动可环绕观察。角落的 HUD 显示当前后端、帧率和 draw call 数。
+查询参数：`?scene=signup|world|both`（默认 `both`）、`?quality=high|medium|low|minimal`（默认自适应）、`?webgl` 强制 WebGL2 后端。拖动背景可环绕观察（表单固定在屏幕上，世界层面板随场景移动）。HUD 显示后端、帧率、UI draw call 数、质量档位和 Surface 数。`pnpm playground:build` 把静态构建输出到 `examples/playground/dist`。
+
+原来的 spike 仍保留作对比：
+
+```bash
+pnpm spike:glass3d      # http://127.0.0.1:5174 ，加 ?webgl 强制 WebGL2 后端
+```
 
 ## 仓库结构
 
@@ -55,7 +61,8 @@ docs/superpowers/plans/   实现计划，每个子系统一份
 docs/superpowers/spikes/  每个 spike 的发现与推理
 spikes/glass3d/           当前 Demo：真 3D 的 Liquid Glass 注册表单
 spikes/glass/             第一版（被否掉的）平面 SDF 方案，留作对比
-packages/                 @glassui/core、@glassui/text……（由各计划逐步填入）
+packages/                 @glassui/core、@glassui/text、@glassui/render……（由各计划逐步填入）
+examples/playground/      基于这些包搭的注册表单和世界层场景（`pnpm playground`）
 ```
 
 ## 玻璃是怎么做的（一段话）

@@ -1,0 +1,16 @@
+{
+  "name": "playground",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@glassui/core": "workspace:*",
+    "@glassui/text": "workspace:*",
+    "@glassui/render": "workspace:*",
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "vite": "^8.3.3",
+    "typescript": "^5.9.3",
+    "@types/three": "^0.186.0"
+  }
+}

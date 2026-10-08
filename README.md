@@ -38,14 +38,20 @@ Early, in the open. The rendering approach was validated in a series of spikes (
 
 ![Detail: the glow layer under a thin transparent glass shell](docs/images/signup-detail.png)
 
-## Try the spike locally
+## Try it
 
 ```bash
 pnpm install
-pnpm spike:glass3d      # http://127.0.0.1:5174  — add ?webgl to force the WebGL2 backend
+pnpm playground         # http://127.0.0.1:5176  — the sign-up form and a world-layer scene on @glassui/core + @glassui/render
 ```
 
-Drag to orbit. The HUD in the corner shows the active backend, fps and draw calls.
+Query parameters: `?scene=signup|world|both` (default `both`), `?quality=high|medium|low|minimal` (default: adaptive), `?webgl` to force the WebGL2 backend. Drag the background to orbit (the form stays put; the world-layer panel moves with the scene). The HUD shows the backend, fps, UI draw calls, quality tier and Surface count. `pnpm playground:build` writes a static build to `examples/playground/dist`.
+
+The original spike is still there for comparison:
+
+```bash
+pnpm spike:glass3d      # http://127.0.0.1:5174  — add ?webgl to force the WebGL2 backend
+```
 
 ## Repository layout
 
@@ -55,7 +61,8 @@ docs/superpowers/plans/   implementation plans, one per subsystem
 docs/superpowers/spikes/  what each spike found, with the reasoning
 spikes/glass3d/           the current demo: real-3D Liquid Glass sign-up form
 spikes/glass/             the first (rejected) flat-SDF approach, kept for comparison
-packages/                 @glassui/core, @glassui/text, … (filled in by the plans)
+packages/                 @glassui/core, @glassui/text, @glassui/render, … (filled in by the plans)
+examples/playground/      the sign-up form and a world-layer scene built on the packages (`pnpm playground`)
 ```
 
 ## How the glass works, in one paragraph

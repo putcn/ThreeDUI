@@ -5,7 +5,9 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b packages/core packages/text packages/render && tsc -p packages/core/tsconfig.test.json && tsc -p packages/text/tsconfig.test.json && tsc -p packages/render/tsconfig.test.json",
+    "typecheck": "tsc -b packages/core packages/text packages/render && tsc -p packages/core/tsconfig.test.json && tsc -p packages/text/tsconfig.test.json && tsc -p packages/render/tsconfig.test.json && tsc -p examples/playground/tsconfig.json",
+    "playground": "vite examples/playground --port 5176 --strictPort --host 127.0.0.1",
+    "playground:build": "vite build examples/playground",
     "spike:glass": "vite spikes/glass",
     "spike:glass3d": "vite spikes/glass3d --port 5174",
     "spike:glyph": "vite spikes/glyph-cjk --port 5175"
