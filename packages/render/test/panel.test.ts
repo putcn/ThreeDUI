@@ -4,10 +4,11 @@ import { Vector2, Vector3 } from 'three'
 import { Node, IDENTITY, scaleAbout, type ClipRect, type PanelInstance } from '@glassui/core'
 import { superellipseSDF, sdfNode } from '../src/panel/sdf'
 import { PanelBatch, PANEL_ATTRS } from '../src/panel/batch'
-import { createPanelMaterial, flatVertex } from '../src/panel/material'
+import { createPanelMaterial, flatVertex, AA_MARGIN_PT } from '../src/panel/material'
 import { createQuadGeometry } from '../src/quad'
 import { srgbToLinear } from '../src/color'
 import { instanceMatrix } from '../src/transform'
+import { localToSurface } from '../src/units'
 import { evalNode } from './fixtures/tsl-eval'
 import { buildShaders } from './fixtures/build-shaders'
 
@@ -100,54 +101,81 @@ describe('PanelBatch and material', () => {
     expect(Array.from(g.getIndex()!.array)).toEqual([0, 1, 2, 0, 2, 3])
     expect(g.boundingSphere!.radius).toBeGreaterThanOrEqual(1e6)
   })
-  it('places the quad through the instance matrix: iMat · (position.xy · iRect.zw, 0)', () => {
+  it('places the quad, grown by the AA margin, through the instance matrix: iMat · (position.xy · (iRect.zw + 2m), 0)', () => {
     const inst: PanelInstance = { ...p, rect: { x: 40, y: 60, width: 160, height: 64 }, elevation: 12, transform: scaleAbout(120, 92, 0.8), tilt: { x: 0.3, y: -0.2 } }
     const b = new PanelBatch(); b.update([inst], s)
     const m = createPanelMaterial(b.geometry, su())
-    const M = instanceMatrix(inst, s)
+    const M = instanceMatrix(inst, s), grow = (2 * AA_MARGIN_PT) / s.ptPerUnit
     let worst = 0
     for (const [x, y] of [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const) {
       const got = evalNode(m.positionNode, { ...packed(b), position: [x, y, 0] })
-      const want = new Vector3(x * 1.6, y * 0.64, 0).applyMatrix4(M)
+      const want = new Vector3(x * (1.6 + grow), y * (0.64 + grow), 0).applyMatrix4(M)
       for (let k = 0; k < 3; k++) worst = Math.max(worst, Math.abs(got[k]! - want.getComponent(k)))
     }
     expect(worst).toBeLessThan(1e-5)   // float32 packing
   })
+  it('flatVertex grows the rasterised quad by its margin while q and size stay in rect units', () => {
+    const b = new PanelBatch(); b.update([p], s)   // rect pt (10, 10)–(110, 50)
+    const fv = flatVertex(b.geometry, su(), { marginPt: 2 })
+    const corner = { ...packed(b), position: [0.5, 0.5, 0] }
+    const [x, y] = evalNode(fv.position, corner)
+    const [px, py] = localToSurface(x!, y!, s)
+    expect(px).toBeCloseTo(112, 4); expect(py).toBeCloseTo(8, 4)   // the rect's top-right corner, 2 pt out on both axes
+    const q = evalNode(fv.q, corner)
+    expect(q[0]).toBeCloseTo(0.52, 6); expect(q[1]).toBeCloseTo(0.22, 6)   // units: 2 pt beyond the half size (0.5, 0.2)
+    expect(evalNode(fv.size, corner)).toEqual(f32([1, 0.4]))
+    expect(AA_MARGIN_PT).toBe(2)
+  })
   it('clips through maskNode: no clip, a rounded clip, a scaled clip, and a clip collapsed to zero width', () => {
-    // the quad's (u, v) ∈ [−0.5, 0.5]² is surface pt (10 + 100·(u + 0.5), 10 + 40·(0.5 − v))
-    const at = (u: number, v: number, clip?: ClipRect) => {
+    // p's quad spans surface pt (60 ± 52, 30 ± 22): its 100 × 40 pt rect grown by the 2 pt margin
+    const at = (ptx: number, pty: number, clip?: ClipRect) => {
       const b = new PanelBatch(); b.update([{ ...p, ...(clip ? { clip } : {}) }], s)
       const m = createPanelMaterial(b.geometry, su())
-      return evalNode(m.maskNode, { ...packed(b), position: [u, v, 0] })[0]
+      return evalNode(m.maskNode, { ...packed(b), position: [(ptx - 60) / 104, (30 - pty) / 44, 0] })[0]
     }
-    expect([at(-0.5, 0.5), at(0.5, -0.5), at(0, 0)]).toEqual([1, 1, 1])
+    expect([at(10, 10), at(110, 50), at(60, 30)]).toEqual([1, 1, 1])
     const rounded: ClipRect = { x: 20, y: 20, width: 60, height: 60, radius: 20, transform: IDENTITY }
-    expect(at(-0.3, 0, rounded)).toBe(1)        // pt (30, 30): 14.1 from the corner centre (40, 40)
-    expect(at(-0.39, 0.225, rounded)).toBe(0)   // pt (21, 21): inside the rect, outside its rounded corner
-    expect(at(0.3, 0, rounded)).toBe(0)         // pt (90, 30): right of the clip
+    expect(at(30, 30, rounded)).toBe(1)   // 14.1 from the corner centre (40, 40)
+    expect(at(21, 21, rounded)).toBe(0)   // inside the rect, outside its rounded corner
+    expect(at(90, 30, rounded)).toBe(0)   // right of the clip
     const scaled: ClipRect = { x: 0, y: 0, width: 200, height: 100, radius: 0, transform: scaleAbout(100, 50, 0.5) }   // covers pt [50, 150] × [25, 75]
-    expect(at(-0.2, 0, scaled)).toBe(0)   // pt (40, 30)
-    expect(at(0, 0, scaled)).toBe(1)      // pt (60, 30)
+    expect(at(40, 30, scaled)).toBe(0)
+    expect(at(60, 30, scaled)).toBe(1)
     const collapsed: ClipRect = { x: 50, y: 0, width: 0, height: 100, radius: 12, transform: IDENTITY }
-    expect([at(-0.3, 0, collapsed), at(0.3, 0, collapsed)]).toEqual([0, 0])
+    expect([at(30, 30, collapsed), at(90, 30, collapsed)]).toEqual([0, 0])
   })
-  it('covers by the SDF and blends fill and border premultiplied', () => {
-    // fragment output at quad position (u, v) for a footprint of 1 pt (0.01 units) per pixel: [r, g, b, opacity]
-    const frag = (inst: PanelInstance, u: number, v: number) => {
+  it('covers by the SDF over an AA ramp of ±0.75 px and composites the border over the fill', () => {
+    // fragment output at quad-local q (units, rect 1 × 0.4 grown by the 2 pt margin) for a footprint of 1 pt (0.01
+    // units) per pixel, so aa = 0.0075: [r, g, b, opacity]
+    const frag = (inst: PanelInstance, qx: number, qy: number) => {
       const b = new PanelBatch(); b.update([inst], s)
       const m = createPanelMaterial(b.geometry, su())
-      const at = { ...packed(b), position: [u, v, 0] }
+      const at = { ...packed(b), position: [qx / 1.04, qy / 0.44, 0] }
       return [...evalNode(m.colorNode, at, undefined, 0.01), ...evalNode(m.opacityNode, at, undefined, 0.01)]
     }
     const close = (got: number[], want: number[]) => got.forEach((x, k) => expect(x).toBeCloseTo(want[k]!, 6))
     // p: fill (1, 0.5, 0, 0.8) sRGB, black 2 pt border, opacity 0.5, 100 × 40 pt
     close(frag(p, 0, 0), [1, srgbToLinear(0.5), 0, 0.8 * 0.5])   // centre: the fill
     close(frag(p, 0.5, 0), [0, 0, 0, 0.5 * 1 * 0.5])            // on the edge: the border, half covered
+    // borderless and opaque: half covered on the edge (d = 0), smoothstep(−aa, aa, ∓aa/2) = 0.15625 a half ramp in or out,
+    // nothing past the ramp, inside the margin
+    const { border: _, ...plain } = p
+    const solid: PanelInstance = { ...plain, color: [1, 0.5, 0, 1], opacity: 1 }
+    close(frag(solid, 0.5, 0), [1, srgbToLinear(0.5), 0, 0.5])
+    close(frag(solid, 0.5 - 0.00375, 0), [1, srgbToLinear(0.5), 0, 1 - 0.15625])
+    close(frag(solid, 0.5 + 0.00375, 0), [1, srgbToLinear(0.5), 0, 0.15625])
+    expect(frag(solid, 0.5 + 0.0075, 0)[3]).toBe(0)
+    // a zero-width border never paints, whatever its colour
+    close(frag({ ...solid, border: { width: 0, color: [0, 0, 0, 1] } }, 0.5, 0), [1, srgbToLinear(0.5), 0, 0.5])
     // a border over a transparent fill (core packs a border-only panel's fill as (0, 0, 0, 0)): halfway across the
     // border's inner edge the colour is still the border's, at half its alpha (a straight mix would be grey)
     const ring: PanelInstance = { ...p, color: [0, 0, 0, 0], border: { width: 2, color: [1, 1, 1, 1] }, opacity: 1 }
     close(frag(ring, 0.48, 0), [1, 1, 1, 0.5])
     close(frag(ring, 0, 0), [0, 0, 0, 0])
+    // a translucent border (the theme's separator, #00000014) is drawn over an opaque fill, not instead of it
+    const a = Math.fround(0x14 / 255)
+    const card: PanelInstance = { ...p, color: [1, 1, 1, 1], border: { width: 2, color: [0, 0, 0, 0x14 / 255] }, opacity: 1 }
+    close(frag(card, 0.49, 0), [1 - a, 1 - a, 1 - a, 1])   // mid-band: ≈ (0.922, 0.922, 0.922, 1)
   })
   it('flatVertex hands the fragment one varying per packed attribute and the quad-local position and size', () => {
     const b = new PanelBatch(); b.update([p], s)
