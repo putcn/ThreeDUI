@@ -9,7 +9,7 @@ import { AtlasPages } from './text/pages'
 import { createStudioEnvironment, createUILights, fitShadowCamera, UI_ENV_INTENSITY } from './lighting/lights'
 import { PointerBridge, type CanvasLike } from './pointer'
 import { defaultTier, QUALITY, QualityController, type QualityProfile, type QualityTier } from './quality'
-import { FrameScheduler } from './scheduler'
+import { FrameSampler, FrameScheduler } from './scheduler'
 
 /** The subset of `WebGPURenderer` the root drives (so tests can pass a stub). */
 export interface UIRenderer extends RendererLike {
@@ -71,8 +71,11 @@ export interface UIRoot {
   /** Overlay: the UI scene alone, over what the host drew this frame (`autoClear` false for the call, then true); a no-op when shared. */
   renderUI(): void
   /**
-   * `tick` (dt from the scheduler, clamped) + `render`; with `quality: 'auto'`, the interval since the previous `frame`
-   * is the quality sample. `nowMs` (default `performance.now()`): the same clock on every call, e.g. the animation loop's.
+   * `tick` (dt from the scheduler, clamped) + `render`. `nowMs` (default `performance.now()`): the same clock on every
+   * call, e.g. the animation loop's. With `quality: 'auto'` each frame also feeds the quality controller, relative to
+   * the display's refresh (`FrameSampler`: a dropped refresh counts its interval, a frame that met it its CPU time), so
+   * `'auto'` assumes a continuous loop — `autoTick(true)` or a host rAF loop calling `frame` every refresh. An explicit
+   * tier never samples.
    */
   frame(nowMs?: number): void
   autoTick(on: boolean): void
@@ -82,8 +85,6 @@ export interface UIRoot {
 
 /** Screen Surfaces' draw orders start here; world ones take 1 (farthest) up to just below it. */
 const SCREEN_ORDER = 1000
-/** A longer interval between frames is a pause (a hidden tab, a breakpoint), not a frame time. */
-const MAX_FRAME_INTERVAL_MS = 250
 const CORNERS = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const
 
 const media = (q: string): boolean => typeof matchMedia === 'function' && matchMedia(q).matches
@@ -172,9 +173,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3()
   const lastCamera = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
   let lastFitted = -1, looping = false, disposed = false
-  /** The previous `frame` timestamp (ms), for the quality sample. */
-  let lastFrameMs: number | null = null
-  const scheduler = new FrameScheduler()
+  const scheduler = new FrameScheduler(), frames = new FrameSampler()
 
   /** CSS px the Surface covers: screen ones their scaled size; world ones the bounds of their projected content quad. */
   function projectedPx(s: Surface): { width: number; height: number } {
@@ -266,14 +265,12 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     },
     frame(nowMs) {
       const now = nowMs ?? performance.now()
+      const t0 = performance.now()
       root.tick(scheduler.dt(now))
       root.render()
-      // The quality sample is the interval between frames (unclamped): it covers the content passes and, through the
-      // swap chain's back-pressure, GPU time, which the CPU time around `render` would not (WebGPU submits
-      // asynchronously). GPU timestamp queries are a later refinement. A pause (> 250 ms) is not a frame time.
-      if (!Number.isFinite(now)) return
-      if (adaptive && lastFrameMs !== null && now - lastFrameMs <= MAX_FRAME_INTERVAL_MS) quality.sample(now - lastFrameMs)
-      lastFrameMs = now
+      if (!adaptive) return
+      const sample = frames.sample(now, performance.now() - t0)   // refresh-relative: see FrameSampler
+      if (sample !== null) quality.sample(sample)
     },
     autoTick(on) {
       if (!renderer.setAnimationLoop) throw new GlassUIError('UIRoot.autoTick', '渲染器没有 setAnimationLoop：请在宿主的渲染循环里调用 root.frame()')

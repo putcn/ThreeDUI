@@ -31,6 +31,15 @@ function lightSpace(key: DirectionalLight, boxes: Box3[]): Box3 {
   return out
 }
 const worldBox = (s: Surface) => s.glassBounds.applyMatrix4(s.matrixWorld)
+/** An `'auto'` root whose frames each cost `cpuMs` of CPU time: the stub renderer advances a fake `performance.now`. */
+async function timedRoot(cpuMs: number) {
+  let clock = 0
+  const now = vi.spyOn(performance, 'now').mockImplementation(() => clock)
+  const o = base()
+  o.renderer.render.mockImplementation(() => { clock += cpuMs / 2 })   // overlay: the host scene, then the UI scene
+  const root = await createUIRoot({ ...o, quality: 'auto' })
+  return { root, restore: () => now.mockRestore() }
+}
 
 describe('createUIRoot', () => {
   it('initialises the renderer for transmitted VSM shadows and reports the backend', async () => {
@@ -168,22 +177,37 @@ describe('createUIRoot', () => {
     const fixedSample = vi.spyOn(fixed.quality, 'sample')
     fixed.frame(0); fixed.frame(16); expect(fixedSample).not.toHaveBeenCalled()
   })
-  it('auto quality samples the interval between frames, skipping the first frame and a hidden-tab gap', async () => {
-    const root = await createUIRoot({ ...base(), quality: 'auto' })
-    const sample = vi.spyOn(root.quality, 'sample')
-    root.frame(1000); expect(sample).not.toHaveBeenCalled()    // no interval yet
-    root.frame(1016); expect(sample).toHaveBeenLastCalledWith(16)
-    root.frame(6016); expect(sample).toHaveBeenCalledTimes(1)  // 5 s later (a hidden tab): not a frame time
-    root.frame(6041); expect(sample).toHaveBeenLastCalledWith(25); expect(sample).toHaveBeenCalledTimes(2)
-    root.frame(6041 + 100); expect(sample).toHaveBeenLastCalledWith(100)   // unclamped (the scheduler's dt is)
-    root.frame(NaN); root.frame(6141 + 16); expect(sample).toHaveBeenLastCalledWith(16)   // a bad stamp leaves the clock
+  it('auto quality: a frame that met the refresh samples its CPU time, a dropped one its interval; a pause, nothing', async () => {
+    const { root, restore } = await timedRoot(2)
+    try {
+      const sample = vi.spyOn(root.quality, 'sample')
+      root.frame(1000); expect(sample).not.toHaveBeenCalled()   // no interval yet
+      root.frame(1016); expect(sample).toHaveBeenLastCalledWith(2)        // tick + render
+      root.frame(1016); expect(sample).toHaveBeenCalledTimes(1) // the same frame twice
+      root.frame(6016); expect(sample).toHaveBeenCalledTimes(1) // 5 s later (a hidden tab): not a frame time
+      root.frame(6066); expect(sample).toHaveBeenLastCalledWith(50)       // > 1.5 × the 16 ms refresh: dropped
+    } finally { restore() }
   })
-  it('auto quality steps down when frames come slowly (GPU-bound frames included)', async () => {
-    const root = await createUIRoot({ ...base(), quality: 'auto' })
-    expect(root.quality.tier).toBe('high')
-    let t = 0
-    for (let i = 0; i <= 60; i++) root.frame(t += 25)          // two 30-frame windows of 25 ms intervals
-    expect(root.quality.tier).toBe('medium')
+  it('auto quality holds its tier on a 30 Hz-capped loop whose frames are cheap', async () => {
+    const { root, restore } = await timedRoot(2)
+    try {
+      let t = 0
+      for (let i = 0; i < 200; i++) root.frame(t += 1000 / 30)   // 33 ms intervals with an idle GPU
+      expect(root.quality.tier).toBe('high')
+    } finally { restore() }
+  })
+  it('auto quality steps down when every other 60 Hz frame is dropped, and back up once frames meet the refresh', async () => {
+    const { root, restore } = await timedRoot(2)
+    try {
+      let t = 0
+      root.frame(t)
+      for (let i = 0; i < 60; i++) root.frame(t += i % 2 ? 50 : 1000 / 60)   // per 30 samples: 15 × 2 ms + 15 × 50 ms = 26 ms average
+      expect(root.quality.tier).toBe('medium')                    // two slow windows
+      for (let i = 0; i < 149; i++) root.frame(t += 1000 / 60)
+      expect(root.quality.tier).toBe('medium')
+      root.frame(t += 1000 / 60)
+      expect(root.quality.tier).toBe('high')                      // the fifth fast window
+    } finally { restore() }
   })
   it('applies reduced motion to the shared animation runtime', async () => {
     expect((await createUIRoot({ ...base(), reducedMotion: true })).anim.reducedMotion).toBe(true)

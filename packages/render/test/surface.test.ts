@@ -350,7 +350,7 @@ describe('Surface', () => {
     expect(b.min.z).toBe(0); expect(b.max.z).toBeGreaterThanOrEqual(48 * theme.glass.thicknessRatio / 100)
   })
   it('setQuality rebuilds the element glass with or without back faces, and marks the content dirty', () => {
-    const c: SurfaceContext = { ...ctx }   // setQuality writes the shared context: keep the suite's own
+    const c: SurfaceContext = { ...ctx }   // a context of its own, to check setQuality leaves it alone
     const { s } = signup(c)
     s.tick(1 / 60); s.prepare(stubRenderer(), { width: 400, height: 300 }, 1)
     const glassMeshes = () => meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.glassBack || m.renderOrder === SURFACE_ORDER.glassFront)
@@ -359,12 +359,14 @@ describe('Surface', () => {
     const freed: unknown[] = []
     for (const m of before) (m.material as MeshPhysicalNodeMaterial).addEventListener('dispose', () => freed.push(m.material))
     const shared = c.quality
-    const low = Object.freeze({ ...ctx.quality, backFaces: false, contentScale: 0.5 })
+    const low = Object.freeze({ ...ctx.quality, backFaces: false, contentScale: 0.5, contentType: 'half' as const })
     s.setQuality(low)
     expect(c.quality).toBe(shared); expect(c.quality.contentScale).toBe(1)   // the root owns the shared profile
     expect(s.contentDirty).toBe(true)
     s.prepare(stubRenderer(), { width: 400, height: 300 }, 1)
     expect(s.contentPass.target.width).toBe(256)              // 400 · ½ = 200 → 256: this Surface's own profile
+    expect(s.contentPass.texture.type).toBe(HalfFloatType)
+    // a Surface made afterwards starts from the untouched shared profile
     expect(new Surface({ width: 400, height: 300, ptPerUnit: 100 }, c).contentPass.texture.type).toBe(UnsignedByteType)
     expect(freed).toHaveLength(2)
     const after = glassMeshes()
