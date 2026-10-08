@@ -1,6 +1,7 @@
 import { GlassUIError } from '../errors'
 import type { Style } from '../style/schema'
 import type { Theme } from '../style/theme'
+import type { Easing } from './easing'
 
 export interface SpringConfig { stiffness: number; damping: number; mass?: number | undefined }
 
@@ -55,7 +56,7 @@ type Transitions = NonNullable<Style['transition']>
 type Transition = NonNullable<Transitions[keyof Transitions]>
 
 /** Theme preset / raw / response form → SpringConfig; the duration form passes through for a tween. */
-export function resolveSpring(t: Transition, theme: Theme): SpringConfig | { duration: number; easing: string } {
+export function resolveSpring(t: Transition, theme: Theme): SpringConfig | { duration: number; easing: Easing } {
   if (typeof t === 'string') return theme.springs[t]
   if ('duration' in t) return t
   if ('response' in t) return springFromResponse(t.response, t.dampingFraction)
