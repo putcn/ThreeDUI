@@ -1,4 +1,4 @@
-import type { Style } from './style/schema'   // created in Task 4; until then declare `export type Style = Record<string, unknown>` in a stub file
+import type { Style } from './style/schema'
 import { GlassUIError } from './errors'
 
 export type NodeType = 'box' | 'text' | 'image' | 'glass' | 'scroll' | 'portal' | 'anchor'
