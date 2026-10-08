@@ -61,7 +61,7 @@ export function createGlass3DMaterial(o: Glass3DOptions) {
     const N = normalView
     const nb = normalize(modelViewMatrix.mul(vec4(0, 0, 1, 0)).xyz)
     const depth = positionLocal.z
-    const lod = u.frost.mul(6.0)
+    const lod = u.frost.mul(8.0)
 
     const sampleChannel = (iorScale: any) => {
       const eta = float(1).div(u.ior.mul(iorScale))
