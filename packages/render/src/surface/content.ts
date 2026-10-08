@@ -1,0 +1,61 @@
+import { Color, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, LinearSRGBColorSpace, OrthographicCamera, RenderTarget, RGBAFormat, Scene, UnsignedByteType, type Camera, type Object3D, type Texture } from 'three'
+import type { SurfaceDims } from '../units'
+
+/** RT pixels for a Surface projected to `projectedPx` CSS px: integer steps avoid per-frame jitter; never 0; capped. */
+export function contentRTSize(projectedPx: { width: number; height: number }, dpr: number, opts: { cap?: number; step?: number; scale?: number } = {}): { width: number; height: number } {
+  const { cap = 4096, step = 64, scale = 1 } = opts
+  const fit = (v: number) => { const px = v * dpr * scale; if (!(px > 0)) return 1; return Math.max(1, Math.min(cap, Math.ceil(px / step) * step)) }
+  return { width: fit(projectedPx.width), height: fit(projectedPx.height) }
+}
+
+/** The subset of `WebGPURenderer` the render passes call (so tests can pass a stub). */
+export interface RendererLike {
+  setRenderTarget(rt: RenderTarget | null): void
+  render(scene: Object3D, camera: Camera): unknown
+  setClearColor?(color: Color | number, alpha?: number): void
+  getClearColor?(target: Color): Color
+  getClearAlpha?(): number
+}
+
+/**
+ * Spec §5.6 step 2: the Surface's non-glass content, drawn orthographically in Surface-local units into a mipmapped RT.
+ * Premultiplied by construction (colour SrcAlpha/OneMinusSrcAlpha, alpha One/OneMinusSrcAlpha, over a transparent clear): composite it premultiplied.
+ */
+export class ContentPass {
+  readonly scene = new Scene()
+  readonly camera = new OrthographicCamera(-1, 1, 1, -1, -10, 10)
+  readonly target: RenderTarget
+  private prevColor = new Color()
+  constructor(opts: { type?: 'byte' | 'half' } = {}) {
+    this.target = new RenderTarget(1, 1, {
+      format: RGBAFormat, type: opts.type === 'half' ? HalfFloatType : UnsignedByteType,
+      generateMipmaps: true, minFilter: LinearMipmapLinearFilter, magFilter: LinearFilter, colorSpace: LinearSRGBColorSpace, depthBuffer: false,
+    })
+    this.camera.position.z = 5
+  }
+  get texture(): Texture { return this.target.texture }
+
+  resize(width: number, height: number): boolean {
+    if (this.target.width === width && this.target.height === height) return false
+    this.target.setSize(width, height)
+    return true
+  }
+
+  setView(s: SurfaceDims): void {
+    const w = s.width / s.ptPerUnit, h = s.height / s.ptPerUnit
+    this.camera.left = -w / 2; this.camera.right = w / 2; this.camera.top = h / 2; this.camera.bottom = -h / 2
+    this.camera.updateProjectionMatrix()
+  }
+
+  render(renderer: RendererLike, clear: { color: Color; alpha: number }): void {
+    const prevAlpha = renderer.getClearAlpha?.() ?? 1
+    renderer.getClearColor?.(this.prevColor)
+    renderer.setClearColor?.(clear.color, clear.alpha)
+    renderer.setRenderTarget(this.target)
+    renderer.render(this.scene, this.camera)
+    renderer.setRenderTarget(null)
+    renderer.setClearColor?.(this.prevColor, prevAlpha)
+  }
+
+  dispose(): void { this.target.dispose() }
+}
