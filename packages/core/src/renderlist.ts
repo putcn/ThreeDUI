@@ -7,25 +7,37 @@ import { absoluteRect } from './events/hit'
 import type { SurfaceModel } from './surface'
 
 // Render lists are plain data for the render package (spec §5.6 step 1). Rects are Surface pt; `z` is the node's
-// pre-order index over the visible tree (root 0); `elevation` is the node's own plus every ancestor's;
-// `scale` is the node's own effective `scale` (default 1), a render-time transform about the instance rect's centre
-// that layout and hit testing ignore (ancestors' scales are not folded in);
-// `clip` is the intersection of the rects of `overflow: hidden|scroll` and `scroll` ancestors, absent when none.
+// pre-order index over the visible tree (root 0); `elevation` and `scale` accumulate down the tree (see
+// InstanceTransform); `clip` is the intersection of the rects of `overflow: hidden|scroll` and `scroll` ancestors,
+// absent when none.
 
 /** A clip region: the intersected ancestor rects, rounded by the innermost clipping ancestor's (clamped) radius. */
 export interface ClipRect extends Rect { radius: number }
 
+/** Render-time placement every instance carries; layout and hit testing ignore both. */
+export interface InstanceTransform {
+  /** The node's own `elevation` plus every ancestor's. */
+  elevation: number
+  /**
+   * The product of the effective `scale` of every node from the Surface root down to this one (default 1), about the
+   * node's own rect centre (for text, the node's rect, not the content box). For nested scales the renderer should
+   * compose the transforms down the chain, each about its own node's centre, rather than scale each rect
+   * independently by this product: only composition keeps a child in place inside its scaled parent.
+   */
+  scale: number
+}
+
 export interface ResolvedGlass { thickness: number; fillet: number; filletBottom: number; profile: 'fillet' | 'lens'; scatter: number; lift: number; edgeGlow: number; ior: number; dispersion: number; roughness: number; tint: RGBA | null; absorption: number; glow: { color: RGBA; strength: number; split?: number } | null; cornerExponent: number; envIntensity: number; specularIntensity: number; innerGlow: number; adaptive: boolean; variant: 'regular' | 'clear' }
-export interface PanelInstance { node: Node; rect: Rect; radius: number; color: RGBA; border?: { width: number; color: RGBA }; clip?: ClipRect; z: number; elevation: number; scale: number; opacity: number }
-export interface GlassInstance { node: Node; rect: Rect; radius: number; z: number; elevation: number; scale: number; params: ResolvedGlass; clip?: ClipRect }
+export interface PanelInstance extends InstanceTransform { node: Node; rect: Rect; radius: number; color: RGBA; border?: { width: number; color: RGBA }; clip?: ClipRect; z: number; opacity: number }
+export interface GlassInstance extends InstanceTransform { node: Node; rect: Rect; radius: number; z: number; params: ResolvedGlass; clip?: ClipRect }
 /**
  * `rect` is the content box (the node's rect minus its padding). Typography comes from `resolveTextStyle`:
  * `lineHeight` and `letterSpacing` are pt; `maxLines` is present only when the style sets it.
  */
-export interface TextInstance { node: Node; rect: Rect; text: string; font: { family: string; size: number; weight: number }; color: RGBA; align: 'left' | 'center' | 'right'; lineHeight: number; letterSpacing: number; wrap: boolean; maxLines?: number; z: number; elevation: number; scale: number; clip?: ClipRect }
+export interface TextInstance extends InstanceTransform { node: Node; rect: Rect; text: string; font: { family: string; size: number; weight: number }; color: RGBA; align: 'left' | 'center' | 'right'; lineHeight: number; letterSpacing: number; wrap: boolean; maxLines?: number; z: number; clip?: ClipRect }
 /** Rides on its glass node: `rim` just above it (`z + 0.5`), `pool` just below it (`z - 0.25`), same elevation, scale and clip. */
-export interface DecorationInstance { node: Node; kind: 'rim' | 'pool'; rect: Rect; radius: number; color: RGBA; strength: number; z: number; elevation: number; scale: number; clip?: ClipRect }
-export interface ImageInstance { node: Node; rect: Rect; src: unknown; radius: number; z: number; elevation: number; scale: number; clip?: ClipRect }
+export interface DecorationInstance extends InstanceTransform { node: Node; kind: 'rim' | 'pool'; rect: Rect; radius: number; color: RGBA; strength: number; z: number; clip?: ClipRect }
+export interface ImageInstance extends InstanceTransform { node: Node; rect: Rect; src: unknown; radius: number; z: number; clip?: ClipRect }
 export interface RenderList { panels: PanelInstance[]; glass: GlassInstance[]; text: TextInstance[]; decorations: DecorationInstance[]; images: ImageInstance[] }
 
 /** `o` without its `undefined` entries, so optional fields stay absent under exactOptionalPropertyTypes. */
@@ -83,13 +95,13 @@ function resolveGlass(s: Style, rect: Rect, theme: Theme, scheme: ColorScheme): 
 export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: ColorScheme): RenderList {
   const rl: RenderList = { panels: [], glass: [], text: [], decorations: [], images: [] }
   let z = 0
-  const visit = (n: Node, clip: ClipRect | undefined, parentElevation: number, parentRadius: number, parentW: number, parentH: number): void => {
+  const visit = (n: Node, clip: ClipRect | undefined, parentElevation: number, parentScale: number, parentRadius: number, parentW: number, parentH: number): void => {
     const s = effectiveStyle(n)
     if (s.display === 'none') return
     const rect = absoluteRect(n)
     const myZ = z++
     const elevation = parentElevation + n.elevation
-    const scale = s.scale ?? 1
+    const scale = parentScale * (s.scale ?? 1)
     const resolved = resolveRadius(s.radius, theme, rect.width, rect.height, parentRadius, inset(n.layout, parentW, parentH))
     const radius = Math.max(0, Math.min(resolved, rect.width / 2, rect.height / 2))
     const clipped = defined({ clip })
@@ -116,8 +128,8 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
     }
     if (n.type === 'image') rl.images.push({ node: n, rect, src: n.props.src, radius, z: myZ, elevation, scale, ...clipped })
     const childClip = s.overflow === 'hidden' || s.overflow === 'scroll' || n.type === 'scroll' ? clipTo(clip, rect, radius) : clip
-    for (const c of n.children) visit(c, childClip, elevation, radius, rect.width, rect.height)
+    for (const c of n.children) visit(c, childClip, elevation, scale, radius, rect.width, rect.height)
   }
-  visit(surface.root, undefined, 0, surface.cornerRadius, surface.width, surface.height)
+  visit(surface.root, undefined, 0, 1, surface.cornerRadius, surface.width, surface.height)
   return rl
 }

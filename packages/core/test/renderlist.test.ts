@@ -194,6 +194,20 @@ describe('buildRenderList rules', () => {
     expect(s.root.dirty.layout).toBe(false)   // a render-time transform: no new layout
   })
 
+  it('multiplies scale down the tree, so a pressed button shrinks its label too', () => {
+    const label = box('text', 'label', { width: 50, height: 20 })
+    const btn = box('glass', 'btn', { width: 120, height: 40, pressed: { scale: 0.96 } }, label)
+    const inner = box('box', 'inner', { width: 20, height: 20, bg: 'fill', scale: 0.5 })
+    const outer = box('box', 'outer', { top: 50, width: 50, height: 50, bg: 'fill', scale: 0.5 }, inner)
+    const s = layout(surface(btn, outer))
+    btn.setState({ pressed: true })
+    const rl = buildRenderList(s, theme, 'light')
+    expect(rl.glass[0]!.scale).toBeCloseTo(0.96)
+    expect(rl.text[0]!.scale).toBeCloseTo(0.96)
+    expect(rl.decorations.map(d => d.scale)).toEqual([0.96, 0.96])
+    expect(rl.panels.map(p => [p.node.id, p.scale])).toEqual([['outer', 0.5], ['inner', 0.25]])
+  })
+
   it('leaves clip absent outside clipping ancestors', () => {
     const rl = buildRenderList(layout(surface(box('box', 'p', { bg: 'fill', width: 10, height: 10 }))), theme, 'light')
     expect(rl.panels[0]).not.toHaveProperty('clip')
