@@ -103,6 +103,16 @@ describe('AnimationRuntime', () => {
     expect(s.root.dirty.paint).toBe(true)
   })
 
+  it('a retarget follows the transition now in effect (release uses the base spring, not the pressed one)', () => {
+    const { s, btn } = button()
+    btn.setStyle({ transition: { scale: { stiffness: 1, damping: 2 } }, pressed: { scale: 0.96, transition: { scale: 'snappy' } } })
+    const rt = new AnimationRuntime(theme, 'light')
+    rt.tick(s.root, 1 / 60)
+    btn.setState({ pressed: true }); for (let i = 0; i < 3; i++) rt.tick(s.root, 1 / 60)   // snappy press-in, ~0.987
+    btn.setState({ pressed: false })
+    for (let i = 0; i < 6; i++) rt.tick(s.root, 1 / 60)
+    expect(btn.visual!.scale!).toBeLessThan(0.975)   // the soft base spring barely pulls back; staying snappy would be past 0.99
+  })
   it('clamps an overshooting opacity spring to [0, 1]', () => {
     const { s, btn } = button()
     btn.setStyle({ transition: { opacity: 'bouncy' } })
