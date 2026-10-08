@@ -18,8 +18,8 @@ export interface UIEvent {
 }
 export type Listener = (e: UIEvent) => void
 
-/** Like the DOM's, these reach only their target; the tracker dispatches them to every node entered or left. */
-const NON_BUBBLING: ReadonlySet<UIEventType> = new Set(['pointerenter', 'pointerleave'])
+/** Like the DOM's, these reach only their target (the tracker sends enter/leave to every node entered or left). */
+const NON_BUBBLING: ReadonlySet<UIEventType> = new Set(['pointerenter', 'pointerleave', 'focus', 'blur'])
 
 export class EventDispatcher {
   private readonly listeners = new WeakMap<Node, Map<UIEventType, Set<Listener>>>()

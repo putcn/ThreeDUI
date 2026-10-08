@@ -177,6 +177,14 @@ describe('EventDispatcher semantics', () => {
     d.dispatch(s.over, 'pointerup')
     expect(log).toEqual(['btn', 'panel', 'root', 'root'])
   })
+  it('does not bubble focus or blur', () => {
+    const s = scene(); const d = new EventDispatcher(); const log: string[] = []
+    for (const t of ['focus', 'blur'] as const) {
+      d.on(s.btn, t, () => log.push(`btn:${t}`)); d.on(s.panel, t, () => log.push(`panel:${t}`))
+    }
+    d.dispatch(s.btn, 'focus'); d.dispatch(s.btn, 'blur')
+    expect(log).toEqual(['btn:focus', 'btn:blur'])
+  })
 })
 
 describe('PointerTracker semantics', () => {
