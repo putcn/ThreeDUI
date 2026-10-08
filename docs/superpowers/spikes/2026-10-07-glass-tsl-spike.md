@@ -52,3 +52,12 @@
 - 灯光预算（无 tone mapping）：hemi 0.65 + key 1.8 + env 0.45，墙面基色 ×0.95。
 
 ## 性能（1565×784@2x，WebGPU）：51 draws、52k tris、70 fps（含 VSM 阴影 pass 与两次全屏 mip 拷贝）。
+
+---
+
+# Spike ②d：按参考图纠正形状、反射与阴影
+
+- **剖面改为 `fillet`**：竖直侧壁 + 顶面小半径圆角 + 平顶（参考图的"直切 + 圆润"），侧壁用独立顶点保持棱线清晰。枕形/透镜剖面只保留给 ring 一类元素。spec §5.2 的默认剖面应为 fillet，`bezel` 改名/并入 `fillet`。
+- **面板反射组件**：TSL `reflector({ resolutionScale: 0.5, generateMipmaps: true })`，`target` 挂在面板网格上（局部 +Z = 镜面法线），`.level(2.5)` 取模糊反射，按 `alpha × 强度` 混入透射项（不乘 alpha 会把镜面的空背景混成灰）。代价：每帧多一次全场景镜像渲染（149 draws / 53 fps，vs 不开 85 draws / 90 fps）；正式实现里面板空间的内容层 RT 可以直接拿来做反射，不必再渲染一遍场景。
+- **不再往墙上投影**：面板 `castShadow=false`，墙不 `receiveShadow`。组件只投到面板上。
+- **平面元素**：checkbox 方块、滑块钮、小圆点、Modal 灰段、卡片与环内的白方块都是 Canvas2D 平面贴图，挂在对应 slab 的顶面上。结论：不是所有东西都该是几何，"面板上的小装饰"用 2D 更干净，spec §5.5 要加"平面装饰层"。

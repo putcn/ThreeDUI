@@ -1,7 +1,8 @@
 // SPIKE: real-3D liquid glass material.
 // Built on MeshPhysicalNodeMaterial: lights, env reflections, Fresnel, iridescence
 // and (coloured, transmitted) shadows come from the engine. Ours is only the
-// transmitted term: the refracted backdrop sampled through the real thickness.
+// transmitted term: the refracted backdrop sampled through the real thickness,
+// optionally mixed with a planar reflection of what sits on top (for the panel).
 
 import { Color } from 'three'
 import { MeshPhysicalNodeMaterial } from 'three/webgpu'
@@ -18,13 +19,15 @@ export interface Glass3DOptions {
   roughness?: number         // frost (blur of what's behind)
   scatter?: number           // 0..1 how much of the frost becomes lit white scattering
   diffuse?: number           // brightness of the scattering term
-  lift?: number              // whitening of the transmitted term (sky reflection in the frosted layer)
+  lift?: number              // whitening of the transmitted term
   tint?: Color
   absorption?: number
   envIntensity?: number
   iridescence?: number
+  specularRoughness?: number // highlight sharpness of the top surface
   shadowOpacity?: number     // alpha of the transmitted shadow this glass casts
   backdrop?: ReturnType<typeof viewportMipTexture>
+  reflection?: { node: any; strength: number }   // planar reflection node (TSL reflector)
 }
 
 export function createGlass3DMaterial(o: Glass3DOptions) {
@@ -45,7 +48,7 @@ export function createGlass3DMaterial(o: Glass3DOptions) {
   const m = new MeshPhysicalNodeMaterial()
   m.transparent = true
   m.depthWrite = true
-  m.roughness = 0.07
+  m.roughness = o.specularRoughness ?? 0.07
   m.metalness = 0
   m.envMapIntensity = o.envIntensity ?? 1.0
   m.specularIntensity = 1
@@ -82,6 +85,7 @@ export function createGlass3DMaterial(o: Glass3DOptions) {
     const sigma = float(1).sub(u.tint).mul(u.absorption)
     c = c.mul(exp(sigma.mul(g.t.div(u.thickness)).negate()))
     c = mix(c, vec3(1), u.frost.mul(0.08).add(o.lift ?? 0))
+    if (o.reflection) { const R = o.reflection.node; c = mix(c, R.rgb, R.a.mul(o.reflection.strength)) }
     return c
   })()
   m.backdropAlphaNode = float(1).sub(u.frost.mul(u.scatter))

@@ -7,12 +7,12 @@ import {
   HemisphereLight, DirectionalLight, Raycaster, Vector2, VSMShadowMap, Vector3,
 } from 'three'
 import { WebGPURenderer, MeshStandardNodeMaterial, PMREMGenerator } from 'three/webgpu'
-import { Fn, uv, vec3, mix, smoothstep, length, vec2, float, viewportMipTexture } from 'three/tsl'
+import { Fn, uv, vec3, mix, smoothstep, length, vec2, float, viewportMipTexture, reflector } from 'three/tsl'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { createSlabGeometry } from './slab'
 import { createGlass3DMaterial } from './glass'
 import { createStudioScene } from './studio'
-import { label, icon, type IconName } from './text'
+import { label, icon, roundedRect, circle, type IconName } from './text'
 
 const params = new URLSearchParams(location.search)
 const forceWebGL = params.has('webgl')
@@ -38,7 +38,7 @@ controls.enableDamping = true
   scene.environmentIntensity = 0.45
 }
 
-// ---------- backdrop: soft photographic-looking wall ----------
+// ---------- backdrop: soft wall, no shadows on it ----------
 let key!: DirectionalLight
 {
   const wallMat = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 })
@@ -49,17 +49,16 @@ let key!: DirectionalLight
       const d = length(q.sub(vec2(cx, cy)))
       c = mix(c, vec3(...col), float(1).sub(smoothstep(0, rad, d)).mul(a))
     }
-    blob(0.18, 0.90, 0.45, [0.98, 0.95, 0.90])        // warm highlight top-left
-    blob(0.86, 0.80, 0.40, [0.72, 0.88, 0.92])        // cool top-right
-    blob(0.78, 0.12, 0.45, [0.96, 0.78, 0.86])        // pink bottom-right
-    blob(0.18, 0.18, 0.42, [0.42, 0.40, 0.62])        // deep violet bottom-left
-    blob(0.55, 0.55, 0.30, [0.84, 0.80, 0.95], 0.5)   // lavender centre
+    blob(0.18, 0.90, 0.45, [0.98, 0.95, 0.90])
+    blob(0.86, 0.80, 0.40, [0.72, 0.88, 0.92])
+    blob(0.78, 0.12, 0.45, [0.96, 0.78, 0.86])
+    blob(0.18, 0.18, 0.42, [0.42, 0.40, 0.62])
+    blob(0.55, 0.55, 0.30, [0.84, 0.80, 0.95], 0.5)
     const vign = float(1).sub(smoothstep(0.4, 1.0, length(q.sub(vec2(0.45, 0.62))).mul(0.9)))
     return c.mul(0.95).mul(float(0.8).add(vign.mul(0.25)))
   })()
   const wall = new Mesh(new PlaneGeometry(16, 11), wallMat)
   wall.position.z = -2.5
-  wall.receiveShadow = true
   scene.add(wall)
 
   scene.add(new HemisphereLight(0xffffff, 0x8899bb, 0.65))
@@ -70,10 +69,10 @@ let key!: DirectionalLight
   key.shadow.camera.left = -4; key.shadow.camera.right = 4
   key.shadow.camera.top = 4; key.shadow.camera.bottom = -4
   key.shadow.camera.near = 0.5; key.shadow.camera.far = 14
-  key.shadow.radius = 9
+  key.shadow.radius = 7
   key.shadow.blurSamples = 16
   key.shadow.bias = -0.0005
-  key.shadow.intensity = 0.6
+  key.shadow.intensity = 0.55
   scene.add(key)
   scene.add(key.target)
 }
@@ -90,19 +89,21 @@ const panelBackdrop = viewportMipTexture()   // sees the world
 const buttonBackdrop = viewportMipTexture()  // sees the panel too
 
 type SlabOpts = {
-  radius?: number; bezel?: number; thickness?: number; roughness?: number; scatter?: number; diffuse?: number; lift?: number; env?: number
+  radius?: number; fillet?: number; bezel?: number; thickness?: number; profile?: 'fillet' | 'squircle' | 'circle'
+  roughness?: number; scatter?: number; diffuse?: number; lift?: number; env?: number; specularRoughness?: number
   tint?: Color; absorption?: number; dispersion?: number; iridescence?: number; backdrop?: ReturnType<typeof viewportMipTexture>
-  cornerExponent?: number; castShadow?: boolean; profile?: 'squircle' | 'circle'; shadowOpacity?: number; interactive?: boolean
+  cornerExponent?: number; castShadow?: boolean; shadowOpacity?: number; interactive?: boolean; reflection?: { node: any; strength: number }
 }
 function slab(parent: Object3D, w: number, h: number, x: number, y: number, z: number, o: SlabOpts = {}) {
   const radius = o.radius ?? h / 2
   const cornerExponent = o.cornerExponent ?? (radius >= Math.min(w, h) / 2 - 1e-6 ? 2 : 4.5)
-  const thickness = o.thickness ?? Math.min(w, h) * 0.09
-  const bezel = o.bezel ?? Math.min(w, h) * 0.32
-  const geo = createSlabGeometry({ width: w, height: h, radius, bezel, thickness, cornerExponent, profile: o.profile ?? 'circle' })
+  const thickness = o.thickness ?? Math.min(w, h) * 0.22
+  const fillet = o.fillet ?? thickness * 0.45
+  const geo = createSlabGeometry({ width: w, height: h, radius, thickness, fillet, bezel: o.bezel, cornerExponent, profile: o.profile ?? 'fillet' })
   const { material, uniforms } = createGlass3DMaterial({
-    thickness, roughness: o.roughness ?? 0.3, scatter: o.scatter, diffuse: o.diffuse, lift: o.lift, envIntensity: o.env, tint: o.tint,
-    absorption: o.absorption ?? 0, dispersion: o.dispersion ?? 0.3, iridescence: o.iridescence, backdrop: o.backdrop ?? buttonBackdrop, shadowOpacity: o.shadowOpacity,
+    thickness, roughness: o.roughness ?? 0.3, scatter: o.scatter, diffuse: o.diffuse, lift: o.lift, envIntensity: o.env, specularRoughness: o.specularRoughness,
+    tint: o.tint, absorption: o.absorption ?? 0, dispersion: o.dispersion ?? 0.3, iridescence: o.iridescence,
+    backdrop: o.backdrop ?? buttonBackdrop, shadowOpacity: o.shadowOpacity, reflection: o.reflection,
   })
   const mesh = new Mesh(geo, material)
   mesh.position.set(x, y, z)
@@ -119,43 +120,46 @@ const U = (px: number) => px / 244
 const X = (px: number) => (px - 512) / 244
 const Y = (py: number) => (642 - py) / 244
 
-// ---------- panel ----------
+// ---------- panel: frosted, slightly glossy, reflects what sits on it ----------
+const refl = reflector({ resolutionScale: 0.5, generateMipmaps: true, bounces: false })
 const PANEL = slab(panel, U(885), U(1045), 0, 0, 0, {
-  radius: U(48), bezel: U(70), thickness: 0.10, profile: 'squircle',
-  roughness: 1.0, scatter: 0.5, diffuse: 1.0, lift: 0.0, backdrop: panelBackdrop, shadowOpacity: 0.45, interactive: false,
+  radius: U(48), thickness: 0.10, fillet: 0.035, profile: 'fillet',
+  roughness: 1.0, scatter: 0.5, diffuse: 1.0, lift: 0.0, specularRoughness: 0.35, env: 0.6,
+  backdrop: panelBackdrop, castShadow: false, interactive: false,
+  reflection: { node: refl.level(2.5), strength: 0.22 },
 })
-const TOP = 0.10          // panel top surface
-const LIFT = 0.05         // gap between panel and controls
+refl.target.position.z = PANEL.thickness          // mirror plane = panel top surface (+Z)
+PANEL.mesh.add(refl.target)
+const TOP = 0.10
+const LIFT = 0.04
 
-// style presets (all measured from the reference)
-const WHITE: SlabOpts = { roughness: 0.4, scatter: 0.75, diffuse: 1.05, lift: 0.12, env: 1.6, iridescence: 0.3, dispersion: 0.5 }
-const BLUE = new Color(0x6b63f5), CYAN = new Color(0x74e2dc), LAVENDER = new Color(0xc2b3f3), ORANGE = new Color(0xf2a340)
+// style presets (measured from the reference)
+const WHITE: SlabOpts = { roughness: 0.4, scatter: 0.75, diffuse: 1.05, lift: 0.12, env: 1.4, iridescence: 0.3, dispersion: 0.5 }
+const BLUE = new Color(0x6b63f5), CYAN = new Color(0x74e2dc), LAVENDER = new Color(0xc2b3f3), ORANGE = '#f2a340'
 const TINTED = (tint: Color, absorption: number): SlabOpts => ({ tint, absorption, roughness: 0.35, scatter: 0.4, diffuse: 0.7, env: 1.3, iridescence: 0 })
 
 function pill(w: number, h: number, cx: number, cy: number, o: SlabOpts = {}, z = TOP + LIFT) {
   return slab(panel, U(w), U(h), X(cx), Y(cy), z, { ...WHITE, ...o })
 }
-function put(parent: Mesh, m: Mesh, dx: number, dy: number, thickness: number) {
-  m.position.set(U(dx), U(-dy), thickness + 0.004)
+/** place a flat quad on a slab's top surface; dx/dy in reference px relative to the slab centre */
+function put(parent: Mesh, m: Mesh, dx: number, dy: number, thickness: number, lift = 0.004) {
+  m.position.set(U(dx), U(-dy), thickness + lift)
   parent.add(m)
   return m
 }
-/** small white rounded tile (checkbox box / card check) */
-function tile(parent: Mesh, size: number, dx: number, dy: number, parentThickness: number, check: IconName | null, checkColor: string) {
-  const t = slab(parent, U(size), U(size), U(dx), U(-dy), parentThickness + 0.02, { ...WHITE, radius: U(size * 0.24), profile: 'squircle', bezel: U(size * 0.3), thickness: U(size * 0.22), scatter: 0.9, diffuse: 1.1, lift: 0.3, iridescence: 0, interactive: false })
-  if (check) put(t.mesh, icon(check, U(size * 0.72), checkColor, 0.13), 0, 0, t.thickness)
-  return t
+/** flat checkbox box: white rounded square with a soft shadow and a check */
+function checkbox(parent: Mesh, size: number, dx: number, dy: number, thickness: number, checkColor: string) {
+  put(parent, roundedRect(U(size), U(size), U(size * 0.22), '#ffffff', { shadow: 0.012, edge: 'rgba(0,0,0,0.06)' }), dx, dy, thickness)
+  put(parent, icon('check', U(size * 0.72), checkColor, 0.13), dx, dy, thickness, 0.006)
 }
 
 // header
 put(PANEL.mesh, label('Liquid Glass', { size: U(46), weight: 700, align: 'left' }), 122 - 512, 190 - 642, TOP)
 put(PANEL.mesh, label('Search projects…', { size: U(24), weight: 500, color: '#6a6a78', align: 'left' }), 122 - 512, 237 - 642, TOP)
-// two round icon buttons top-right
 for (const [cx, name] of [[806, 'arrow-left'], [878, 'plus']] as [number, IconName][]) {
   const b = pill(52, 52, cx, 200, { scatter: 0.5 })
   put(b.mesh, icon(name, U(26), '#4a4a58'), 0, 0, b.thickness)
 }
-
 // row 1
 {
   const p = pill(214, 80, 229, 350, TINTED(BLUE, 3.2))
@@ -164,14 +168,13 @@ for (const [cx, name] of [[806, 'arrow-left'], [878, 'plus']] as [number, IconNa
   put(s.mesh, label('Secondary', { size: U(24), color: '#1c2a2a' }), 0, 0, s.thickness)
   const q = pill(255, 86, 778, 356)
   put(q.mesh, label('Search projects…', { size: U(22), weight: 500, color: '#3a3a48' }), 0, 0, q.thickness)
-  const dot = slab(q.mesh, U(14), U(14), U(870 - 778), U(-(328 - 356)), q.thickness + 0.01, { ...TINTED(CYAN, 2.5), scatter: 0.8, interactive: false, castShadow: false })
-  void dot
+  put(q.mesh, circle(U(14), '#5fd6d0'), 870 - 778, 328 - 356, q.thickness)
 }
 // row 2
 {
   const c = pill(476, 78, 360, 508)
   put(c.mesh, label('Create workspace…', { size: U(24), color: '#1c1c22' }), -60, 0, c.thickness)
-  const go = slab(c.mesh, U(64), U(64), U(552 - 360), 0, c.thickness + 0.01, { ...TINTED(BLUE, 3.2), interactive: false })
+  const go = slab(c.mesh, U(64), U(64), U(552 - 360), 0, c.thickness + 0.005, { ...TINTED(BLUE, 3.2), thickness: 0.04, interactive: false })
   put(go.mesh, icon('search', U(30), '#ffffff', 0.11), 0, 0, go.thickness)
   const sel = pill(255, 78, 778, 513)
   put(sel.mesh, label('Select', { size: U(24), color: '#1c1c22' }), -55, 0, sel.thickness)
@@ -180,50 +183,48 @@ for (const [cx, name] of [[806, 'arrow-left'], [878, 'plus']] as [number, IconNa
 // row 3
 {
   const f = pill(220, 76, 232, 650)
-  tile(f.mesh, 40, 160 - 232, 0, f.thickness, 'check', '#6b63f5')
+  checkbox(f.mesh, 40, 160 - 232, 0, f.thickness, '#6b63f5')
   put(f.mesh, label('field', { size: U(22), weight: 500, color: '#3a3a48' }), 222 - 232, 0, f.thickness)
   const t = pill(210, 76, 493, 650)
-  tile(t.mesh, 40, 428 - 493, 0, t.thickness, 'check', '#1c1c22')
+  checkbox(t.mesh, 40, 428 - 493, 0, t.thickness, '#1c1c22')
   put(t.mesh, label('text', { size: U(22), weight: 500, color: '#3a3a48' }), 530 - 493, 0, t.thickness)
   const modal = pill(255, 78, 778, 690)
   put(modal.mesh, label('Modal', { size: U(24), color: '#1c1c22' }), 720 - 778, 0, modal.thickness)
-  // darker right segment of the split control
-  const seg = slab(modal.mesh, U(105), U(78), U(853 - 778), 0, modal.thickness + 0.006, { ...WHITE, tint: new Color(0xc6cad4), absorption: 1.0, scatter: 0.9, diffuse: 0.85, lift: 0, radius: U(39), interactive: false, castShadow: false, thickness: 0.012, bezel: U(20) })
-  put(seg.mesh, icon('menu', U(30), '#3a3a48'), 0, 0, seg.thickness)
+  put(modal.mesh, roundedRect(U(105), U(78), U(39), '#c9ced8', { alpha: 0.9 }), 853 - 778, 0, modal.thickness, 0.003)
+  put(modal.mesh, icon('menu', U(30), '#3a3a48'), 858 - 778, 0, modal.thickness, 0.006)
 }
 // row 4
 {
   const sw = pill(220, 76, 232, 780)
   put(sw.mesh, icon('arrow-right', U(30), '#1c1c22'), 160 - 232, 0, sw.thickness)
   put(sw.mesh, label('switch', { size: U(22), weight: 500, color: '#3a3a48' }), 225 - 232, 0, sw.thickness)
-  const ghost = slab(sw.mesh, U(36), U(36), U(305 - 232), 0, sw.thickness + 0.004, { ...WHITE, scatter: 0.3, lift: 0.05, thickness: 0.01, bezel: U(14), interactive: false, castShadow: false })
-  void ghost
+  put(sw.mesh, circle(U(36), '#ffffff', { alpha: 0.55, edge: 'rgba(0,0,0,0.08)' }), 305 - 232, 0, sw.thickness)
   const inv = pill(210, 76, 493, 780)
   put(inv.mesh, label('Invite member', { size: U(23), color: '#1c1c22' }), 0, 0, inv.thickness)
 }
 // card
 {
-  const card = pill(250, 300, 780, 950, { ...TINTED(LAVENDER, 1.3), radius: U(34), profile: 'squircle', bezel: U(40), thickness: 0.07, scatter: 0.6, diffuse: 0.9 })
+  const card = pill(250, 300, 780, 950, { ...TINTED(LAVENDER, 1.3), radius: U(34), thickness: 0.06, fillet: 0.025, scatter: 0.6, diffuse: 0.9 })
   put(card.mesh, label('Plan details', { size: U(16), weight: 600, color: '#5a5470', align: 'left' }), 690 - 780, 835 - 950, card.thickness)
-  tile(card.mesh, 75, 0, 940 - 950, card.thickness, 'check', '#6b63f5')
-  const up = slab(card.mesh, U(200), U(52), 0, U(-(1057 - 950)), card.thickness + 0.02, { ...WHITE, scatter: 0.9, diffuse: 1.1, lift: 0.25, iridescence: 0 })
+  put(card.mesh, roundedRect(U(75), U(75), U(16), '#ffffff', { shadow: 0.02, edge: 'rgba(0,0,0,0.05)' }), 0, 940 - 950, card.thickness)
+  put(card.mesh, icon('check', U(50), '#6b63f5', 0.13), 0, 940 - 950, card.thickness, 0.006)
+  const up = slab(card.mesh, U(200), U(52), 0, U(-(1057 - 950)), card.thickness + 0.005, { ...WHITE, thickness: 0.03, scatter: 0.9, diffuse: 1.1, lift: 0.25, iridescence: 0 })
   put(up.mesh, label('Upgrade plan', { size: U(22), color: '#1c1c22' }), 0, 0, up.thickness)
 }
-// ring + tile
+// ring (3D glass torus) + flat tile inside
 {
-  const { material } = createGlass3DMaterial({ thickness: U(36), roughness: 0.05, scatter: 0.1, lift: 0.0, dispersion: 1, iridescence: 1.0, envIntensity: 2.2, tint: new Color(0xd8c8ff), absorption: 0.6, backdrop: buttonBackdrop })
+  const { material } = createGlass3DMaterial({ thickness: U(36), roughness: 0.05, scatter: 0.1, dispersion: 1, iridescence: 1.0, envIntensity: 2.2, tint: new Color(0xd8c8ff), absorption: 0.6, backdrop: buttonBackdrop })
   const ring = new Mesh(new TorusGeometry(U(96), U(18), 24, 128), material)
   ring.position.set(X(230), Y(985), TOP + LIFT + U(18))
   ring.castShadow = true; ring.receiveShadow = true
   panel.add(ring)
-  const inner = slab(panel, U(70), U(70), X(230), Y(985), TOP + LIFT, { ...WHITE, radius: U(16), profile: 'squircle', bezel: U(22), thickness: U(16), scatter: 0.9, diffuse: 1.1, lift: 0.3, iridescence: 0 })
-  put(inner.mesh, icon('check', U(44), '#1c1c22', 0.13), 0, 0, inner.thickness)
+  put(PANEL.mesh, roundedRect(U(70), U(70), U(16), '#ffffff', { shadow: 0.02, edge: 'rgba(0,0,0,0.05)' }), 230 - 512, 985 - 642, TOP)
+  put(PANEL.mesh, icon('check', U(44), '#1c1c22', 0.13), 230 - 512, 985 - 642, TOP, 0.006)
 }
-// toggle + output
+// toggle (3D track, flat knob) + output
 {
   const tg = pill(210, 70, 490, 920, TINTED(BLUE, 3.0))
-  const knob = slab(tg.mesh, U(62), U(62), U(497 - 490), 0, tg.thickness + 0.005, { ...TINTED(ORANGE, 2.6), scatter: 0.6, interactive: false, castShadow: true })
-  void knob
+  put(tg.mesh, circle(U(60), ORANGE, { shadow: 0.015 }), 497 - 490, 0, tg.thickness)
   const out = pill(210, 70, 490, 1058)
   put(out.mesh, label('Output', { size: U(22), weight: 500, color: '#3a3a48' }), 455 - 490, 0, out.thickness)
   put(out.mesh, icon('x', U(28), '#3a3a48'), 562 - 490, 0, out.thickness)
@@ -282,4 +283,4 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix()
   renderer.setSize(innerWidth, innerHeight)
 })
-;(window as any).__dbg = { scene, key }
+;(window as any).__dbg = { scene, key, refl }

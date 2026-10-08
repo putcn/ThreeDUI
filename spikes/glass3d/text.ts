@@ -1,9 +1,10 @@
-// SPIKE: temporary Canvas2D text & icon → texture quads (real text engine comes in Phase 1).
+// SPIKE: temporary Canvas2D text, icons and flat shapes → texture quads
+// (the real text engine and panel renderer come in Phase 1/2).
 
 import { CanvasTexture, SRGBColorSpace, LinearFilter, Mesh, PlaneGeometry } from 'three'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
 
-const PX_PER_UNIT = 512
+export const PX_PER_UNIT = 512
 const FONT = '-apple-system, "SF Pro Text", "SF Pro Display", "PingFang SC", system-ui, sans-serif'
 
 function quad(cv: HTMLCanvasElement) {
@@ -61,4 +62,33 @@ export function icon(name: IconName, size: number, color = '#1c1c22', stroke = 0
     case 'x': line([[0.3, 0.3], [0.7, 0.7]]); line([[0.7, 0.3], [0.3, 0.7]]); break
   }
   return quad(cv)
+}
+
+/** flat rounded rectangle (units), optional soft drop shadow and 1px highlight edge */
+export function roundedRect(w: number, h: number, r: number, fill: string, opts: { shadow?: number; edge?: string; alpha?: number } = {}) {
+  const pad = (opts.shadow ?? 0) * 3
+  const W = Math.ceil((w + pad * 2) * PX_PER_UNIT), H = Math.ceil((h + pad * 2) * PX_PER_UNIT)
+  const cv = document.createElement('canvas')
+  cv.width = W; cv.height = H
+  const ctx = cv.getContext('2d')!
+  const x = pad * PX_PER_UNIT, y = pad * PX_PER_UNIT, ww = w * PX_PER_UNIT, hh = h * PX_PER_UNIT, rr = Math.min(r * PX_PER_UNIT, ww / 2, hh / 2)
+  if (opts.shadow) {
+    ctx.shadowColor = 'rgba(30,30,60,0.22)'
+    ctx.shadowBlur = opts.shadow * PX_PER_UNIT * 2
+    ctx.shadowOffsetY = opts.shadow * PX_PER_UNIT * 0.8
+  }
+  ctx.globalAlpha = opts.alpha ?? 1
+  ctx.fillStyle = fill
+  ctx.beginPath(); ctx.roundRect(x, y, ww, hh, rr); ctx.fill()
+  ctx.shadowColor = 'transparent'
+  if (opts.edge) {
+    ctx.strokeStyle = opts.edge
+    ctx.lineWidth = 2
+    ctx.beginPath(); ctx.roundRect(x + 1, y + 1, ww - 2, hh - 2, rr); ctx.stroke()
+  }
+  return quad(cv)
+}
+
+export function circle(d: number, fill: string, opts: { shadow?: number; edge?: string; alpha?: number } = {}) {
+  return roundedRect(d, d, d / 2, fill, opts)
 }
