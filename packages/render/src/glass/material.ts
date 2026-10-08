@@ -59,6 +59,11 @@ function blackTexture(): DataTexture {
  * (`MAX_VARYING_VECTORS`). The vertex stage packs what the fragment needs into 8 vec4 varyings (+ the slab normal);
  * the position-dependent ones (depth, slab uv, clip coordinates) are affine in the slab-local position, so their
  * interpolation is exact.
+ *
+ * Units: the refraction depth is measured in the slab's own frame (slab-local z, the height above its back face, in
+ * the units of its thickness), so a tilted, scaled or elevated slab refracts as it would flat; the path inside is
+ * converted to view units by the length of the slab's z axis in view space (instance z scale × model-view scale: a
+ * screen-layer Surface is scaled by units per px).
  */
 export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   if (o.backdrop === 'panel' && !o.content) throw new Error('[render] createGlassMaterial: backdrop "panel" needs a content texture')
@@ -69,7 +74,8 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
 
   // ── vertex stage: instance attributes (by name, see slabVertex) → packed varyings ──────────────────────────────
   const A = (name: (typeof GLASS_ATTRS)[number]) => attribute(name, 'vec4')
-  const iRect = A('iRect'), iShape = A('iShape'), iCorner = A('iCorner'), iMat2 = A('iMat2'), iOptics = A('iOptics')
+  const iRect = A('iRect'), iShape = A('iShape'), iCorner = A('iCorner'), iOptics = A('iOptics')
+  const iMat0 = A('iMat0'), iMat1 = A('iMat1'), iMat2 = A('iMat2')
   const iTint = A('iTint'), iGlow = A('iGlow'), iGlow2 = A('iGlow2'), iTouch = A('iTouch')
   const iClipRect = A('iClipRect'), iClipInv = A('iClipInv'), iClipT = A('iClipT')
   // rounded-rect clip: the vertex's surface pt (origin top-left, y down) through the clip's inverse transform, taken
@@ -78,18 +84,21 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const clipPt = vec2(iClipInv.x.mul(pt.x).add(iClipInv.z.mul(pt.y)).add(iClipT.x), iClipInv.y.mul(pt.x).add(iClipInv.w.mul(pt.y)).add(iClipT.y))
   const half = iClipRect.zw.mul(0.5)
   const clipRadius = min(iClipT.z, min(half.x, half.y))
-  // zBack = iMat2.w: the instance's z translation, i.e. the slab's back height above the content plane (local z = 0)
-  const vGeom = varying(vec4(v.local.z.sub(iMat2.w), iShape.y, v.slabLocal.x.div(iRect.z).add(0.5), v.slabLocal.y.div(iRect.w).add(0.5)), 'vGlassGeom')
+  // view units per slab unit: the slab's z axis (the instance matrix's third column) mapped to view space
+  const toView = length(modelViewMatrix.mul(vec4(iMat0.z, iMat1.z, iMat2.z, 0)).xyz)
+  // depth = slab-local z: the height above the slab's own back face, in slab units (as iShape.y)
+  const vGeom = varying(vec4(v.slabLocal.z, iShape.y, v.slabLocal.x.div(iRect.z).add(0.5), v.slabLocal.y.div(iRect.w).add(0.5)), 'vGlassGeom')
   const vOptics = varying(iOptics, 'vGlassOptics')
   const vTint = varying(iTint, 'vGlassTint')
   const vGlow = varying(iGlow, 'vGlassGlow')
   const vGlow2 = varying(vec4(iGlow2.xy, iCorner.zw), 'vGlassGlow2')
   const vTouch = varying(iTouch, 'vGlassTouch')
   const vClip = varying(vec4(clipPt.sub(iClipRect.xy.add(half)), half.sub(clipRadius)), 'vGlassClip')
-  const vMisc = varying(vec4(iGlow2.zw, select(iClipRect.z.greaterThan(0), max(clipRadius, 0), float(-1)), 0), 'vGlassMisc')
+  // writeClip packs width −1 for "no clip"; a clip collapsed to width 0 still clips everything
+  const vMisc = varying(vec4(iGlow2.zw, select(iClipRect.z.greaterThanEqual(0), max(clipRadius, 0), float(-1)), toView), 'vGlassMisc')
 
   // ── fragment stage: unpack ───────────────────────────────────────────────────────────────────────────────────
-  const depth = max(vGeom.x, 0)                                          // height of this fragment above the slab back
+  const depth = max(vGeom.x, 0)                                          // height above the slab back, slab units
   const thickness = vGeom.y, slabUV = vGeom.zw                           // slab planar uv: 0..1 across the rect
   const ior = vOptics.x, dispersion = vOptics.y, roughness = vOptics.z, scatter = vOptics.w
   const tint = vTint.xyz, absorption = vTint.w                           // linear
@@ -97,6 +106,7 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const split = vGlow2.x, soft = vGlow2.y, lift = vGlow2.z, edgeGlow = vGlow2.w
   const touch = vTouch.xy, press = vTouch.z, reflection = vTouch.w
   const opacity = vMisc.x, lumaIndex = vMisc.y, clipR = vMisc.z          // clipR < 0: no clip
+  const slabToView = vMisc.w                                             // view units per slab unit
 
   const black = o.luma ? null : blackTexture()
   const contentTex = o.backdrop === 'panel' && o.content ? texture(o.content) : null   // non-null exactly for 'panel'
@@ -125,7 +135,8 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
 
   const lod = roughness.mul(8)
   const V = positionViewDirection, N = normalView
-  const fresnel = pow(float(1).sub(clamp(dot(N, V), 0, 1)), 2.5)
+  // floored base: WGSL pow is exp2(y·log2 x), undefined at x = 0 (N·V = 1)
+  const fresnel = pow(max(float(1).sub(clamp(dot(N, V), 0, 1)), 1e-6), 2.5)
 
   // the content plane (mesh-local z = 0) in view space: origin, in-plane axes, normal
   const origin = modelViewMatrix.mul(vec4(0, 0, 0, 1)).xyz
@@ -137,11 +148,11 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     return vec2(dot(d, ex).div(dot(ex, ex)), dot(d, ey).div(dot(ey, ey))).div(size).add(0.5)
   }
 
-  /** One colour channel's refraction: the backdrop colour along the refracted ray and the path length inside. */
+  /** One colour channel's refraction: the backdrop colour along the refracted ray and the path length inside (slab units). */
   const channel = (iorScale: Node<'float'>) => {
     const R = refract(V.negate(), N, float(1).div(ior.mul(iorScale)))
     const t1 = min(depth.div(max(dot(R.negate(), nb), 0.15)), thickness.mul(4))
-    const inside = positionView.add(R.mul(t1))                            // where the ray leaves the slab back
+    const inside = positionView.add(R.mul(t1.mul(slabToView)))            // where the ray leaves the slab back
     if (contentTex) {
       // then straight on (along the view ray) to the content plane
       const t2 = max(dot(origin.sub(inside), nb).div(min(dot(V.negate(), nb), -0.05)), 0)
