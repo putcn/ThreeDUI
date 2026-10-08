@@ -1,7 +1,8 @@
-import { Group, Matrix4, Mesh, SRGBColorSpace, Texture, TextureLoader, type InstancedBufferGeometry } from 'three'
+import { Group, Matrix4, Mesh, NoColorSpace, Texture, TextureLoader, type InstancedBufferGeometry } from 'three'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
 import { texture, float, fwidth, smoothstep, max } from 'three/tsl'
 import type { ImageInstance, Node } from '@glassui/core'
+import { srgbToLinearNode } from '../color'
 import { flatVertex, AA_MARGIN_PT, type SurfaceUniforms } from '../flat'
 import { sdfNode } from '../panel/sdf'
 import { cornerExponentFor } from '../panel/batch'
@@ -27,33 +28,46 @@ export type ImageLoader = (src: ImageSource) => Texture
 export const IMAGE_ATTRS = ['iRect', 'iShape', 'iMat0', 'iMat1', 'iMat2', 'iClipRect', 'iClipInv', 'iClipT'] as const
 
 const isTexture = (src: ImageSource): src is Texture => (src as Texture).isTexture === true
+const isImageBitmap = (src: ImageSource) => typeof ImageBitmap !== 'undefined' && src instanceof ImageBitmap
 
 let textureLoader: TextureLoader | undefined
 /**
- * A `Texture` src as is (the caller owns it, colour space included); an element in a new texture marked for upload; a
- * URL through three's `TextureLoader` (the texture is returned at once and filled when the image arrives). The textures
- * it makes are sRGB (three decodes them to linear on sample).
+ * A `Texture` src as is (the caller owns it, colour space and alpha mode included); an element in a new texture marked
+ * for upload; a URL through three's `TextureLoader` (the texture is returned at once and filled when the image arrives).
+ *
+ * The textures it makes are premultiplied on upload (both backends honour `premultiplyAlpha`), so filtering and mipmaps
+ * weight colour by alpha: straight, an opaque texel next to a transparent (black) one filters to half its colour at half
+ * alpha, a dark fringe. An `ImageBitmap` stays straight: WebGL ignores the unpack flags for one (its alpha mode is fixed
+ * when it is created). They are untagged (`NoColorSpace`, raw sRGB bytes) on purpose: the browser premultiplies the
+ * encoded bytes, and a hardware sRGB texture would decode that product, decode(c·a) ≠ decode(c)·a, darkening every
+ * partially transparent texel (an antialiased edge); `createImageMaterial` divides alpha out first, then decodes.
  */
 export const defaultImageLoader: ImageLoader = src => {
   if (isTexture(src)) return src
   let t: Texture
   if (typeof src === 'string') t = (textureLoader ??= new TextureLoader()).load(src)
   else { t = new Texture(src); t.needsUpdate = true }
-  t.colorSpace = SRGBColorSpace
+  t.colorSpace = NoColorSpace
+  t.premultiplyAlpha = !isImageBitmap(src)
   return t
 }
 
 /**
  * An image quad: the texture stretched over the rect, cut to its rounded corners by the superellipse SDF, unlit and
- * alpha-blended (normal blending of the texture's straight rgb: the content RT is premultiplied by construction).
+ * alpha-blended (normal blending of a straight linear colour: the content RT is premultiplied by construction).
  * Opacity = coverage × sample alpha × instance opacity, coverage antialiased over ±0.75 px (`fwidth`); the quad extends
  * `AA_MARGIN_PT` beyond the rect so the outer half of the ramp is rasterised, and the clip discards.
+ *
+ * The colour, by the texture's state when the material is made: a premultiplied texture's sample has alpha divided out
+ * (as the panel does); an untagged (`NoColorSpace`) texture holds sRGB bytes, as an untagged image does on the web, and
+ * is decoded to linear after that division (exact at texels, see `defaultImageLoader`); a tagged one is decoded (or not)
+ * by the hardware. Tag linear data `LinearSRGBColorSpace`.
  *
  * The geometry's `uv` spans the grown quad, so the rect's uv is `q / size + 0.5`: u runs left → right and v bottom →
  * top (q.y is up), which is upright as both backends upload images flipped (`flipY`, three's default: the image's top
  * row at v = 1). The margin samples just past [0, 1] (clamped to the edge by the default wrap), where coverage is at
- * most ½ and falling. `texture(tex, uv)` rather
- * than `texture(tex).sample(uv)`: the latter applies the texture's uv matrix (a uniform and a multiply per fragment).
+ * most ½ and falling. `texture(tex, uv)` rather than `texture(tex).sample(uv)`: the latter applies the texture's uv
+ * matrix (a uniform and a multiply per fragment).
  *
  * Varyings: `flatVertex`'s three + `iShape` = 4.
  */
@@ -73,7 +87,8 @@ export function createImageMaterial(g: InstancedBufferGeometry, su: SurfaceUnifo
   const aa = max(fwidth(d), 1e-6).mul(0.75)
   const cover = float(1).sub(smoothstep(aa.negate(), aa, d))
   const sample = texture(tex, fv.q.div(fv.size).add(0.5))
-  m.colorNode = sample.rgb
+  const rgb = tex.premultiplyAlpha ? sample.rgb.div(max(sample.a, 1e-6)) : sample.rgb
+  m.colorNode = tex.colorSpace === NoColorSpace ? srgbToLinearNode(rgb) : rgb
   m.opacityNode = cover.mul(sample.a).mul(opacity)
   return m
 }

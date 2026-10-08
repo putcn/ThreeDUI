@@ -84,6 +84,7 @@ export function evalNode(node: unknown, attributes: Record<string, readonly numb
         if (t) return broadcast3(a, b, ev(n.cNode), t)
         if (m === 'dot') return [a.reduce((s, x, i) => s + x * b[i]!, 0)]
         if (m === 'pow') { onPow?.(a); return broadcast(a, b, Math.pow) }
+        if (m === 'step') return broadcast(a, b, (edge, x) => +(x >= edge))
         if (m === 'min' || m === 'max') {
           const f = m === 'min' ? Math.min : Math.max
           const ab = broadcast(a, b, f)

@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { uniform } from 'three/tsl'
-import { Vector2, Vector3, Texture, TextureLoader, Mesh, NormalBlending, SRGBColorSpace, NoColorSpace } from 'three'
+import { Vector2, Vector3, Texture, TextureLoader, Mesh, NormalBlending, SRGBColorSpace, NoColorSpace, LinearSRGBColorSpace } from 'three'
 import type { MeshBasicNodeMaterial } from 'three/webgpu'
 import { Node, IDENTITY, scaleAbout, type ClipRect, type ImageInstance } from '@glassui/core'
 import { ImageSet, IMAGE_ATTRS, defaultImageLoader } from '../src/image/images'
 import { AA_MARGIN_PT } from '../src/flat'
 import { instanceMatrix } from '../src/transform'
+import { srgbToLinear } from '../src/color'
 import type { InstanceBuffer } from '../src/instances'
 import { evalNode } from './fixtures/tsl-eval'
 import { buildShaders } from './fixtures/build-shaders'
@@ -99,6 +100,17 @@ describe('ImageSet', () => {
     set.dispose()
     expect(onDispose).not.toHaveBeenCalled()
   })
+  it('disposes a loader-made texture when its image leaves the list or loses its src, and on dispose', () => {
+    const made: Texture[] = [], disposed = new Set<Texture>()
+    const set = new ImageSet(su, () => { const t = new Texture(); made.push(t); t.addEventListener('dispose', () => { disposed.add(t) }); return t })
+    const a = img('a', 'a.png'), b = img('b', 'b.png'), c = img('c', 'c.png')
+    set.update([a, b, c], s)
+    set.update([b, { ...c, src: null }], s)   // a leaves; c's src goes to null
+    expect(set.group.children).toHaveLength(1); expect(meshOf(set, b.node)).toBeDefined(); expect(meshOf(set, c.node)).toBeUndefined()
+    expect(disposed).toEqual(new Set([made[0], made[2]]))
+    set.dispose()
+    expect(disposed).toEqual(new Set(made))
+  })
   it('shows nothing for an image without a src, and hides empty or fully transparent ones without reloading', () => {
     const calls: unknown[] = []
     const set = new ImageSet(su, src => { calls.push(src); return new Texture() })
@@ -127,33 +139,46 @@ describe('ImageSet', () => {
 })
 
 describe('defaultImageLoader', () => {
-  it('returns a Texture src as is, colour space untouched', () => {
-    const t = new Texture()
-    expect(defaultImageLoader(t)).toBe(t); expect(t.colorSpace).toBe(NoColorSpace)
+  it('returns a Texture src as is: colour space and alpha mode untouched', () => {
+    const t = new Texture(), tagged = new Texture(); tagged.colorSpace = SRGBColorSpace
+    expect(defaultImageLoader(t)).toBe(t); expect(defaultImageLoader(tagged)).toBe(tagged)
+    expect([t.colorSpace, t.premultiplyAlpha, tagged.colorSpace, tagged.premultiplyAlpha]).toEqual([NoColorSpace, false, SRGBColorSpace, false])
   })
-  it('wraps an element (any TexImageSource) in an sRGB texture marked for upload', () => {
+  it('wraps an element (any TexImageSource) in a raw (untagged sRGB), premultiplied texture marked for upload', () => {
     const el = { width: 4, height: 2 }
     const t = defaultImageLoader(el)
-    expect(t.image).toBe(el); expect(t.version).toBeGreaterThan(0); expect(t.colorSpace).toBe(SRGBColorSpace)
+    expect(t.image).toBe(el); expect(t.version).toBeGreaterThan(0)
+    expect([t.colorSpace, t.premultiplyAlpha]).toEqual([NoColorSpace, true])
   })
-  it('loads a URL through three\'s TextureLoader into an sRGB texture returned immediately', () => {
+  it('loads a URL through three\'s TextureLoader into a raw, premultiplied texture returned immediately', () => {
     const pending = new Texture<HTMLImageElement>()
     const spy = vi.spyOn(TextureLoader.prototype, 'load').mockImplementation(() => pending)
     try {
       expect(defaultImageLoader('icons/a.png')).toBe(pending)
-      expect(spy).toHaveBeenCalledWith('icons/a.png'); expect(pending.colorSpace).toBe(SRGBColorSpace)
+      expect(spy).toHaveBeenCalledWith('icons/a.png'); expect([pending.colorSpace, pending.premultiplyAlpha]).toEqual([NoColorSpace, true])
     } finally { spy.mockRestore() }
+  })
+  it('leaves an ImageBitmap straight (WebGL ignores the unpack flags for one: its alpha mode is fixed when it is created)', () => {
+    class FakeBitmap { width = 2; height = 2 }
+    vi.stubGlobal('ImageBitmap', FakeBitmap)
+    try {
+      const t = defaultImageLoader(new FakeBitmap())
+      expect([t.colorSpace, t.premultiplyAlpha]).toEqual([NoColorSpace, false])
+    } finally { vi.unstubAllGlobals() }
   })
 })
 
 describe('image material', () => {
+  /** A texture of the given colour space and alpha mode. */
+  const tex = (colorSpace: string, premultiplyAlpha: boolean) => { const t = new Texture(); t.colorSpace = colorSpace; t.premultiplyAlpha = premultiplyAlpha; return t }
   // the fragment at quad-local q (units) of a 100 × 100 pt image (1 × 1 units) grown by the AA margin, footprint 1 pt
-  // per pixel (aa = 0.0075 units), through a sampler that records the uv and returns (0.2, 0.4, 0.6, 0.5)
-  const frag = (inst: ImageInstance, qx: number, qy: number) => {
-    const tex = new Texture(), uvs: number[][] = []
-    const set = new ImageSet(su, () => tex); set.update([inst], s)
+  // per pixel (aa = 0.0075 units), through a sampler that records the uv and returns `texel` (by default from a straight
+  // sRGB-tagged texture, which the hardware decodes: the shader passes its sample through)
+  const frag = (inst: ImageInstance, qx: number, qy: number, t = tex(SRGBColorSpace, false), texel = [0.2, 0.4, 0.6, 0.5]) => {
+    const uvs: number[][] = []
+    const set = new ImageSet(su, () => t); set.update([inst], s)
     const mesh = set.group.children[0] as Mesh, m = mesh.material as MeshBasicNodeMaterial
-    const sample = (t: unknown, uv: readonly number[]) => { expect(t).toBe(tex); uvs.push([...uv]); return [0.2, 0.4, 0.6, 0.5] }
+    const sample = (got: unknown, uv: readonly number[]) => { expect(got).toBe(t); uvs.push([...uv]); return texel }
     const grow = (2 * AA_MARGIN_PT) / s.ptPerUnit
     const at = { ...packed(mesh), position: [qx / (inst.rect.width / 100 + grow), qy / (inst.rect.height / 100 + grow), 0] }
     return { rgba: [...evalNode(m.colorNode, at, undefined, 0.01, sample), ...evalNode(m.opacityNode, at, undefined, 0.01, sample)], uv: uvs[0]!, mask: evalNode(m.maskNode, at)[0] }
@@ -173,6 +198,24 @@ describe('image material', () => {
     // the corner is rounded: the rect's corner is outside the circle, so uncovered
     expect(frag(a, 0.5, 0.5).rgba[3]).toBe(0)
     expect(frag({ ...a, radius: 0 }, 0.5 - 0.01, 0.5 - 0.01).rgba[3]).toBeCloseTo(0.5 * 0.8, 6)
+  })
+  it('un-premultiplies a premultiplied texture; decodes an untagged (raw sRGB) one after un-premultiplying', () => {
+    const a = img('a', 'a.png'), texel = [0.25, 0.25, 0.25, 0.5]
+    const rgb = (t: Texture) => frag(a, 0, 0, t, texel).rgba.slice(0, 3)
+    // tagged: the hardware decodes, the shader only divides alpha out of a premultiplied sample
+    close(rgb(tex(SRGBColorSpace, true)), [0.5, 0.5, 0.5]); close(rgb(tex(LinearSRGBColorSpace, true)), [0.5, 0.5, 0.5])
+    close(rgb(tex(SRGBColorSpace, false)), [0.25, 0.25, 0.25])
+    // untagged (the default loader's): sRGB bytes, decoded after alpha is divided out
+    close(rgb(tex(NoColorSpace, true)), Array(3).fill(srgbToLinear(0.5)))
+    close(rgb(tex(NoColorSpace, false)), Array(3).fill(srgbToLinear(0.25)))
+    for (const t of [tex(NoColorSpace, true), tex(SRGBColorSpace, false)]) expect(frag(a, 0, 0, t, texel).rgba[3]).toBeCloseTo(0.5 * 0.8, 6)
+    close(frag(a, 0, 0, tex(NoColorSpace, true), [0, 0, 0, 0]).rgba, [0, 0, 0, 0])   // a transparent texel: no 0/0
+  })
+  it('keeps the colour of a partially transparent texel of the default loader\'s texture', () => {
+    // the browser premultiplies the encoded bytes (sRGB 0.8 at alpha 0.5 arrives as 0.4): divided out, then decoded, it
+    // is the colour again. A hardware sRGB texture would decode the product, and decode(0.4) / 0.5 is 56 % darker
+    const [r] = frag(img('a', 'a.png'), 0, 0, defaultImageLoader({ width: 1, height: 1 }), [0.4, 0.4, 0.4, 0.5]).rgba
+    expect(r).toBeCloseTo(srgbToLinear(0.8), 6)
   })
   it('masks by the instance clip', () => {
     const clip: ClipRect = { x: 0, y: 0, width: 60, height: 300, radius: 0, transform: IDENTITY }   // the image spans x 10–110
@@ -198,7 +241,8 @@ describe('image material', () => {
       const warnings: string[] = []
       const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
       try {
-        const set = new ImageSet(su, () => new Texture()); set.update([img('a', 'a.png')], s)
+        // the default loader's texture: the full path (un-premultiply, then the sRGB decode)
+        const set = new ImageSet(su, () => defaultImageLoader({ width: 4, height: 4 })); set.update([img('a', 'a.png')], s)
         const mesh = set.group.children[0] as Mesh
         const out = buildShaders(mesh.material as MeshBasicNodeMaterial, mesh.geometry, forceWebGL)
         // q/size (the uv comes from q, not the grown quad's uv attribute), the clip pair and iShape; unlit, so no view position
