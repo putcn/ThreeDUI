@@ -11,6 +11,7 @@ export function contentRTSize(projectedPx: { width: number; height: number }, dp
 /** The subset of `WebGPURenderer` the render passes call (so tests can pass a stub). */
 export interface RendererLike {
   setRenderTarget(rt: RenderTarget | null): void
+  getRenderTarget?(): RenderTarget | null
   render(scene: Object3D, camera: Camera): unknown
   setClearColor?(color: Color | number, alpha?: number): void
   getClearColor?(target: Color): Color
@@ -19,7 +20,8 @@ export interface RendererLike {
 
 /**
  * Spec §5.6 step 2: the Surface's non-glass content, drawn orthographically in Surface-local units into a mipmapped RT.
- * Premultiplied by construction (colour SrcAlpha/OneMinusSrcAlpha, alpha One/OneMinusSrcAlpha, over a transparent clear): composite it premultiplied.
+ * Premultiplied by construction: transparent clears are (0,0,0) at alpha 0, colour backgrounds clear at alpha 1; panels,
+ * glyphs and images blend over it (alpha One/OneMinusSrcAlpha), pools add colour with "over" coverage; composite it premultiplied.
  */
 export class ContentPass {
   readonly scene = new Scene()
@@ -47,14 +49,19 @@ export class ContentPass {
     this.camera.updateProjectionMatrix()
   }
 
+  /** Restores the previous target and clear colour/alpha even when `render` throws (e.g. before the backend is initialised). */
   render(renderer: RendererLike, clear: { color: Color; alpha: number }): void {
+    const prevTarget = renderer.getRenderTarget?.() ?? null
     const prevAlpha = renderer.getClearAlpha?.() ?? 1
     renderer.getClearColor?.(this.prevColor)
     renderer.setClearColor?.(clear.color, clear.alpha)
-    renderer.setRenderTarget(this.target)
-    renderer.render(this.scene, this.camera)
-    renderer.setRenderTarget(null)
-    renderer.setClearColor?.(this.prevColor, prevAlpha)
+    try {
+      renderer.setRenderTarget(this.target)
+      renderer.render(this.scene, this.camera)
+    } finally {
+      renderer.setRenderTarget(prevTarget)
+      renderer.setClearColor?.(this.prevColor, prevAlpha)
+    }
   }
 
   dispose(): void { this.target.dispose() }

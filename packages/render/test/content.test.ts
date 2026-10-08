@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
-import { Color, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, LinearSRGBColorSpace, UnsignedByteType } from 'three'
-import { contentRTSize, ContentPass } from '../src/surface/content'
+import { Color, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, LinearSRGBColorSpace, RenderTarget, UnsignedByteType } from 'three'
+import type { WebGPURenderer } from 'three/webgpu'
+import { contentRTSize, ContentPass, type RendererLike } from '../src/surface/content'
+
+// Type-level guard (checked by `pnpm typecheck`): the real renderer satisfies the stub-able subset.
+export const asRendererLike = (r: WebGPURenderer): RendererLike => r
 
 describe('contentRTSize', () => {
   it('steps up to a multiple of 64 and clamps', () => {
@@ -44,5 +48,22 @@ describe('ContentPass', () => {
     expect(renderer.render).toHaveBeenCalledWith(p.scene, p.camera)
     expect(renderer.setClearColor).toHaveBeenNthCalledWith(1, expect.objectContaining({ r: 1 }), 0)
     expect(renderer.setClearColor).toHaveBeenLastCalledWith(expect.objectContaining({ r: 0.2 }), 1)
+  })
+  it('restores the target and clear colour when rendering throws, and rethrows', () => {
+    const p = new ContentPass()
+    const renderer = {
+      setRenderTarget: vi.fn(), render: vi.fn(() => { throw new Error('backend not initialised') }),
+      setClearColor: vi.fn(), getClearColor: vi.fn((t: Color) => t.setRGB(0.2, 0.3, 0.4)), getClearAlpha: vi.fn(() => 1),
+    }
+    expect(() => p.render(renderer, { color: new Color(0, 0, 0), alpha: 0 })).toThrow('backend not initialised')
+    expect(renderer.setRenderTarget.mock.calls).toEqual([[p.target], [null]])
+    expect(renderer.setClearColor).toHaveBeenLastCalledWith(expect.objectContaining({ r: 0.2 }), 1)
+  })
+  it('restores the previously bound target rather than the canvas', () => {
+    const p = new ContentPass()
+    const prev = new RenderTarget(8, 8)
+    const renderer = { setRenderTarget: vi.fn(), render: vi.fn(), getRenderTarget: vi.fn(() => prev) }
+    p.render(renderer, { color: new Color(0, 0, 0), alpha: 0 })
+    expect(renderer.setRenderTarget.mock.calls).toEqual([[p.target], [prev]])
   })
 })
