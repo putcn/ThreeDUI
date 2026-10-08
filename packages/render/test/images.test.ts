@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { uniform } from 'three/tsl'
-import { Vector2, Vector3, Texture, TextureLoader, Mesh, NormalBlending, SRGBColorSpace, NoColorSpace, LinearSRGBColorSpace } from 'three'
+import { Vector2, Vector3, Texture, TextureLoader, RenderTarget, Mesh, NormalBlending, SRGBColorSpace, NoColorSpace, LinearSRGBColorSpace } from 'three'
 import type { MeshBasicNodeMaterial } from 'three/webgpu'
 import { Node, IDENTITY, scaleAbout, type ClipRect, type ImageInstance } from '@glassui/core'
 import { ImageSet, IMAGE_ATTRS, defaultImageLoader } from '../src/image/images'
@@ -21,6 +21,8 @@ const meshOf = (set: ImageSet, node: Node) => set.group.children.find(c => c.use
 /** The mesh's packed attributes by name, as `evalNode` takes them. */
 const packed = (mesh: Mesh) => Object.fromEntries(IMAGE_ATTRS.map(name => [name, bufferOf(mesh).get(0, name)]))
 const close = (got: number[], want: number[]) => got.forEach((x, k) => expect(x).toBeCloseTo(want[k]!, 6))
+/** Stands in for `ImageBitmap` (absent under Node) through `vi.stubGlobal`. */
+class FakeBitmap { width = 2; height = 2 }
 
 describe('ImageSet', () => {
   it('creates one mesh per image, reuses by node, removes stale ones', () => {
@@ -159,7 +161,6 @@ describe('defaultImageLoader', () => {
     } finally { spy.mockRestore() }
   })
   it('leaves an ImageBitmap straight (WebGL ignores the unpack flags for one: its alpha mode is fixed when it is created)', () => {
-    class FakeBitmap { width = 2; height = 2 }
     vi.stubGlobal('ImageBitmap', FakeBitmap)
     try {
       const t = defaultImageLoader(new FakeBitmap())
@@ -199,17 +200,26 @@ describe('image material', () => {
     expect(frag(a, 0.5, 0.5).rgba[3]).toBe(0)
     expect(frag({ ...a, radius: 0 }, 0.5 - 0.01, 0.5 - 0.01).rgba[3]).toBeCloseTo(0.5 * 0.8, 6)
   })
-  it('un-premultiplies a premultiplied texture; decodes an untagged (raw sRGB) one after un-premultiplying', () => {
+  it('un-premultiplies a premultiplied texture; decodes only the default loader\'s (raw sRGB) ones, after un-premultiplying', () => {
     const a = img('a', 'a.png'), texel = [0.25, 0.25, 0.25, 0.5]
     const rgb = (t: Texture) => frag(a, 0, 0, t, texel).rgba.slice(0, 3)
-    // tagged: the hardware decodes, the shader only divides alpha out of a premultiplied sample
-    close(rgb(tex(SRGBColorSpace, true)), [0.5, 0.5, 0.5]); close(rgb(tex(LinearSRGBColorSpace, true)), [0.5, 0.5, 0.5])
-    close(rgb(tex(SRGBColorSpace, false)), [0.25, 0.25, 0.25])
-    // untagged (the default loader's): sRGB bytes, decoded after alpha is divided out
-    close(rgb(tex(NoColorSpace, true)), Array(3).fill(srgbToLinear(0.5)))
-    close(rgb(tex(NoColorSpace, false)), Array(3).fill(srgbToLinear(0.25)))
-    for (const t of [tex(NoColorSpace, true), tex(SRGBColorSpace, false)]) expect(frag(a, 0, 0, t, texel).rgba[3]).toBeCloseTo(0.5 * 0.8, 6)
-    close(frag(a, 0, 0, tex(NoColorSpace, true), [0, 0, 0, 0]).rgba, [0, 0, 0, 0])   // a transparent texel: no 0/0
+    // a caller's texture follows three: the hardware decodes a tagged one, an untagged one is read raw; the shader only
+    // divides alpha out of a premultiplied sample
+    for (const cs of [SRGBColorSpace, LinearSRGBColorSpace, NoColorSpace]) {
+      close(rgb(tex(cs, true)), [0.5, 0.5, 0.5]); close(rgb(tex(cs, false)), [0.25, 0.25, 0.25])
+    }
+    // the default loader's: sRGB bytes, decoded after alpha is divided out (an ImageBitmap's stay straight)
+    const loaded = defaultImageLoader({ width: 1, height: 1 })
+    close(rgb(loaded), Array(3).fill(srgbToLinear(0.5)))
+    vi.stubGlobal('ImageBitmap', FakeBitmap)
+    try { close(rgb(defaultImageLoader(new FakeBitmap())), Array(3).fill(srgbToLinear(0.25))) } finally { vi.unstubAllGlobals() }
+    for (const t of [loaded, tex(SRGBColorSpace, false)]) expect(frag(a, 0, 0, t, texel).rgba[3]).toBeCloseTo(0.5 * 0.8, 6)
+    close(frag(a, 0, 0, loaded, [0, 0, 0, 0]).rgba, [0, 0, 0, 0])   // a transparent texel: no 0/0
+  })
+  it('reads an untagged caller texture (a render target\'s) raw, as three means NoColorSpace', () => {
+    const rt = new RenderTarget(1, 1)
+    expect(rt.texture.colorSpace).toBe(NoColorSpace)
+    close(frag(img('a', 'a.png'), 0, 0, rt.texture, [0.5, 0.5, 0.5, 1]).rgba, [0.5, 0.5, 0.5, 0.8])
   })
   it('keeps the colour of a partially transparent texel of the default loader\'s texture', () => {
     // the browser premultiplies the encoded bytes (sRGB 0.8 at alpha 0.5 arrives as 0.4): divided out, then decoded, it

@@ -31,6 +31,8 @@ const isTexture = (src: ImageSource): src is Texture => (src as Texture).isTextu
 const isImageBitmap = (src: ImageSource) => typeof ImageBitmap !== 'undefined' && src instanceof ImageBitmap
 
 let textureLoader: TextureLoader | undefined
+/** The textures `defaultImageLoader` made: untagged sRGB bytes, which `createImageMaterial` decodes itself. */
+const srgbBytes = new WeakSet<Texture>()
 /**
  * A `Texture` src as is (the caller owns it, colour space and alpha mode included); an element in a new texture marked
  * for upload; a URL through three's `TextureLoader` (the texture is returned at once and filled when the image arrives).
@@ -49,6 +51,7 @@ export const defaultImageLoader: ImageLoader = src => {
   else { t = new Texture(src); t.needsUpdate = true }
   t.colorSpace = NoColorSpace
   t.premultiplyAlpha = !isImageBitmap(src)
+  srgbBytes.add(t)
   return t
 }
 
@@ -59,9 +62,11 @@ export const defaultImageLoader: ImageLoader = src => {
  * `AA_MARGIN_PT` beyond the rect so the outer half of the ramp is rasterised, and the clip discards.
  *
  * The colour, by the texture's state when the material is made: a premultiplied texture's sample has alpha divided out
- * (as the panel does); an untagged (`NoColorSpace`) texture holds sRGB bytes, as an untagged image does on the web, and
- * is decoded to linear after that division (exact at texels, see `defaultImageLoader`); a tagged one is decoded (or not)
- * by the hardware. Tag linear data `LinearSRGBColorSpace`.
+ * (as the panel does). A texture `defaultImageLoader` made holds untagged sRGB bytes and is decoded to linear after that
+ * division (exact at texels, see `defaultImageLoader`). Any other texture follows three's colour-space semantics: the
+ * hardware decodes an `SRGBColorSpace` one, and a `NoColorSpace` one (a render target's, a `DataTexture`) is read raw.
+ * A caller's `SRGBColorSpace` + `premultiplyAlpha` texture is therefore taken as linear-premultiplied (three's semantics:
+ * the decoded sample is divided by alpha).
  *
  * The geometry's `uv` spans the grown quad, so the rect's uv is `q / size + 0.5`: u runs left → right and v bottom →
  * top (q.y is up), which is upright as both backends upload images flipped (`flipY`, three's default: the image's top
@@ -88,7 +93,7 @@ export function createImageMaterial(g: InstancedBufferGeometry, su: SurfaceUnifo
   const cover = float(1).sub(smoothstep(aa.negate(), aa, d))
   const sample = texture(tex, fv.q.div(fv.size).add(0.5))
   const rgb = tex.premultiplyAlpha ? sample.rgb.div(max(sample.a, 1e-6)) : sample.rgb
-  m.colorNode = tex.colorSpace === NoColorSpace ? srgbToLinearNode(rgb) : rgb
+  m.colorNode = srgbBytes.has(tex) ? srgbToLinearNode(rgb) : rgb
   m.opacityNode = cover.mul(sample.a).mul(opacity)
   return m
 }
