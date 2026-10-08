@@ -8,12 +8,16 @@ interface Page { canvas: CanvasLike; ctx: CanvasCtxLike; shelves: Shelf[]; nextY
 
 /**
  * Packs rasterised glyphs into square canvas pages with shelf packing. When every page is full, the least recently
- * used page (by `get`/`allocate`) is cleared and reused, dropping all of its slots. `dirtyPages` collects the pages
- * drawn to since the last `clearDirty()`, i.e. the textures the renderer must re-upload.
+ * used page (by `get`/`allocate`) is cleared and reused, dropping all of its slots and bumping `epoch`. `dirtyPages`
+ * collects the pages drawn to (or cleared) since the last `clearDirty()`, i.e. the textures the renderer must re-upload.
  */
 export class AtlasManager {
   readonly pages: CanvasLike[] = []
   readonly dirtyPages = new Set<number>()
+  /** Bumped whenever slots become invalid (page eviction, `invalidate()`); renderers compare it to rebuild stale quads. */
+  epoch = 0
+  /** Called with the page index right after that page was wiped by eviction. */
+  onEvict: ((page: number) => void) | undefined
   private pageData: Page[] = []
   private slots = new Map<string, AtlasSlot>()
   private tick = 0
@@ -47,11 +51,25 @@ export class AtlasManager {
   private evictLRU(): number {
     let idx = 0
     for (let i = 1; i < this.pageData.length; i++) if (this.pageData[i]!.lastUse < this.pageData[idx]!.lastUse) idx = i
+    this.wipe(idx)
+    this.epoch++
+    this.onEvict?.(idx)
+    return idx
+  }
+
+  /** Clears page `idx` and drops its slots; the page is marked dirty so the blank texture is re-uploaded. */
+  private wipe(idx: number): void {
     const p = this.pageData[idx]!
     for (const k of p.keys) this.slots.delete(k)
     p.keys.clear(); p.shelves = []; p.nextY = 0; p.lastUse = ++this.tick
     p.ctx.clearRect(0, 0, this.pageSize, this.pageSize)
-    return idx
+    this.dirtyPages.add(idx)
+  }
+
+  /** Drops every glyph (e.g. after a web font finished loading and earlier rasters used a fallback). Pages are kept. */
+  invalidate(): void {
+    for (let i = 0; i < this.pageData.length; i++) this.wipe(i)
+    this.epoch++
   }
 
   /** First shelf tall enough with room left, else a new shelf below the last one, else null (page full). */

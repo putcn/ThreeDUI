@@ -7,6 +7,8 @@ import type { CanvasCtxLike, CanvasFactory, FontSpec, GlyphPlacement, Line, Text
  */
 const CJK = /^[⺀-鿿가-힯豈-﫿＀-￯\u{20000}-\u{3FFFF}]/u
 const BLANK = /^\s+$/u
+/** Ends a line cut by `maxLines` or `wrap: false`. */
+const ELLIPSIS = '…'
 /** Atlas padding around each glyph, in atlas px. */
 const PAD = 2
 /** A glyph cell is 1.3 em tall: the em box plus 0.15 em above and below for accents and descenders. */
@@ -41,6 +43,8 @@ function check(run: TextRun, maxWidth: number | undefined): number | undefined {
   const { lineHeight, letterSpacing } = run
   if (lineHeight !== undefined && !(Number.isFinite(lineHeight) && lineHeight > 0)) throw new Error(`[text] lineHeight must be a positive finite number, got ${lineHeight}`)
   if (letterSpacing !== undefined && !Number.isFinite(letterSpacing)) throw new Error(`[text] letterSpacing must be finite, got ${letterSpacing}`)
+  const { maxLines } = run
+  if (maxLines !== undefined && !(Number.isInteger(maxLines) && maxLines >= 1)) throw new Error(`[text] maxLines must be an integer ≥ 1, got ${maxLines}`)
   if (maxWidth !== undefined && !(maxWidth >= 0)) throw new Error(`[text] maxWidth must be ≥ 0 or undefined, got ${maxWidth}`)
   return maxWidth === Infinity ? undefined : maxWidth
 }
@@ -73,6 +77,9 @@ function rowAt(rows: Row[], index: number): Row {
  *   overflow hangs past the edge instead of moving down, so that line's `width` may exceed `maxWidth` by the mark.
  *   Spaces at a line end hang: they never overflow or start the next line and are excluded from `Line.width`.
  *   `\n` and `\r\n` force a break. An infinite `maxWidth` means unconstrained.
+ * - `maxLines` keeps that many lines and `wrap: false` keeps one, unwrapped; when text is dropped, or the unwrapped
+ *   line is wider than `maxWidth`, the last kept line is cut so that it plus `…` fits `maxWidth` (`Line.truncated`).
+ *   The ellipsis is drawn as a glyph but has no text index: caret and selection stop before it.
  * - Line height defaults to round(1.3 × size); glyph quads are centred vertically in the line box. Without a
  *   `maxWidth`, centre/right alignment is relative to the widest line.
  * - Caret and selection geometry are in left-aligned line coordinates. The index shared by two soft-wrapped lines is
@@ -115,7 +122,7 @@ export class SystemFontEngine implements TextEngine {
 
   /** Splits a run into grapheme clusters and greedily wraps them into rows (see the class comment for the rules). */
   private shape(run: TextRun, maxWidth: number | undefined) {
-    const limit = check(run, maxWidth)
+    const limit = check(run, maxWidth), wrapLimit = run.wrap === false ? undefined : limit
     const css = this.css(run.font), ls = run.letterSpacing ?? 0, lh = run.lineHeight ?? Math.round(run.font.size * 1.3)
     const clusters: Cluster[] = []
     for (const { segment: s, index: i } of graphemes.segment(run.text)) clusters.push({ s, i, w: isHardBreak(s) ? 0 : this.advance(css, s) + ls })
@@ -125,7 +132,7 @@ export class SystemFontEngine implements TextEngine {
       let t = c1; while (t > c0 && clusters[t - 1]!.s === ' ') t--   // trailing spaces hang outside the width
       let width = 0; for (let k = c0; k < t; k++) width += clusters[k]!.w
       const start = offset(c0), end = offset(c1)
-      rows.push({ line: { text: run.text.slice(start, end), start, end, width, y: rows.length * lh }, c0, c1, soft })
+      rows.push({ line: { text: run.text.slice(start, end), start, end, width, y: rows.length * lh, truncated: false }, c0, c1, soft })
     }
     // c0: first cluster of the open row; x: its width so far; brk: last cluster the row may break before (-1: none)
     let c0 = 0, x = 0, brk = -1
@@ -137,15 +144,40 @@ export class SystemFontEngine implements TextEngine {
         const p = clusters[k - 1]!.s
         if ((p === ' ' || CJK.test(s) || CJK.test(p)) && !NO_START.has(s) && !NO_END.has(p)) brk = k
       }
-      if (limit !== undefined && k > c0 && !fits(x, w, s, limit)) {
+      if (wrapLimit !== undefined && k > c0 && !fits(x, w, s, wrapLimit)) {
         if (brk > c0) { push(c0, brk, true); c0 = brk; x = 0; for (let j = c0; j < k; j++) x += clusters[j]!.w }
-        if (k > c0 && !fits(x, w, s, limit)) { push(c0, k, true); c0 = k; x = 0 }   // still too wide: break the word by cluster
+        if (k > c0 && !fits(x, w, s, wrapLimit)) { push(c0, k, true); c0 = k; x = 0 }   // still too wide: break the word by cluster
         brk = -1
       }
       x += w
     }
     push(c0, clusters.length, false)
+    this.truncate(run, clusters, rows, limit, css, ls)
     return { clusters, rows, lh, limit }
+  }
+
+  /**
+   * Keeps at most `maxLines` rows (1 when `wrap === false`). When rows are dropped, or a `wrap: false` row is wider
+   * than `limit`, the last kept row ends with `…` after dropping clusters (and trailing spaces) from its end until it
+   * fits `limit`. A wrapped text within `maxLines` is left as is, so its last line may still hang a closing mark.
+   */
+  private truncate(run: TextRun, clusters: Cluster[], rows: Row[], limit: number | undefined, css: string, ls: number): void {
+    const max = run.wrap === false ? 1 : run.maxLines
+    if (max === undefined) return
+    const lim = limit ?? Infinity
+    const overflow = rows.length > max
+    const last = rows[Math.min(max, rows.length) - 1]!
+    if (!overflow && !(run.wrap === false && last.line.width > lim)) return
+    rows.length = Math.min(max, rows.length)
+    const ell = this.advance(css, ELLIPSIS) + ls
+    let c1 = last.c1, width = 0
+    const widths: number[] = []   // widths[j]: advance of clusters [c0, c0 + j]
+    for (let k = last.c0; k < last.c1; k++) { width += clusters[k]!.w; widths.push(width) }
+    // drop clusters from the end until the row plus the ellipsis fits (an empty row keeps just the ellipsis)
+    while (c1 > last.c0 && (widths[c1 - last.c0 - 1]! + ell > lim || clusters[c1 - 1]!.s === ' ')) c1--
+    const start = last.line.start, end = clusters[c1]?.i ?? run.text.length
+    last.c1 = c1; last.soft = false
+    last.line = { text: run.text.slice(start, end) + ELLIPSIS, start, end, width: (c1 > last.c0 ? widths[c1 - last.c0 - 1]! : 0) + ell, y: last.line.y, truncated: true }
   }
 
   measure(run: TextRun, c: { maxWidth?: number | undefined }) {
@@ -171,20 +203,22 @@ export class SystemFontEngine implements TextEngine {
     const top = (lh - cell / os) / 2 - PAD / os   // quad top within its line: the cell is centred in the line box
     const box = limit ?? rows.reduce((m, r) => Math.max(m, r.line.width), 0)
     const out: GlyphPlacement[] = []
+    const place = (char: string, x: number, y: number) => {
+      const s = this.glyphSlot(css, raster, char, cell), size = this.atlas.pages[s.page]!.width
+      out.push({
+        char, x: x - PAD / os, y: y + top, width: s.width / os, height: s.height / os, page: s.page,
+        u0: s.x / size, v0: s.y / size, u1: (s.x + s.width) / size, v1: (s.y + s.height) / size,
+      })
+    }
     for (const { line, c0, c1 } of rows) {
       const free = Math.max(0, box - line.width)
       let x = align === 'center' ? free / 2 : align === 'right' ? free : 0
       for (let k = c0; k < c1; k++) {
         const c = clusters[k]!
-        if (!BLANK.test(c.s)) {
-          const s = this.glyphSlot(css, raster, c.s, cell), size = this.atlas.pages[s.page]!.width
-          out.push({
-            char: c.s, x: x - PAD / os, y: line.y + top, width: s.width / os, height: s.height / os, page: s.page,
-            u0: s.x / size, v0: s.y / size, u1: (s.x + s.width) / size, v1: (s.y + s.height) / size,
-          })
-        }
+        if (!BLANK.test(c.s)) place(c.s, x, line.y)
         x += c.w
       }
+      if (line.truncated) place(ELLIPSIS, x, line.y)
     }
     return out
   }

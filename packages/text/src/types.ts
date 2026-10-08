@@ -2,8 +2,10 @@ import type { AtlasManager } from './atlas'
 
 export interface FontSpec { family: string; size: number; weight: number }
 // `| undefined` on optionals: callers forward possibly-undefined values (e.g. core's `MeasureFn` maxWidth) under exactOptionalPropertyTypes.
-export interface TextRun { text: string; font: FontSpec; letterSpacing?: number | undefined; lineHeight?: number | undefined }
-export interface Line { text: string; start: number; end: number; width: number; y: number }
+// `maxLines`: an integer ≥ 1. `wrap` (default true): false never wraps at `maxWidth` but still truncates the line to it.
+export interface TextRun { text: string; font: FontSpec; letterSpacing?: number | undefined; lineHeight?: number | undefined; maxLines?: number | undefined; wrap?: boolean | undefined }
+/** `truncated`: the line was cut by `maxLines`/`wrap: false`; its `text` and `width` include the trailing `…`, `end` does not. */
+export interface Line { text: string; start: number; end: number; width: number; y: number; truncated: boolean }
 export interface GlyphPlacement { char: string; x: number; y: number; width: number; height: number; page: number; u0: number; v0: number; u1: number; v1: number }
 
 /** The Canvas2D subset the text package uses; browser canvases, OffscreenCanvas and `@napi-rs/canvas` all satisfy it. */

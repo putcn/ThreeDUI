@@ -71,3 +71,25 @@ describe('AtlasManager', () => {
     expect(() => new AtlasManager({ maxPages: 0, createCanvas: factory })).toThrow(/maxPages/)
   })
 })
+
+describe('epoch and invalidate', () => {
+  it('epoch increments on eviction and the callback names the page', () => {
+    const evicted: number[] = []
+    const atlas = new AtlasManager({ pageSize: 8, maxPages: 1, createCanvas: factory })
+    atlas.onEvict = p => evicted.push(p)
+    expect(atlas.epoch).toBe(0)
+    atlas.allocate('a', 8, 8, () => {})
+    atlas.allocate('b', 8, 8, () => {})   // page full → evict page 0
+    expect(atlas.epoch).toBe(1); expect(evicted).toEqual([0])
+    expect(atlas.get('a')).toBeUndefined()
+  })
+  it('invalidate drops every slot and bumps the epoch once', () => {
+    const atlas = new AtlasManager({ pageSize: 16, maxPages: 2, createCanvas: factory })
+    atlas.allocate('a', 4, 4, () => {}); atlas.allocate('b', 4, 4, () => {})
+    atlas.invalidate()
+    expect(atlas.epoch).toBe(1)
+    expect(atlas.get('a')).toBeUndefined(); expect(atlas.get('b')).toBeUndefined()
+    expect(atlas.pages.length).toBe(1)                 // pages are kept, just cleared
+    expect(atlas.dirtyPages.has(0)).toBe(true)         // the cleared page must be re-uploaded
+  })
+})

@@ -199,3 +199,45 @@ describe('SystemFontEngine validation', () => {
     expect(e.layout({ text: 'a', font }, Infinity, 'right')[0]!.x).toBe(e.layout({ text: 'a', font }, undefined, 'right')[0]!.x)
   })
 })
+
+describe('maxLines and wrap', () => {
+  const e = engine()
+  it('truncates to maxLines with an ellipsis that fits maxWidth', () => {
+    const run = { text: 'The quick brown fox jumps over the lazy dog again and again', font, maxLines: 2 }
+    const full = e.measure({ ...run, maxLines: undefined }, { maxWidth: 120 })
+    const cut = e.measure(run, { maxWidth: 120 })
+    expect(full.lines.length).toBeGreaterThan(2)
+    expect(cut.lines).toHaveLength(2)
+    expect(cut.lines[1]!.text.endsWith('…')).toBe(true)
+    expect(cut.lines[1]!.truncated).toBe(true); expect(cut.lines[0]!.truncated).toBe(false)
+    expect(cut.lines[1]!.width).toBeLessThanOrEqual(120)
+    expect(cut.height).toBe(2 * (cut.lines[1]!.y - cut.lines[0]!.y))   // lines × lineHeight
+    const glyphs = e.layout(run, 120, 'left')
+    expect(glyphs.some(g => g.char === '…')).toBe(true)
+  })
+  it('wrap:false keeps one line and truncates it with an ellipsis', () => {
+    const run = { text: '这是一段很长的中文文本用于测试不换行的情况', font, wrap: false }
+    const m = e.measure(run, { maxWidth: 100 })
+    expect(m.lines).toHaveLength(1)
+    expect(m.lines[0]!.text.endsWith('…')).toBe(true)
+    expect(m.width).toBeLessThanOrEqual(100)
+  })
+  it('text that fits is never truncated', () => {
+    const m = e.measure({ text: 'short', font, maxLines: 1 }, { maxWidth: 400 })
+    expect(m.lines[0]!.truncated).toBe(false); expect(m.lines[0]!.text).toBe('short')
+  })
+  it('rejects a non-integer or < 1 maxLines', () => {
+    expect(() => e.measure({ text: 'x', font, maxLines: 0 }, {})).toThrow(/maxLines/)
+    expect(() => e.measure({ text: 'x', font, maxLines: 1.5 }, {})).toThrow(/maxLines/)
+  })
+  it('keeps maxLines lines without a maxWidth, ending the last kept one with an ellipsis', () => {
+    const m = e.measure({ text: 'ab\ncd\nef', font, maxLines: 2 }, {})
+    expect(m.lines.map(l => [l.text, l.start, l.end, l.truncated])).toEqual([['ab', 0, 2, false], ['cd…', 3, 5, true]])
+    expect(m.height).toBe(2 * 26)
+  })
+  it('does not truncate a last line that only overflows by a hanging closing mark', () => {
+    const max = e.measure({ text: '一二三四五', font }, {}).width
+    const m = e.measure({ text: '一二三四五，', font, maxLines: 1 }, { maxWidth: max })
+    expect(m.lines.map(l => [l.text, l.truncated])).toEqual([['一二三四五，', false]])
+  })
+})
