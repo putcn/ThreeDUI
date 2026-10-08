@@ -1,13 +1,13 @@
 import { AddEquation, Box3, Color, CustomBlending, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Vector2, Vector3, type Material, type Object3DEventMap, type Texture } from 'three'
 import { MeshStandardNodeMaterial } from 'three/webgpu'
-import { texture, uniform } from 'three/tsl'
+import { texture, uniform, uv, vec2 } from 'three/tsl'
 import {
   apply, buildRenderList, createSurface, EventDispatcher, FocusManager, PointerTracker, resolveColor,
   type AnimationRuntime, type ColorScheme, type GlassInstance, type LayoutEngine, type MeasureFn, type Node, type RenderList, type SurfaceModel, type Theme,
 } from '@glassui/core'
 import type { TextEngine } from '@glassui/text'
 import { GlassBatch, type TouchState } from '../glass/batch'
-import { createGlassMaterial, ScreenCapture, type GlassMaterial } from '../glass/material'
+import { createGlassMaterial, DepthCapture, ScreenCapture, type GlassMaterial } from '../glass/material'
 import { PanelBatch, cornerExponentFor } from '../panel/batch'
 import { createPanelMaterial } from '../panel/material'
 import { DecorationBatch } from '../decoration/batch'
@@ -30,6 +30,8 @@ export interface SurfaceEventMap extends Object3DEventMap { error: { error: Erro
 
 /** `renderOrder` of each draw inside a Surface's `layer`; images take [images, images + ½) in z order (`ImageSet`). */
 export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, images: 3.5, glyphs: 4 } as const
+/** The frosted background slab's roughness and lift; element glass on such a Surface sees what is behind it as the slab does. */
+export const SLAB_FROST = { roughness: 0.4, lift: 0.07 } as const
 /** `renderOrder` of each draw inside the content RT's scene. */
 export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as const
 
@@ -38,10 +40,14 @@ export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as 
  * shadow-casting. The RT holds premultiplied colour (see `ContentPass`), so it composites premultiplied: source factor
  * One (the colour already carries its alpha), alpha "over"; the alpha test (α ≤ 0.02) discards the empty texels, so the
  * depth the quad writes stays on its content.
+ *
+ * Orientation: three's render-target textures have v = 0 at the image's TOP row on both backends (WebGPU natively; the
+ * GLSL builder flips render-target reads to match), while the quad's `PlaneGeometry` uv has v = 1 at its top edge, so
+ * the quad samples at (u, 1 − v). (`texture(tex, uv)` rather than `.sample(uv)`: no uv-matrix uniform.)
  */
 export function createContentMaterial(content: Texture): MeshStandardNodeMaterial {
   const m = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 })
-  const sample = texture(content)
+  const sample = texture(content, vec2(uv().x, uv().y.oneMinus()))
   m.colorNode = sample.rgb
   m.opacityNode = sample.a
   m.transparent = true; m.depthWrite = true; m.alphaTest = 0.02; m.toneMapped = false
@@ -108,6 +114,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private readonly contentGlyphs = new Map<number, Mesh>()
   private readonly touch = new Map<Node, TouchState>()
   private readonly screen: ScreenCapture | null = null
+  /** The background slab's depth capture for `depthReject`, shared by its faces (one depth copy per render); made on first use. */
+  private depth: DepthCapture | null = null
   private pointerPt: [number, number] | null = null
   private list: RenderList | null = null
   private parts: Partition | null = null
@@ -131,10 +139,13 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
     this.add(this.layer)
     const bg = this.model.background
-    if (bg === 'glass') {
-      this.backgroundGlass = new GlassBatch()
-      this.screen = new ScreenCapture()   // one framebuffer capture for both faces, kept across quality rebuilds
-    } else if (bg !== 'none') {
+    if (bg === 'glass' || bg === 'none') {
+      // one framebuffer capture, taken at this Surface's first draw that samples it (the slab's, or the element glass's
+      // on a 'none' Surface) and kept across quality rebuilds: the slab refracts it, and element glass sees it where the
+      // content RT is transparent
+      this.screen = new ScreenCapture()
+      if (bg === 'glass') this.backgroundGlass = new GlassBatch()
+    } else {
       // opaque: a clear must be (0,0,0)@0 or opaque to stay premultiplied on both backends (WebGL premultiplies it)
       toColor(resolveColor(bg, ctx.theme, ctx.scheme), this.contentClear.color); this.contentClear.alpha = 1
     }
@@ -167,8 +178,10 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /**
    * (Re)creates the glass draws for quality `q`, disposing the ones it replaces: the background slab's faces (its back
-   * with `q.backFaces`, refracting the one screen capture, `q.depthReject`) and the element glass's (its back with
-   * `q.backFaces`, refracting the content RT).
+   * with `q.backFaces`, refracting the one screen capture; with `q.depthReject` both read one shared depth capture, so
+   * a render copies the depth buffer once per Surface, not once per face) and the element glass's (its back with
+   * `q.backFaces`, refracting the content RT over the screen capture where the content is transparent — through the
+   * slab's frost on a glass Surface). The capture is shared, owned by the Surface: a rebuild never disposes it.
    */
   private buildGlass(q: QualitySettings): void {
     for (const m of this.glassMeshes) m.removeFromParent()
@@ -178,7 +191,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
     if (slab && screen) {
       for (const [side, on] of [['back', q.backFaces], ['front', true]] as const) {
         if (!on) continue
-        const gm = createGlassMaterial({ geometry: slab.geometry, K: slab.K, backdrop: 'screen', side, surface: this.su, screen, depthReject: q.depthReject })
+        const depth = q.depthReject ? (this.depth ??= new DepthCapture()) : undefined
+        const gm = createGlassMaterial({ geometry: slab.geometry, K: slab.K, backdrop: 'screen', side, surface: this.su, screen, depthReject: q.depthReject, depth })
         const mesh = new Mesh(slab.geometry, gm.material)
         mesh.renderOrder = SURFACE_ORDER.slab; mesh.frustumCulled = false   // at z = 0: its top face is the content plane
         this.layer.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
@@ -186,7 +200,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
     }
     for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
       if (!on) continue
-      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture })
+      const behind = !screen ? {} : slab ? { screen, screenLevel: SLAB_FROST.roughness * 8, screenLift: SLAB_FROST.roughness * 0.08 + SLAB_FROST.lift } : { screen }
+      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture, ...behind })
       const mesh = new Mesh(this.glass.geometry, gm.material)
       mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = false
       this.plane.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
@@ -243,8 +258,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
     return {
       node: this.root, rect, radius, z: 0, elevation: 0, scale: 1, transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 }, tilt: { x: 0, y: 0 }, opacity: 1,
       params: {
-        thickness, fillet: thickness * 0.3, filletBottom: 0, profile: 'fillet', scatter: 0.12, lift: 0.07, edgeGlow: 0.3, ior: t.ior, dispersion: 0.3,
-        roughness: 0.4, tint: null, absorption: 0, glow: null, cornerExponent: cornerExponentFor(rect, radius), envIntensity: t.envIntensity,
+        thickness, fillet: thickness * 0.3, filletBottom: 0, profile: 'fillet', scatter: 0.12, lift: SLAB_FROST.lift, edgeGlow: 0.3, ior: t.ior, dispersion: 0.3,
+        roughness: SLAB_FROST.roughness, tint: null, absorption: 0, glow: null, cornerExponent: cornerExponentFor(rect, radius), envIntensity: t.envIntensity,
         specularIntensity: t.specularIntensity, innerGlow: t.innerGlow, adaptive: false, variant: 'regular',
       },
     }
@@ -390,7 +405,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.foregroundText.dispose(); this.contentText.dispose(); this.foregroundImages.dispose(); this.contentImages.dispose()
     for (const gm of this.glassMaterials) gm.dispose()
     for (const m of this.materials) m.dispose()
-    this.screen?.dispose()
+    this.screen?.dispose(); this.depth?.dispose()
     this.contentMesh.geometry.dispose()
     this.removeFromParent()
   }

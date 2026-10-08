@@ -20,12 +20,25 @@ export interface GlassMaterialOptions {
   surface: { size: UniformNode<'vec2', Vector2>; ptPerUnit: UniformNode<'float', number> }
   /** The content RT texture (panel only; required there); `setContent` swaps it. */
   content?: Texture | undefined
-  /** The screen capture to refract (screen only), shared per layer and disposed by its owner; default: a new `ScreenCapture` this material owns. */
+  /**
+   * Screen: the capture to refract, shared per layer and disposed by its owner; default: a new `ScreenCapture` this
+   * material owns. Panel (optional): what lies behind the content plane, seen where the content RT is transparent — a
+   * `'glass'` or `'none'` Surface's capture, taken before its first draw; without it the empty texels refract as black.
+   */
   screen?: ReturnType<typeof viewportMipTexture> | undefined
+  /** Panel with `screen`: the mip level of the behind-the-plane sample (default: the element's own roughness level). */
+  screenLevel?: number | undefined
+  /** Panel with `screen`: how far that sample is lifted toward white (a frosted glass background's own lift; default 0). */
+  screenLift?: number | undefined
   /** Backdrop luma per instance (Task 23); default: 1×1 black, i.e. never darken. `setLuma` swaps it. */
   luma?: Texture | undefined
   /** Screen only: where the refracted sample hits something nearer than the glass, sample straight through instead. */
   depthReject?: boolean | undefined
+  /**
+   * Screen with `depthReject`: the depth capture to read, shared (e.g. by a slab's two faces: one depth copy per render
+   * instead of one per face) and disposed by its owner; default: a new `DepthCapture` this material owns.
+   */
+  depth?: DepthCapture | undefined
 }
 
 export interface GlassMaterial {
@@ -150,8 +163,11 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const ownScreen = o.backdrop === 'screen' && !o.screen ? new ScreenCapture() : null
   // @types/three declares viewportMipTexture as returning a plain Node; it is a ViewportTextureNode (a TextureNode)
   const screen = o.backdrop === 'screen' ? (o.screen ?? ownScreen) as TextureNode : null
+  /** Panel: the capture behind the content plane, composited under the content RT's transparent texels. */
+  const behind = o.backdrop === 'panel' && o.screen ? o.screen as TextureNode : null
   // one base node for every depth sample: its clones share one captured depth texture (one copy per target)
-  const sceneDepth = o.backdrop === 'screen' && o.depthReject ? new DepthCapture() : null
+  const ownDepth = o.backdrop === 'screen' && o.depthReject && !o.depth ? new DepthCapture() : null
+  const sceneDepth = o.backdrop === 'screen' && o.depthReject ? o.depth ?? ownDepth : null
 
   const m = new MeshPhysicalNodeMaterial()
   m.transparent = true; m.depthWrite = false; m.depthTest = true
@@ -178,11 +194,24 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const origin = modelViewMatrix.mul(vec4(0, 0, 0, 1)).xyz
   const ex = modelViewMatrix.mul(vec4(1, 0, 0, 0)).xyz, ey = modelViewMatrix.mul(vec4(0, 1, 0, 0)).xyz
   const nb = normalize(modelViewMatrix.mul(vec4(0, 0, 1, 0)).xyz)
-  /** Content uv of a view-space point on the plane: its mesh-local xy over the Surface size. */
+  /**
+   * Content RT uv of a view-space point on the plane: its mesh-local xy over the Surface size, v flipped — a render
+   * target's v = 0 is its top row on both backends (see `createContentMaterial`), and mesh-local y runs up.
+   */
   const planeUV = (P: Node<'vec3'>) => {
     const d = P.sub(origin)
-    return vec2(dot(d, ex).div(dot(ex, ex)), dot(d, ey).div(dot(ey, ey))).div(size).add(0.5)
+    const q = vec2(dot(d, ex).div(dot(ex, ex)), dot(d, ey).div(dot(ey, ey))).div(size)
+    return vec2(q.x.add(0.5), float(0.5).sub(q.y))
   }
+
+  /** Screen uv (v = 0 at the top, as a framebuffer copy is read on both backends) of a view-space point. */
+  const screenUVOf = (P: Node<'vec3'>) => {
+    const clip = cameraProjectionMatrix.mul(vec4(P, 1))
+    const ndc = clip.xy.div(clip.w)
+    return vec2(ndc.x.mul(0.5).add(0.5), float(0.5).sub(ndc.y.mul(0.5)))
+  }
+  const behindLevel = o.screenLevel !== undefined ? float(o.screenLevel) : lod
+  const behindLift = float(o.screenLift ?? 0)
 
   /** One colour channel's refraction: the backdrop colour along the refracted ray and the path length inside (slab units). */
   const channel = (iorScale: Node<'float'>) => {
@@ -192,11 +221,14 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     if (contentTex) {
       // then straight on (along the view ray) to the content plane
       const t2 = max(dot(origin.sub(inside), nb).div(min(dot(V.negate(), nb), -0.05)), 0)
-      return { c: contentTex.sample(planeUV(inside.sub(V.mul(t2)))).level(lod).rgb, t1 }
+      const P = inside.sub(V.mul(t2))
+      const content = contentTex.sample(planeUV(P)).level(lod)
+      if (!behind) return { c: content.rgb, t1 }
+      // premultiplied content over what is behind the plane there (the capture predates this Surface's draws)
+      const back = mix(behind.sample(screenUVOf(P)).level(behindLevel).rgb, vec3(1), behindLift)
+      return { c: content.rgb.add(back.mul(float(1).sub(content.a))), t1 }
     }
-    const clip = cameraProjectionMatrix.mul(vec4(inside, 1))
-    const ndc = clip.xy.div(clip.w)
-    const suv = vec2(ndc.x.mul(0.5).add(0.5), float(0.5).sub(ndc.y.mul(0.5)))
+    const suv = screenUVOf(inside)
     let c: Node<'vec3'> = screen!.sample(suv).level(lod).rgb
     // something nearer than the glass was captured there: it is not behind the glass, so look straight through
     if (sceneDepth) c = select(linearDepth(sceneDepth.sample(suv)).lessThan(linearDepth()), screen!.sample(screenUV).level(lod).rgb, c)
@@ -212,7 +244,10 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     const Rr = reflect(V.negate(), N)
     const down = Rr.sub(nb.mul(max(dot(Rr, nb), 0).mul(2)))
     const t3 = max(dot(origin.sub(positionView), nb).div(min(dot(down, nb), -0.05)), 0)
-    c = mix(c, contentTex.sample(planeUV(positionView.add(down.mul(t3)))).level(lod.add(2)).rgb, fresnel.mul(reflection))
+    // premultiplied "over" at the Fresnel weight: transparent content reflects nothing (not black)
+    const mirrored = contentTex.sample(planeUV(positionView.add(down.mul(t3)))).level(lod.add(2))
+    const w = fresnel.mul(reflection)
+    c = c.mul(float(1).sub(w.mul(mirrored.a))).add(mirrored.rgb.mul(w))
   }
   // adaptive darkening (spec §4.1, clear variant): only instances with a luma index (≥ 0), over a bright backdrop
   const luma = lumaTex.sample(vec2(lumaIndex.add(0.5).div(lumaCount), 0.5)).level(float(0)).r
@@ -241,6 +276,6 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     material: m,
     setContent(tex) { if (contentTex) contentTex.value = tex },
     setLuma(tex, count) { lumaTex.value = tex; lumaCount.value = Math.max(1, count) },
-    dispose() { m.dispose(); black?.dispose(); ownScreen?.dispose(); sceneDepth?.dispose() },
+    dispose() { m.dispose(); black?.dispose(); ownScreen?.dispose(); ownDepth?.dispose() },
   }
 }

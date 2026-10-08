@@ -10,6 +10,12 @@ const tw = (s: string): Style => parseTw(s, theme)
 export const abs = (left: number, top: number, width: number, height: number) => ({ position: 'absolute' as const, left, top, width, height })
 
 export const INK = '#1c1c22', MUTED = '#6a6a78', HINT = '#8a8a98', BODY = '#3a3a48', LINK = '#5b52f0'
+/**
+ * Glowing glass as the reference was rendered (the spike's GLOWING preset): the glow plus a tint of the accent lifted
+ * 15 % toward white, absorbed at 1.4, so the control reads as coloured glass over a light panel rather than a pale wash
+ * (and a press glow does not blow it out to white).
+ */
+const GLOWING = { tint: '#817af7', absorption: 1.4 } as const
 /** The panel's size in pt (the reference's px). */
 export const SIGNUP = { width: 885, height: 1045 } as const
 
@@ -48,7 +54,7 @@ export function pill(left: number, top: number, width: number, height: number, o
   n.setStyle({
     ...abs(left, top, width, height), radius: 'capsule', ...tw('flex-row items-center'),
     paddingX: M.controlPadding, gap: start ? M.iconGap : M.groupGap, justifyContent: start ? 'flex-start' : 'center',
-    ...(opts.glow ? { glass: { glow: { color: opts.glow, strength: opts.strength ?? 1.1 } } } : {}),
+    ...(opts.glow ? { glass: { glow: { color: opts.glow, strength: opts.strength ?? 1.1 }, ...GLOWING } } : {}),
     transition: { scale: 'snappy', elevation: 'snappy', tilt: 'snappy' }, pressed: { scale: 0.96 },
   })
   n.setProp('tabIndex', opts.tabIndex ?? 0)
@@ -79,7 +85,7 @@ export function glassSwitch(left: number, top: number, id: string): Node {
   const sw = new Node('glass', id)
   sw.setStyle({
     ...abs(left, top, M.switchWidth, M.switchHeight), radius: 'capsule',
-    glass: { glow: { color: 'accent', strength: 1.1, split: 0.5 + knobX / M.switchWidth } },
+    glass: { glow: { color: 'accent', strength: 1.1, split: 0.5 + knobX / M.switchWidth }, ...GLOWING },
     transition: { scale: 'snappy', elevation: 'snappy', tilt: 'snappy' }, pressed: { scale: 0.96 },
   })
   sw.setProp('tabIndex', 0)

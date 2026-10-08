@@ -4,12 +4,13 @@ import { CustomBlending, FrontSide, Group, HalfFloatType, Mesh, Object3D, OneFac
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
-import { Surface, createContentMaterial, CONTENT_ORDER, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
+import { Surface, createContentMaterial, CONTENT_ORDER, SLAB_FROST, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
 import { AtlasPages } from '../src/text/pages'
 import { createMeasureFn } from '../src/text/measure'
 import { REFLECTION_STRENGTH } from '../src/glass/batch'
 import { srgbToLinear } from '../src/color'
 import { buildShaders } from './fixtures/build-shaders'
+import { evalNode } from './fixtures/tsl-eval'
 
 let ctx: SurfaceContext
 beforeAll(async () => {
@@ -397,6 +398,51 @@ describe('Surface', () => {
     expect(slab()).toHaveLength(2); expect(bases()).toEqual(new Set([capture]))
     expect(graph().some(n => n.constructor.type === 'ViewportDepthTextureNode')).toBe(true)
     expect(slab().every(m => m.parent === s.layer)).toBe(true)
+    // both faces read one depth capture (one depth copy per render), kept across rebuilds and freed with the Surface
+    const depthBases = () => new Set(graph().filter(n => n.constructor.type === 'ViewportDepthTextureNode').map(n => n.getBase!()))
+    const depth = [...depthBases()][0] as { getTextureForReference(r: object): Texture }
+    expect(depthBases().size).toBe(1)
+    const depthCopy = depth.getTextureForReference({})
+    let depthFreed = 0
+    depthCopy.addEventListener('dispose', () => { depthFreed++ })
+    s.setQuality({ ...ctx.quality, backFaces: true, depthReject: true })
+    expect(depthBases()).toEqual(new Set([depth])); expect(depthFreed).toBe(0)
+    s.dispose()
+    expect(depthFreed).toBe(1); expect(captureFreed).toBeGreaterThan(0)
+  })
+  it('element glass sees the Surface\'s own screen capture under transparent content (glass: through the slab\'s frost)', () => {
+    const glassDraws = (s: Surface) => meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.glassBack || m.renderOrder === SURFACE_ORDER.glassFront)
+    const graph = (ms: Mesh[]) => ms.flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode))
+    const bases = (ms: Mesh[]) => new Set(graph(ms).filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!()))
+    const glass = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
+    const slab = meshes(glass).filter(m => m.renderOrder === SURFACE_ORDER.slab)
+    expect(bases(glassDraws(glass)).size).toBe(1)
+    expect(bases(glassDraws(glass))).toEqual(bases(slab))          // one capture per Surface, shared with the slab
+    expect(graph(glassDraws(glass)).some(n => n.constructor.type === 'ConstNode' && n.value === SLAB_FROST.roughness * 8)).toBe(true)
+    const none = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx })
+    expect(bases(glassDraws(none)).size).toBe(1)
+    const opaque = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: '#ffffff' }, { ...ctx })
+    expect(bases(glassDraws(opaque)).size).toBe(0)                 // an opaque content RT hides nothing
+  })
+  it('repeated identical rebuilds keep exactly one live set of glass draws and never free the shared capture', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
+    const orders: number[] = [SURFACE_ORDER.slab, SURFACE_ORDER.glassBack, SURFACE_ORDER.glassFront]
+    const draws = () => meshes(s).filter(m => orders.includes(m.renderOrder))
+    const count = draws().length
+    expect(count).toBe(4)                                           // slab back + front, element back + front
+    const capture = [...new Set(draws().flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode))
+      .filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!()))][0] as { value: Texture; copies: Set<Texture> }
+    let captureFreed = 0
+    capture.value.addEventListener('dispose', () => { captureFreed++ })
+    const freed = new Set<unknown>()
+    for (let i = 0; i < 5; i++) {
+      for (const m of draws()) (m.material as MeshPhysicalNodeMaterial).addEventListener('dispose', () => freed.add(m.material))
+      s.setQuality({ ...ctx.quality })
+      expect(draws()).toHaveLength(count)
+      expect(draws().every(m => !freed.has(m.material) && (m.parent === s.layer || m.parent === s.plane))).toBe(true)
+    }
+    expect(freed.size).toBe(5 * count)                               // every replaced material was freed, once
+    expect(captureFreed).toBe(0)
   })
   it('setQuality switches the content RT\'s texel type', () => {
     const c: SurfaceContext = { ...ctx }
@@ -448,6 +494,15 @@ describe('createContentMaterial', () => {
     expect(m.roughness).toBe(1); expect(m.metalness).toBe(0)
     const sampled = [...nodesOf(m.colorNode), ...nodesOf(m.opacityNode)].filter(n => n.isTextureNode).map(n => n.value)
     expect(new Set(sampled)).toEqual(new Set([tex]))
+  })
+})
+
+describe('content quad orientation', () => {
+  it('reads the render target upright: the quad\'s top edge (uv v = 1) samples the RT\'s top row (v = 0)', () => {
+    const m = createContentMaterial(new Texture())
+    const at = (u: number, v: number) => evalNode(m.colorNode, { uv: [u, v] }, undefined, undefined, (_t, uv) => [uv[0]!, uv[1]!, 0, 1])
+    expect(at(0.25, 1)).toEqual([0.25, 0, 0])
+    expect(at(0.75, 0)).toEqual([0.75, 1, 0])
   })
 })
 

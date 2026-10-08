@@ -10,8 +10,8 @@ import { createHostLights, createWall } from './wall'
 import { buildSignup, SIGNUP } from './signup'
 import { buildWorld } from './world'
 
-/** What the visual harness (Task 24) reads: `ready` resolves to the root once the first frame has rendered. */
-export interface PlaygroundHandle { ready: Promise<UIRoot>; root?: UIRoot; surfaces?: Surface[] }
+/** What the visual harness (Task 24) reads: `ready` resolves to the root once the first frame has been drawn. */
+export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURenderer; root?: UIRoot; surfaces?: Surface[] }
 declare global { interface Window { __glassui?: PlaygroundHandle } }
 
 type SceneMode = 'signup' | 'world' | 'both'
@@ -49,7 +49,7 @@ const showError = (e: unknown): void => {
   if (hud) { hud.className = 'hud error'; hud.textContent = e instanceof Error ? e.message : String(e) }
 }
 
-const handle: PlaygroundHandle = { ready: start() }
+const handle: PlaygroundHandle = { ready: start(), renderer }
 window.__glassui = handle
 handle.ready.catch(showError)
 
@@ -75,29 +75,34 @@ async function start(): Promise<UIRoot> {
     root.screen.place(s, { left: (innerWidth - SIGNUP.width * s.scale.x) / 2, top: (innerHeight - SIGNUP.height * s.scale.y) / 2 })
   }
 
-  // The host's loop: `root.frame` ticks the UI and renders the host scene, then the UI over it.
+  // The first frame is drawn here, not on the first animation frame: `ready` must not depend on rAF (a hidden or
+  // occluded tab gets none), and it then resolves with shaders compiled and the first content passes drawn.
+  const step = (t: number): void => {
+    controls.enableZoom = !root.pointer?.hovered   // a wheel over a Surface is the UI's
+    controls.update()
+    root.frame(t)                                    // ticks the UI and renders the host scene, then the UI over it
+  }
+  step(performance.now())
+
+  // The host's loop. `info` resets per animation frame, so the draw count covers the whole frame: content passes,
+  // shadow map, host scene and UI scene.
   let frames = 0, acc = 0, last = performance.now()
-  await new Promise<void>((resolve, reject) => {
-    let first = true
-    void renderer.setAnimationLoop(t => {
-      try {
-        controls.enableZoom = !root.pointer?.hovered   // a wheel over a Surface is the UI's
-        controls.update()
-        root.frame(t)
-      } catch (e) {
-        void renderer.setAnimationLoop(null)
-        if (first) reject(e); else showError(e)
-        return
-      }
-      if (first) { first = false; resolve() }
-      const now = performance.now()
-      frames++; acc += (now - last) / 1000; last = now
-      if (acc > 0.5 && hud) {
-        const fps = (frames / acc).toFixed(0), draws = renderer.info.render.drawCalls
-        hud.textContent = `${root.backend} · ${fps} fps · ${draws} UI draws · ${root.quality.tier} · ${surfaces.length} surface${surfaces.length === 1 ? '' : 's'}${orbit ? ' · drag to orbit' : ''}`
-        frames = 0; acc = 0
-      }
-    })
+  // a hidden (or fully occluded) tab gets no animation frames: say so rather than leave a stale fps on screen, and
+  // start the next reading afresh
+  const notePaused = (): void => {
+    if (document.visibilityState === 'hidden' && hud) hud.textContent = `${root.backend} · paused: the tab is hidden (no animation frames)`
+  }
+  document.addEventListener('visibilitychange', () => { frames = 0; acc = 0; last = performance.now(); notePaused() })
+  notePaused()
+  void renderer.setAnimationLoop(t => {
+    try { step(t) } catch (e) { void renderer.setAnimationLoop(null); showError(e); return }
+    const now = performance.now()
+    frames++; acc += (now - last) / 1000; last = now
+    if (acc > 0.5 && hud) {
+      const fps = (frames / acc).toFixed(0), draws = renderer.info.render.drawCalls
+      hud.textContent = `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${surfaces.length} surface${surfaces.length === 1 ? '' : 's'}${orbit ? ' · drag to orbit' : ''}`
+      frames = 0; acc = 0
+    }
   })
   return root
 }

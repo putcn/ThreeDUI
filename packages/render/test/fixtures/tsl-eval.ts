@@ -28,6 +28,7 @@ const OPS: Record<string, (x: number, y: number) => number> = {
 }
 const UNARY: Record<string, (x: number) => number> = {
   abs: Math.abs, sign: Math.sign, sin: Math.sin, cos: Math.cos, sqrt: Math.sqrt, exp: Math.exp, negate: x => -x,
+  oneMinus: x => 1 - x,
 }
 
 /**

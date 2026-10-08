@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { Color, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, LinearSRGBColorSpace, RenderTarget, UnsignedByteType } from 'three'
+import { Color, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, LinearSRGBColorSpace, RenderTarget, UnsignedByteType, Vector3 } from 'three'
 import type { WebGPURenderer } from 'three/webgpu'
 import { contentRTSize, ContentPass, type RendererLike } from '../src/surface/content'
 
@@ -42,7 +42,17 @@ describe('ContentPass', () => {
     const p = new ContentPass()
     p.setView({ width: 400, height: 300, ptPerUnit: 100 })
     expect(p.camera.left).toBe(-2); expect(p.camera.right).toBe(2); expect(p.camera.top).toBe(1.5); expect(p.camera.bottom).toBe(-1.5)
-    expect(p.camera.near).toBe(-10); expect(p.camera.far).toBe(10); expect(p.camera.position.z).toBe(5)
+    expect(p.camera.position.z).toBe(0); expect(p.camera.near).toBe(-6); expect(p.camera.far).toBe(6)   // ±(hypot(4, 3) + 1)
+  })
+  it('keeps content tilted out of the plane inside the depth range at 1 pt per unit (a screen Surface)', () => {
+    const p = new ContentPass()
+    p.setView({ width: 885, height: 1045, ptPerUnit: 1 })
+    p.camera.updateMatrixWorld()
+    // a 760-wide pool under glass tilted 0.05 rad: its ends leave the plane by ±19 units, beyond a fixed ±10
+    for (const z of [-19, 19]) {
+      const ndc = new Vector3(380, 0, z).project(p.camera)
+      expect(Math.abs(ndc.z)).toBeLessThan(1)
+    }
   })
   it('renders into the target and restores the default target and clear colour', () => {
     const p = new ContentPass()

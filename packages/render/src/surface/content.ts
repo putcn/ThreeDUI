@@ -33,7 +33,6 @@ export class ContentPass {
       format: RGBAFormat, type: opts.type === 'half' ? HalfFloatType : UnsignedByteType,
       generateMipmaps: true, minFilter: LinearMipmapLinearFilter, magFilter: LinearFilter, colorSpace: LinearSRGBColorSpace, depthBuffer: false,
     })
-    this.camera.position.z = 5
   }
   get texture(): Texture { return this.target.texture }
 
@@ -55,9 +54,15 @@ export class ContentPass {
     return true
   }
 
+  /**
+   * The ortho view of the Surface rect in units. Its depth range is sized to the Surface, not fixed: content under
+   * tilted glass (a pool) leaves the plane by up to half its diagonal, and at 1 pt per unit (screen Surfaces) a fixed
+   * ±10 units would clip a tilt of a few degrees across a wide control — a sharp edge where the pool is cut off.
+   */
   setView(s: SurfaceDims): void {
-    const w = s.width / s.ptPerUnit, h = s.height / s.ptPerUnit
+    const w = s.width / s.ptPerUnit, h = s.height / s.ptPerUnit, depth = Math.hypot(w, h) + 1
     this.camera.left = -w / 2; this.camera.right = w / 2; this.camera.top = h / 2; this.camera.bottom = -h / 2
+    this.camera.position.z = 0; this.camera.near = -depth; this.camera.far = depth
     this.camera.updateProjectionMatrix()
   }
 
