@@ -22,8 +22,8 @@ import { liftFor, partition, type Partition } from './partition'
 import { toColor } from '../color'
 
 export interface SurfaceOptions { id?: string; width: number; height: number; ptPerUnit?: number; placement?: 'screen' | 'world'; background?: 'none' | 'glass' | string; cornerRadius?: number; interactive?: boolean; castToWorld?: boolean; contentScale?: number }
-/** The quality knobs a Surface reads (Task 19's tiers extend it). */
-export interface QualitySettings { contentType: 'byte' | 'half'; contentScale: number; backFaces: boolean; depthReject: boolean }
+/** The quality knobs a Surface reads (`QualityProfile` in `quality.ts` extends it into a full tier). */
+export interface QualitySettings { contentType: 'byte' | 'half'; contentScale: number; backFaces: boolean; depthReject: boolean; blur: 'kawase' | 'mip' }
 /** What every Surface of one root shares. */
 export interface SurfaceContext { theme: Theme; scheme: ColorScheme; layout: LayoutEngine; measure: MeasureFn; anim: AnimationRuntime; text: TextEngine; pages: AtlasPages; quality: QualitySettings }
 export interface SurfaceEventMap extends Object3DEventMap { error: { error: Error } }

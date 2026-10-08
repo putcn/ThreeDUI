@@ -11,7 +11,7 @@ import { ScreenLayer, screenUnitsPerPx } from '../src/surface/screen'
 let ctx: SurfaceContext
 beforeAll(async () => {
   const text = new SystemFontEngine({ createCanvas: ((w: number, h: number) => createCanvas(w, h)) as never, pageSize: 256 })
-  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), quality: { contentType: 'byte', contentScale: 1, backFaces: false, depthReject: false } }
+  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), quality: { contentType: 'byte', contentScale: 1, backFaces: false, depthReject: false, blur: 'mip' } }
 })
 
 /** CSS px (from the viewport's top-left) of `s`'s local point (x, y, z) seen through `cam`. */
