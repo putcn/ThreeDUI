@@ -5,6 +5,7 @@ import { defaultTheme, type Theme } from '../src/style/theme'
 import { createYogaLayout, type LayoutEngine } from '../src/layout/yoga'
 import { absoluteRect, hitTest } from '../src/events/hit'
 import { EventDispatcher, PointerTracker } from '../src/events/dispatch'
+import { createSurface } from '../src/surface'
 
 let engine: LayoutEngine
 beforeAll(async () => { engine = await createYogaLayout() })
@@ -256,5 +257,46 @@ describe('PointerTracker semantics', () => {
     p.down(100, 80); p.down(55, 55)
     expect(s.btn.state.pressed).toBe(false)
     expect(p.pressed?.id).toBe('panel')
+  })
+})
+
+describe('hitTest with concentric radii and scale (Plan 2 seams)', () => {
+  const theme = defaultTheme
+  it('concentric resolves against the parent radius minus the inset', () => {
+    const s = createSurface({ id: 'h', width: 200, height: 200 })
+    const card = new Node('box', 'card'); card.setStyle({ position: 'absolute', left: 0, top: 0, width: 200, height: 200, radius: 40 })
+    const inner = new Node('box', 'inner'); inner.setStyle({ position: 'absolute', left: 10, top: 10, width: 180, height: 180, radius: 'concentric', bg: 'fill' })
+    s.root.appendChild(card); card.appendChild(inner)
+    engine.compute(s.root, 200, 200)
+    // inner radius = 40 − 10 = 30 (corner centre (40,40)); (14,14) is 36.8 from it: inside the card's 40 corner, outside inner's 30
+    expect(hitTest(s.root, 14, 14, theme)?.id).toBe('card')
+    expect(hitTest(s.root, 30, 30, theme)?.id).toBe('inner')
+  })
+  it('a scaled node is hit in its scaled footprint and children follow', () => {
+    const s = createSurface({ id: 'h2', width: 200, height: 200 })
+    const btn = new Node('box', 'btn'); btn.setStyle({ position: 'absolute', left: 50, top: 50, width: 100, height: 100, scale: 0.5, bg: 'fill' })
+    const dot = new Node('box', 'dot'); dot.setStyle({ position: 'absolute', left: 0, top: 0, width: 20, height: 20, bg: 'accent' })
+    s.root.appendChild(btn); btn.appendChild(dot)
+    engine.compute(s.root, 200, 200)
+    // scaled about (100,100): footprint is 75..125; the layout corner (55,55) is now empty
+    expect(hitTest(s.root, 55, 55, theme)?.id).toBe(`${s.id}-root`)
+    expect(hitTest(s.root, 80, 80, theme)?.id).toBe('dot')   // dot's layout (50..70) maps to 75..85
+    expect(hitTest(s.root, 120, 120, theme)?.id).toBe('btn')
+  })
+  it('visual scale is honoured too', () => {
+    const s = createSurface({ id: 'h3', width: 200, height: 200 })
+    const btn = new Node('box', 'btn'); btn.setStyle({ position: 'absolute', left: 50, top: 50, width: 100, height: 100, bg: 'fill' })
+    s.root.appendChild(btn); engine.compute(s.root, 200, 200)
+    btn.setVisual({ scale: 0.5 })
+    expect(hitTest(s.root, 55, 55, theme)?.id).toBe(`${s.id}-root`)
+  })
+  it('a node whose composed transform is singular is skipped with its subtree, not thrown on', () => {
+    const s = createSurface({ id: 'h4', width: 200, height: 200 })
+    const btn = new Node('box', 'btn'); btn.setStyle({ position: 'absolute', left: 50, top: 50, width: 100, height: 100, bg: 'fill' })
+    const dot = new Node('box', 'dot'); dot.setStyle({ position: 'absolute', left: 0, top: 0, width: 20, height: 20, bg: 'accent' })
+    s.root.appendChild(btn); btn.appendChild(dot); engine.compute(s.root, 200, 200)
+    btn.setVisual({ scale: 0 })   // mid-animation collapse: everything maps to the centre (100,100)
+    expect(hitTest(s.root, 100, 100, theme)?.id).toBe(`${s.id}-root`)
+    expect(hitTest(s.root, 55, 55, theme)?.id).toBe(`${s.id}-root`)
   })
 })
