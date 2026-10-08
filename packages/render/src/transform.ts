@@ -1,5 +1,5 @@
 import { Matrix4, Euler, Quaternion, Vector3 } from 'three'
-import { apply, invert, type ClipRect, type InstanceTransform, type Rect } from '@glassui/core'
+import { apply, invert, GlassUIError, type ClipRect, type InstanceTransform, type Mat2D, type Rect } from '@glassui/core'
 import type { InstanceBuffer } from './instances'
 import { surfaceToLocal, type SurfaceDims } from './units'
 
@@ -40,10 +40,19 @@ export function writeMatrixRows(buf: InstanceBuffer, i: number, m: Matrix4, name
   buf.set(i, names[2], el[2]!, el[6]!, el[10]!, el[14]!)
 }
 
-/** Clip rect (surface pt, `w = −1` for none) and the inverse of its transform, for the fragment-side rounded-rect test. */
+/** `invert(m)`, or null when `m` is singular (core throws `GlassUIError` for that; a frame must not). */
+function tryInvert(m: Mat2D): Mat2D | null {
+  try { return invert(m) } catch (err) { if (err instanceof GlassUIError) return null; throw err }
+}
+
+/**
+ * Clip rect (surface pt, `w = −1` for none) and the inverse of its transform, for the fragment-side rounded-rect test.
+ * A singular clip transform (its ancestor scaled to nothing, which collapses the clipped content with it) packs as no
+ * clip rather than throwing out of the frame.
+ */
 export function writeClip(buf: InstanceBuffer, i: number, clip: ClipRect | undefined, names: [string, string, string] = ['iClipRect', 'iClipInv', 'iClipT']): void {
-  if (!clip) { buf.set(i, names[0], 0, 0, -1, 0); buf.set(i, names[1], 1, 0, 0, 1); buf.set(i, names[2], 0, 0, 0, 0); return }
-  const inv = invert(clip.transform)
+  const inv = clip ? tryInvert(clip.transform) : null
+  if (!clip || !inv) { buf.set(i, names[0], 0, 0, -1, 0); buf.set(i, names[1], 1, 0, 0, 1); buf.set(i, names[2], 0, 0, 0, 0); return }
   buf.set(i, names[0], clip.x, clip.y, clip.width, clip.height)
   buf.set(i, names[1], inv.a, inv.b + 0, inv.c + 0, inv.d)   // `+ 0`: `invert` negates a zero shear to −0
   buf.set(i, names[2], inv.tx, inv.ty, clip.radius, 0)

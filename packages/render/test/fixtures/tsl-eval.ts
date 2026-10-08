@@ -21,8 +21,11 @@ const UNARY: Record<string, (x: number) => number> = {
   abs: Math.abs, sign: Math.sign, sin: Math.sin, cos: Math.cos, sqrt: Math.sqrt, negate: x => -x,
 }
 
-/** Evaluates `node` for one vertex; `attributes` maps attribute names to their (vec4) values. */
-export function evalNode(node: unknown, attributes: Record<string, readonly number[]>): Vec {
+/**
+ * Evaluates `node` for one vertex; `attributes` maps attribute names to their (vec4) values. Only taken `select`
+ * branches run, as in the if/else three emits; `onPow` sees the base of every `pow` that runs.
+ */
+export function evalNode(node: unknown, attributes: Record<string, readonly number[]>, onPow?: (base: readonly number[]) => void): Vec {
   const memo = new Map<unknown, Vec>()
   const ev = (n: AnyNode): Vec => {
     let r = memo.get(n)
@@ -62,7 +65,7 @@ export function evalNode(node: unknown, attributes: Record<string, readonly numb
         if (m === 'length') return [Math.sqrt(a.reduce((s, x) => s + x * x, 0))]
         const b = ev(n.bNode)
         if (m === 'dot') return [a.reduce((s, x, i) => s + x * b[i]!, 0)]
-        if (m === 'pow') return broadcast(a, b, Math.pow)
+        if (m === 'pow') { onPow?.(a); return broadcast(a, b, Math.pow) }
         if (m === 'min' || m === 'max') {
           const f = m === 'min' ? Math.min : Math.max
           const ab = broadcast(a, b, f)

@@ -45,6 +45,13 @@ describe('GlassBatch', () => {
     expect(b.buffer.get(0, 'iClipInv')).toEqual([2, 0, 0, 2])          // inverse of scale .5 about (100,50)
     expect(b.buffer.get(0, 'iClipT')).toEqual([-100, -50, 12, 0])
   })
+  it('a singular clip transform packs as no clip instead of throwing', () => {
+    const b = new GlassBatch()
+    b.update([inst('a', 1, { clip: { x: 0, y: 0, width: 200, height: 100, radius: 12, transform: scaleAbout(100, 50, 0) } })], s)
+    expect(b.buffer.get(0, 'iClipRect')).toEqual([0, 0, -1, 0])
+    expect(b.buffer.get(0, 'iClipInv')).toEqual([1, 0, 0, 1])
+    expect(b.buffer.get(0, 'iClipT')).toEqual([0, 0, 0, 0])
+  })
   it('carries touch state and grows with the list', () => {
     const b = new GlassBatch()
     const list = Array.from({ length: 40 }, (_, i) => inst(`g${i}`, i))
@@ -63,7 +70,7 @@ describe('slabVertex', () => {
     const v = slabVertex(b.geometry, b.K)
     expect(v.position).toBeTruthy(); expect(v.normal).toBeTruthy(); expect(v.local).toBeTruthy(); expect(v.slabLocal).toBeTruthy()
   })
-  it('matches evalSlabVertex at every base vertex (fillet, flat-bottom squircle, lens)', () => {
+  it('matches evalSlabVertex at every base vertex (fillet, flat-bottom squircle, lens) and never feeds pow a base ≤ 0', () => {
     const K = 10, S = 10
     const shapes: SlabInstanceParams[] = [
       { width: 3.11, height: 0.344, radius: 0.172, thickness: 0.0656, fillet: 0.0205, filletBottom: 0.0123, cornerExponent: 2, profile: 0 },
@@ -74,7 +81,8 @@ describe('slabVertex', () => {
     const v = slabVertex(b.geometry, K)
     const slab = b.geometry.getAttribute('slab')
     for (const p of shapes) {
-      let worst = 0
+      let worst = 0, minPowBase = Infinity
+      const onPow = (base: readonly number[]) => { minPowBase = Math.min(minPowBase, ...base) }
       for (let i = 0; i < slab.count; i++) {
         const vert = { ax: slab.getX(i), ay: slab.getY(i), angle: slab.getZ(i), ring: slab.getW(i) }
         const cpu = evalSlabVertex(vert, p, K)
@@ -82,10 +90,11 @@ describe('slabVertex', () => {
           slab: [vert.ax, vert.ay, vert.angle, vert.ring], iRect: [0, 0, p.width, p.height], iShape: [p.radius, p.thickness, p.fillet, p.filletBottom],
           iCorner: [p.cornerExponent, p.profile, 0, 0], iMat0: [1, 0, 0, 0], iMat1: [0, 1, 0, 0], iMat2: [0, 0, 1, 0],
         }
-        const pos = evalNode(v.slabLocal, attrs), nrm = evalNode(v.normal, attrs), local = evalNode(v.local, attrs)
+        const pos = evalNode(v.slabLocal, attrs, onPow), nrm = evalNode(v.normal, attrs, onPow), local = evalNode(v.local, attrs)
         for (let k = 0; k < 3; k++) worst = Math.max(worst, Math.abs(pos[k]! - cpu.position[k]!), Math.abs(local[k]! - cpu.position[k]!), Math.abs(nrm[k]! - cpu.normal[k]!))
       }
       expect(worst).toBeLessThan(1e-12)
+      expect(minPowBase).toBeGreaterThan(0)   // WGSL pow is exp2(y·log2 x): the GPU must never see a base ≤ 0
     }
   })
   it('places and orients the slab with the packed instance attributes and matrix rows', () => {

@@ -56,7 +56,10 @@ export function slabVertex(geometry: InstancedBufferGeometry, K: number) {
 
   // profileAt(pRing, K, p) → (inset, z, nr, nz), one vec4 per CPU branch
   // lens (p.profile === 1)
-  const x = pow(pRing.div(2 * K + 1), 1.6)                            // Math.pow(ring / (2 * K + 1), 1.6)
+  // WGSL pow is exp2(y·log2 x), out of domain at x = 0 (ring 0 and the back rim). Rings are integers, so t is 0 or
+  // ≥ 1/(2K+1): the floor never changes a value, and the select gives the CPU's exact pow(0, 1.6) = 0
+  const t = pRing.div(2 * K + 1)                                      // ring / (2 * K + 1)
+  const x = select(t.greaterThan(0), pow(max(t, 1e-20), 1.6), float(0))   // Math.pow(ring / (2 * K + 1), 1.6)
   const h = sqrt(max(float(1).sub(float(1).sub(x).mul(float(1).sub(x))), 0))   // Math.sqrt(Math.max(1 - (1 - x) * (1 - x), 0))
   const lnr = thickness.mul(float(1).sub(x)), lnz = bezel.mul(h)      // nr = p.thickness * (1 - x), nz = bezel * h
   const ll = orOne(length(vec2(lnr, lnz)))                            // Math.hypot(nr, nz) || 1
