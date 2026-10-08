@@ -36,7 +36,7 @@ export function evalNode(node: unknown, attributes: Record<string, readonly numb
     const type = n.constructor.type
     switch (type) {
       case 'VaryingNode': case 'VarNode': case 'SubBuild': return ev(n.node)
-      case 'ConstNode': {
+      case 'ConstNode': case 'UniformNode': {   // a uniform evaluates to its current value
         const v = n.value
         if (typeof v === 'number') return [v]
         if (typeof v === 'boolean') return [+v]
