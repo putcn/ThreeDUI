@@ -49,9 +49,11 @@ const showError = (e: unknown): void => {
   if (hud) { hud.className = 'hud error'; hud.textContent = e instanceof Error ? e.message : String(e) }
 }
 
-const handle: PlaygroundHandle = { ready: start(), renderer }
-window.__glassui = handle
-handle.ready.catch(showError)
+// `handle` exists before `start()` runs, since `start()` writes `root` and `surfaces` into it; `ready` joins it after
+const handle: Omit<PlaygroundHandle, 'ready'> = { renderer }
+const ready = start()
+window.__glassui = Object.assign(handle, { ready })
+ready.catch(showError)
 
 async function start(): Promise<UIRoot> {
   const root = await createUIRoot({ renderer, scene: hostScene, camera, quality })

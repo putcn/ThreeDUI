@@ -45,7 +45,7 @@ pnpm install
 pnpm playground         # http://127.0.0.1:5176  — the sign-up form and a world-layer scene on @glassui/core + @glassui/render
 ```
 
-Query parameters: `?scene=signup|world|both` (default `both`), `?quality=high|medium|low|minimal` (default: adaptive), `?webgl` to force the WebGL2 backend. Drag the background to orbit (the form stays put; the world-layer panel moves with the scene). The HUD shows the backend, fps, UI draw calls, quality tier and Surface count. `pnpm playground:build` writes a static build to `examples/playground/dist`.
+Query parameters: `?scene=signup|world|both` (default `both`), `?quality=high|medium|low|minimal` (default: adaptive), `?webgl` to force the WebGL2 backend. Drag the background to orbit (the form stays put; the world-layer panel moves with the scene). The HUD shows the backend, fps, draw calls per frame (the whole frame: content passes, shadow map, host scene and UI), quality tier and Surface count. `pnpm playground:build` writes a static build to `examples/playground/dist`.
 
 The original spike is still there for comparison:
 

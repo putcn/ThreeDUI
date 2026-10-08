@@ -113,8 +113,9 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private readonly foregroundGlyphs = new Map<number, Mesh>()
   private readonly contentGlyphs = new Map<number, Mesh>()
   private readonly touch = new Map<Node, TouchState>()
+  /** A glass Surface's framebuffer capture (null otherwise): the slab refracts it, element glass sees it under transparent content. */
   private readonly screen: ScreenCapture | null = null
-  /** The background slab's depth capture for `depthReject`, shared by its faces (one depth copy per render); made on first use. */
+  /** A glass Surface's depth capture for `depthReject`, shared by the slab's faces and the element glass (one depth copy per render); made on first use. */
   private depth: DepthCapture | null = null
   private pointerPt: [number, number] | null = null
   private list: RenderList | null = null
@@ -139,13 +140,14 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
     this.add(this.layer)
     const bg = this.model.background
-    if (bg === 'glass' || bg === 'none') {
-      // one framebuffer capture, taken at this Surface's first draw that samples it (the slab's, or the element glass's
-      // on a 'none' Surface) and kept across quality rebuilds: the slab refracts it, and element glass sees it where the
-      // content RT is transparent
+    if (bg === 'glass') {
+      // one framebuffer capture, kept across quality rebuilds. The slab is this Surface's first draw and samples it, so
+      // it is taken before any of this Surface's draws; element glass then shares it (no second copy) to see what is
+      // behind the slab where the content RT is transparent. A 'none' Surface takes no capture: its element glass
+      // refracts the content RT alone (spec §5.1), so it never pays a framebuffer copy
       this.screen = new ScreenCapture()
-      if (bg === 'glass') this.backgroundGlass = new GlassBatch()
-    } else {
+      this.backgroundGlass = new GlassBatch()
+    } else if (bg !== 'none') {
       // opaque: a clear must be (0,0,0)@0 or opaque to stay premultiplied on both backends (WebGL premultiplies it)
       toColor(resolveColor(bg, ctx.theme, ctx.scheme), this.contentClear.color); this.contentClear.alpha = 1
     }
@@ -180,27 +182,30 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * (Re)creates the glass draws for quality `q`, disposing the ones it replaces: the background slab's faces (its back
    * with `q.backFaces`, refracting the one screen capture; with `q.depthReject` both read one shared depth capture, so
    * a render copies the depth buffer once per Surface, not once per face) and the element glass's (its back with
-   * `q.backFaces`, refracting the content RT over the screen capture where the content is transparent — through the
-   * slab's frost on a glass Surface). The capture is shared, owned by the Surface: a rebuild never disposes it.
+   * `q.backFaces`, refracting the content RT). On a glass Surface element glass also sees the slab's screen capture,
+   * through the slab's frost, where the content is transparent, and with `q.depthReject` reads the slab's depth capture
+   * too (no further copy); on a 'none' Surface it refracts the content RT alone. The captures are owned by the Surface:
+   * a rebuild never disposes them.
    */
   private buildGlass(q: QualitySettings): void {
     for (const m of this.glassMeshes) m.removeFromParent()
     for (const gm of this.glassMaterials) gm.dispose()
     this.glassMeshes.length = 0; this.glassMaterials.length = 0
     const slab = this.backgroundGlass, screen = this.screen
+    const depth = slab && screen && q.depthReject ? (this.depth ??= new DepthCapture()) : undefined
     if (slab && screen) {
       for (const [side, on] of [['back', q.backFaces], ['front', true]] as const) {
         if (!on) continue
-        const depth = q.depthReject ? (this.depth ??= new DepthCapture()) : undefined
         const gm = createGlassMaterial({ geometry: slab.geometry, K: slab.K, backdrop: 'screen', side, surface: this.su, screen, depthReject: q.depthReject, depth })
         const mesh = new Mesh(slab.geometry, gm.material)
         mesh.renderOrder = SURFACE_ORDER.slab; mesh.frustumCulled = false   // at z = 0: its top face is the content plane
         this.layer.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
       }
     }
+    // the slab's captures, which predate this Surface's draws: the slab is its first draw
+    const behind = slab && screen ? { screen, screenLevel: SLAB_FROST.roughness * 8, screenLift: SLAB_FROST.roughness * 0.08 + SLAB_FROST.lift, depthReject: q.depthReject, ...(depth ? { depth } : {}) } : {}
     for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
       if (!on) continue
-      const behind = !screen ? {} : slab ? { screen, screenLevel: SLAB_FROST.roughness * 8, screenLift: SLAB_FROST.roughness * 0.08 + SLAB_FROST.lift } : { screen }
       const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture, ...behind })
       const mesh = new Mesh(this.glass.geometry, gm.material)
       mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = false

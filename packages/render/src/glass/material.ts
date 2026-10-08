@@ -23,7 +23,9 @@ export interface GlassMaterialOptions {
   /**
    * Screen: the capture to refract, shared per layer and disposed by its owner; default: a new `ScreenCapture` this
    * material owns. Panel (optional): what lies behind the content plane, seen where the content RT is transparent — a
-   * `'glass'` or `'none'` Surface's capture, taken before its first draw; without it the empty texels refract as black.
+   * `'glass'` Surface's slab capture, which the slab (that Surface's first draw) takes before any of its draws, so the
+   * content is not in it. Without it (an opaque or `'none'` Surface) the content RT is refracted alone (spec §5.1) and
+   * its empty texels refract as black; a `'none'` Surface takes no capture, so its glass never costs a framebuffer copy.
    */
   screen?: ReturnType<typeof viewportMipTexture> | undefined
   /** Panel with `screen`: the mip level of the behind-the-plane sample (default: the element's own roughness level). */
@@ -32,11 +34,15 @@ export interface GlassMaterialOptions {
   screenLift?: number | undefined
   /** Backdrop luma per instance (Task 23); default: 1×1 black, i.e. never darken. `setLuma` swaps it. */
   luma?: Texture | undefined
-  /** Screen only: where the refracted sample hits something nearer than the glass, sample straight through instead. */
+  /**
+   * Screen, or panel with `screen` (its behind-the-plane sample): where the refracted sample hits something nearer than
+   * the glass, sample straight through instead.
+   */
   depthReject?: boolean | undefined
   /**
-   * Screen with `depthReject`: the depth capture to read, shared (e.g. by a slab's two faces: one depth copy per render
-   * instead of one per face) and disposed by its owner; default: a new `DepthCapture` this material owns.
+   * With `depthReject`: the depth capture to read, shared (e.g. by a slab's two faces and the element glass on it: one
+   * depth copy per render instead of one per draw) and disposed by its owner; default: a new `DepthCapture` this
+   * material owns.
    */
   depth?: DepthCapture | undefined
 }
@@ -166,8 +172,9 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   /** Panel: the capture behind the content plane, composited under the content RT's transparent texels. */
   const behind = o.backdrop === 'panel' && o.screen ? o.screen as TextureNode : null
   // one base node for every depth sample: its clones share one captured depth texture (one copy per target)
-  const ownDepth = o.backdrop === 'screen' && o.depthReject && !o.depth ? new DepthCapture() : null
-  const sceneDepth = o.backdrop === 'screen' && o.depthReject ? o.depth ?? ownDepth : null
+  const rejects = o.depthReject === true && (o.backdrop === 'screen' || behind !== null)
+  const ownDepth = rejects && !o.depth ? new DepthCapture() : null
+  const sceneDepth = rejects ? o.depth ?? ownDepth : null
 
   const m = new MeshPhysicalNodeMaterial()
   m.transparent = true; m.depthWrite = false; m.depthTest = true
@@ -224,9 +231,13 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
       const P = inside.sub(V.mul(t2))
       const content = contentTex.sample(planeUV(P)).level(lod)
       if (!behind) return { c: content.rgb, t1 }
-      // premultiplied content over what is behind the plane there (the capture predates this Surface's draws)
-      const back = mix(behind.sample(screenUVOf(P)).level(behindLevel).rgb, vec3(1), behindLift)
-      return { c: content.rgb.add(back.mul(float(1).sub(content.a))), t1 }
+      // premultiplied content over what is behind the plane there: a glass Surface's slab capture, taken at the slab
+      // (that Surface's first draw), so it predates the content quad and holds no content to count twice
+      const puv = screenUVOf(P)
+      let under: Node<'vec3'> = behind.sample(puv).level(behindLevel).rgb
+      // as the slab does: something nearer than the glass was captured there, so look straight through
+      if (sceneDepth) under = select(linearDepth(sceneDepth.sample(puv)).lessThan(linearDepth()), behind.sample(screenUV).level(behindLevel).rgb, under)
+      return { c: content.rgb.add(mix(under, vec3(1), behindLift).mul(float(1).sub(content.a))), t1 }
     }
     const suv = screenUVOf(inside)
     let c: Node<'vec3'> = screen!.sample(suv).level(lod).rgb

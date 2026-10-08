@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { CustomBlending, FrontSide, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3 } from 'three'
+import { CustomBlending, FrontSide, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
@@ -50,6 +50,14 @@ function nodesOf(root: unknown): GraphNode[] {
   }
   return [...seen]
 }
+/** Every node any of `m`'s node slots (`colorNode`, `backdropNode`, `castShadowNode`…) reaches. */
+function materialGraph(m: Material): GraphNode[] {
+  return Object.entries(m).filter(([k, v]) => k.endsWith('Node') && typeof (v as { getChildren?: unknown } | null)?.getChildren === 'function').flatMap(([, v]) => nodesOf(v))
+}
+/** The node types whose draws copy the framebuffer (or depth buffer) first. */
+const CAPTURES = ['ViewportTextureNode', 'ViewportDepthTextureNode']
+/** A Surface's element glass draws (back and front). */
+const elementGlass = (s: Surface) => meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.glassBack || m.renderOrder === SURFACE_ORDER.glassFront)
 
 describe('Surface', () => {
   it('builds the object graph and fills batches on tick', () => {
@@ -410,19 +418,32 @@ describe('Surface', () => {
     s.dispose()
     expect(depthFreed).toBe(1); expect(captureFreed).toBeGreaterThan(0)
   })
-  it('element glass sees the Surface\'s own screen capture under transparent content (glass: through the slab\'s frost)', () => {
-    const glassDraws = (s: Surface) => meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.glassBack || m.renderOrder === SURFACE_ORDER.glassFront)
+  it('element glass on a glass Surface sees the slab\'s captures under transparent content, through the slab\'s frost', () => {
     const graph = (ms: Mesh[]) => ms.flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode))
-    const bases = (ms: Mesh[]) => new Set(graph(ms).filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!()))
-    const glass = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
-    const slab = meshes(glass).filter(m => m.renderOrder === SURFACE_ORDER.slab)
-    expect(bases(glassDraws(glass)).size).toBe(1)
-    expect(bases(glassDraws(glass))).toEqual(bases(slab))          // one capture per Surface, shared with the slab
-    expect(graph(glassDraws(glass)).some(n => n.constructor.type === 'ConstNode' && n.value === SLAB_FROST.roughness * 8)).toBe(true)
-    const none = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx })
-    expect(bases(glassDraws(none)).size).toBe(1)
+    const bases = (ms: Mesh[], type: string) => new Set(graph(ms).filter(n => n.constructor.type === type).map(n => n.getBase!()))
+    const c: SurfaceContext = { ...ctx }
+    const glass = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, c)
+    const slab = () => meshes(glass).filter(m => m.renderOrder === SURFACE_ORDER.slab)
+    expect(bases(elementGlass(glass), 'ViewportTextureNode').size).toBe(1)
+    expect(bases(elementGlass(glass), 'ViewportTextureNode')).toEqual(bases(slab(), 'ViewportTextureNode'))   // the slab's capture: no second copy
+    expect(graph(elementGlass(glass)).some(n => n.constructor.type === 'ConstNode' && n.value === SLAB_FROST.roughness * 8)).toBe(true)
+    // with the depth reject, the slab's one depth capture too; without it, none
+    expect(bases(elementGlass(glass), 'ViewportDepthTextureNode').size).toBe(1)
+    expect(bases(elementGlass(glass), 'ViewportDepthTextureNode')).toEqual(bases(slab(), 'ViewportDepthTextureNode'))
+    glass.setQuality({ ...ctx.quality, depthReject: false })
+    expect(bases(elementGlass(glass), 'ViewportDepthTextureNode').size).toBe(0)
+    expect(bases(elementGlass(glass), 'ViewportTextureNode')).toEqual(bases(slab(), 'ViewportTextureNode'))
     const opaque = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: '#ffffff' }, { ...ctx })
-    expect(bases(glassDraws(opaque)).size).toBe(0)                 // an opaque content RT hides nothing
+    expect(bases(elementGlass(opaque), 'ViewportTextureNode').size).toBe(0)   // an opaque content RT hides nothing
+  })
+  it('a \'none\' Surface takes no capture: its element glass refracts the content RT alone', () => {
+    for (const s of [new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx }), new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'none' }, { ...ctx })]) {
+      const draws = [...meshes(s), ...meshes(s.contentPass.scene)]
+      expect(elementGlass(s)).toHaveLength(2)
+      expect(draws.flatMap(m => materialGraph(m.material as Material)).filter(n => CAPTURES.includes(n.constructor.type!))).toEqual([])
+      const sampled = elementGlass(s).flatMap(m => materialGraph(m.material as Material)).filter(n => n.isTextureNode).map(n => n.value)
+      expect(sampled).toContain(s.contentPass.texture)
+    }
   })
   it('repeated identical rebuilds keep exactly one live set of glass draws and never free the shared capture', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
@@ -518,6 +539,23 @@ describe('background slab shaders (generated under Node)', () => {
           const out = buildShaders(m.material as MeshPhysicalNodeMaterial, s.backgroundGlass!.geometry, forceWebGL)
           expect(out.fragment).toContain('discard')
         }
+      } finally { spy.mockRestore() }
+      expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
+    })
+    it(`${forceWebGL ? 'GLSL' : 'WGSL'}: a 'none' Surface's draws copy nothing first; a glass Surface's element glass reuses the slab's copies`, () => {
+      const warnings: string[] = []
+      const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
+      const copies = (m: Mesh) => buildShaders(m.material as MeshPhysicalNodeMaterial, m.geometry, forceWebGL).updateBefore
+        .filter(n => CAPTURES.includes(n.constructor.type!)).map(n => n.getBase!())
+      try {
+        const none = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, ctx)
+        const draws = [...meshes(none), ...meshes(none.contentPass.scene)]
+        expect(draws.length).toBeGreaterThanOrEqual(6)   // content quad, element glass ×2, rims; panels, pools
+        for (const m of draws) expect(copies(m)).toEqual([])
+        const glass = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, ctx)
+        const slabCopies = new Set(meshes(glass).filter(m => m.renderOrder === SURFACE_ORDER.slab).flatMap(copies))
+        expect(slabCopies.size).toBe(2)                     // one framebuffer and one depth capture
+        for (const m of elementGlass(glass)) expect(new Set(copies(m))).toEqual(slabCopies)
       } finally { spy.mockRestore() }
       expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
     })

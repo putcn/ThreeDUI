@@ -5,7 +5,8 @@ import { WebGPURenderer, NodeMaterial } from 'three/webgpu'
  * Builds a material's real shaders under Node with three's own node builder, the way the renderer does for a mesh
  * (lights, and for `shadowPass` its shadow-map material carrying this material's cast-shadow nodes). The backend never
  * initialises without a GPU, so its two init-time lookups are stubbed. Internal r186 API; the GPU compile itself is
- * the Task 21 browser checkpoint. `varyings`: the interpolated inter-stage variables, by name.
+ * the Task 21 browser checkpoint. `varyings`: the interpolated inter-stage variables, by name. `updateBefore`: the nodes
+ * the renderer runs before each draw of this mesh (a viewport capture's framebuffer or depth copy is one).
  */
 export function buildShaders(material: NodeMaterial, geometry: BufferGeometry, forceWebGL: boolean, shadowPass = false) {
   const canvas = { width: 300, height: 150, style: {}, addEventListener() {}, removeEventListener() {}, getContext: () => null }
@@ -26,5 +27,6 @@ export function buildShaders(material: NodeMaterial, geometry: BufferGeometry, f
   if (!shadowPass) { const lights = renderer.lighting.getNode(scene, camera); lights.setLights([sun, hemi]); b.lightsNode = lights }
   b.build()
   const varyings = (b.varyings as { name: string; needsInterpolation: boolean }[]).filter(v => v.needsInterpolation)
-  return { vertex: b.vertexShader as string, fragment: b.fragmentShader as string, varyings: varyings.map(v => v.name) }
+  const updateBefore = b.updateBeforeNodes as { constructor: { type?: string }; getBase?(): unknown }[]
+  return { vertex: b.vertexShader as string, fragment: b.fragmentShader as string, varyings: varyings.map(v => v.name), updateBefore }
 }

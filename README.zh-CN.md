@@ -45,7 +45,7 @@ pnpm install
 pnpm playground         # http://127.0.0.1:5176 ，基于 @glassui/core + @glassui/render 的注册表单和世界层场景
 ```
 
-查询参数：`?scene=signup|world|both`（默认 `both`）、`?quality=high|medium|low|minimal`（默认自适应）、`?webgl` 强制 WebGL2 后端。拖动背景可环绕观察（表单固定在屏幕上，世界层面板随场景移动）。HUD 显示后端、帧率、UI draw call 数、质量档位和 Surface 数。`pnpm playground:build` 把静态构建输出到 `examples/playground/dist`。
+查询参数：`?scene=signup|world|both`（默认 `both`）、`?quality=high|medium|low|minimal`（默认自适应）、`?webgl` 强制 WebGL2 后端。拖动背景可环绕观察（表单固定在屏幕上，世界层面板随场景移动）。HUD 显示后端、帧率、每帧 draw call 总数（整帧：内容 pass、阴影贴图、宿主场景和 UI）、质量档位和 Surface 数。`pnpm playground:build` 把静态构建输出到 `examples/playground/dist`。
 
 原来的 spike 仍保留作对比：
 

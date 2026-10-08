@@ -212,6 +212,29 @@ describe('createGlassMaterial: what lies behind the content plane (panel)', () =
     g.dispose()
     expect(freed).toBe(0)
   })
+  it('with the depth reject, the behind sample reads a given depth capture (never freed), else its own; no capture, no depth', () => {
+    const b = new GlassBatch(); b.update([inst], s)
+    const depthBases = (g: ReturnType<typeof createGlassMaterial>) =>
+      new Set(nodesOf(g.material.backdropNode).filter(n => n.constructor.type === 'ViewportDepthTextureNode').map(n => (n as unknown as Capture).getBase()))
+    const panel = { geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface, content: new Texture() } as const
+    expect(depthBases(createGlassMaterial({ ...panel, depthReject: true })).size).toBe(0)   // nothing behind the plane to reject
+    const depth = new DepthCapture()
+    const given = createGlassMaterial({ ...panel, screen: new ScreenCapture(), depthReject: true, depth })
+    expect(depthBases(given)).toEqual(new Set([depth]))
+    const copy = depth.getTextureForReference({} as never)
+    let freed = 0
+    copy.addEventListener('dispose', () => { freed++ })
+    given.dispose()
+    expect(freed).toBe(0)
+    const own = createGlassMaterial({ ...panel, screen: new ScreenCapture(), depthReject: true })
+    const [base] = [...depthBases(own)] as Capture[]
+    expect(depthBases(own).size).toBe(1)
+    const ownCopy = base!.getTextureForReference({})
+    let ownFreed = 0
+    ownCopy.addEventListener('dispose', () => { ownFreed++ })
+    own.dispose()
+    expect(ownFreed).toBe(1)
+  })
 })
 
 describe('glass material shaders (generated under Node)', () => {
@@ -222,22 +245,33 @@ describe('glass material shaders (generated under Node)', () => {
       const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
       try {
         const b = new GlassBatch(); b.update([inst], s)
-        const make = (backdrop: 'panel' | 'screen', side: 'front' | 'back', behind = false) =>
+        // behind: a glass Surface's element glass (the slab's capture under the content), `reject` with its depth too
+        const make = (backdrop: 'panel' | 'screen', side: 'front' | 'back', behind = false, reject = false) =>
           createGlassMaterial({
             geometry: b.geometry, K: b.K, backdrop, side, surface,
-            ...(backdrop === 'panel' ? { content: new Texture(), ...(behind ? { screen: new ScreenCapture(), screenLevel: 3.2, screenLift: 0.1 } : {}) } : { depthReject: true }),
+            ...(backdrop === 'panel'
+              ? { content: new Texture(), ...(behind ? { screen: new ScreenCapture(), screenLevel: 3.2, screenLift: 0.1, ...(reject ? { depthReject: true, depth: new DepthCapture() } : {}) } : {}) }
+              : { depthReject: true }),
           }).material
-        for (const [backdrop, side, behind] of [['panel', 'front', false], ['panel', 'back', false], ['screen', 'front', false], ['panel', 'front', true], ['panel', 'back', true]] as const) {
-          const out = buildShaders(make(backdrop, side, behind), b.geometry, forceWebGL)
+        const variants = [
+          ['panel', 'front', false, false], ['panel', 'back', false, false], ['screen', 'front', false, false],
+          ['panel', 'front', true, false], ['panel', 'back', true, false], ['panel', 'front', true, true], ['panel', 'back', true, true],
+        ] as const
+        for (const [backdrop, side, behind, reject] of variants) {
+          const out = buildShaders(make(backdrop, side, behind, reject), b.geometry, forceWebGL)
           // 8 packs, the slab normal, three's view position and direction; WebGPU guarantees 16 inter-stage variables and
           // WebGL2 15 varying vectors, and three's runtime extras (fog, log depth…) need room
           expect(out.varyings.length, out.varyings.join(' ')).toBeLessThanOrEqual(11)
           expect(out.fragment).toContain('discard')   // the clip mask
           // the refraction offset (slab units) is scaled to view units by the packed slab-z-to-view factor
           if (side === 'front') expect(out.fragment).toContain('vGlassMisc.w')
+          // what the renderer copies before the draw: the framebuffer with a capture, the depth buffer with the reject
+          const copies = out.updateBefore.map(n => n.constructor.type)
+          expect(copies.includes('ViewportTextureNode')).toBe(backdrop === 'screen' || behind)
+          expect(copies.includes('ViewportDepthTextureNode')).toBe(backdrop === 'screen' || reject)
         }
-        for (const behind of [false, true]) {
-          const shadow = buildShaders(make('panel', 'front', behind), b.geometry, forceWebGL, true)
+        for (const [behind, reject] of [[false, false], [true, false], [true, true]] as const) {
+          const shadow = buildShaders(make('panel', 'front', behind, reject), b.geometry, forceWebGL, true)
           expect(shadow.fragment).toContain('discard')  // clipped glass casts no shadow
         }
       } finally { spy.mockRestore() }
