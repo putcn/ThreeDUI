@@ -197,15 +197,20 @@ const input = (cy: number, iconName: IconName, placeholder: string, trailing?: I
 input(345, 'user', 'Full name')
 input(455, 'mail', 'Email address')
 input(565, 'lock', 'Password', 'eye')
-// terms checkbox (flat box inside a glass pill) + remember-me toggle
+// terms: crystal checkbox button + text on the panel; remember-me toggle right-aligned with the inputs
 {
-  const terms = pill(440, 72, 342, 680)
-  checkbox(terms.mesh, 40, 160 - 357, 0, terms.thickness, '#6b63f5')
-  put(terms.mesh, label('I agree to the Terms & Privacy', { size: U(21), weight: 500, color: '#3a3a48', align: 'left' }), 196 - 357, 0, terms.thickness)
-  put(PANEL.mesh, label('Remember me', { size: U(20), weight: 500, color: '#3a3a48', align: 'left' }), 590 - 512, 680 - 642, TOP)
-  const KNOB_X = 136 / 2 - 7 - 24    // half width − margin − knob radius
-  const tg = pill(136, 62, 838, 680, GLOWING(BLUE, 1.1, 0.5 + KNOB_X / 136, 0.012))
-  put(tg.mesh, circle(U(48), '#ffffff', { shadow: 0.014 }), KNOB_X, 0, tg.thickness)
+  const L = 122, R = 882
+  const cb = pill(44, 44, L + 22, 680, { radius: U(12), thickness: U(14), fillet: U(4), filletBottom: U(2) })
+  put(cb.mesh, icon('check', U(30), '#6b63f5', 0.14), 0, 0, cb.thickness)
+  put(PANEL.mesh, label('I agree to the Terms & Privacy', { size: U(21), weight: 500, color: '#3a3a48', align: 'left' }), L + 44 + 16 - 512, 680 - 642, TOP)
+  const TW = 136, TH = 62, KNOB = 48
+  const tcx = R - TW / 2
+  const KNOB_X = TW / 2 - 7 - KNOB / 2
+  const tg = pill(TW, TH, tcx, 680, GLOWING(BLUE, 1.1, 0.5 + KNOB_X / TW, 0.012))
+  put(tg.mesh, circle(U(KNOB), '#ffffff', { shadow: 0.014 }), KNOB_X, 0, tg.thickness)
+  const lbl = label('Remember me', { size: U(20), weight: 500, color: '#3a3a48' })
+  const lblW = lbl.geometry.parameters.width / U(1)
+  put(PANEL.mesh, lbl, tcx - TW / 2 - 16 - lblW / 2 - 512, 680 - 642, TOP)
 }
 // primary action
 {

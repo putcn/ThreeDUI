@@ -65,18 +65,14 @@ export function icon(name: IconName, size: number, color = '#1c1c22', stroke = 0
     case 'lock': ctx.beginPath(); ctx.roundRect(0.26 * px, 0.46 * px, 0.48 * px, 0.36 * px, 0.06 * px); ctx.stroke(); ctx.beginPath(); ctx.arc(0.5 * px, 0.42 * px, 0.16 * px, Math.PI, 0); ctx.stroke(); break
     case 'eye': ctx.beginPath(); ctx.moveTo(0.2 * px, 0.5 * px); ctx.quadraticCurveTo(0.5 * px, 0.15 * px, 0.8 * px, 0.5 * px); ctx.quadraticCurveTo(0.5 * px, 0.85 * px, 0.2 * px, 0.5 * px); ctx.stroke(); ctx.beginPath(); ctx.arc(0.5 * px, 0.5 * px, 0.1 * px, 0, Math.PI * 2); ctx.stroke(); break
     case 'apple': {
+      // Apple mark outline (24×24 viewBox), scaled to fit
+      const path = new Path2D('M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701')
+      ctx.save()
+      ctx.translate(px * 0.1, px * 0.08)
+      ctx.scale(px * 0.8 / 24, px * 0.8 / 24)
       ctx.fillStyle = color
-      // body: two lobes + rounded bottom
-      ctx.beginPath(); ctx.arc(0.40 * px, 0.56 * px, 0.235 * px, 0, Math.PI * 2); ctx.fill()
-      ctx.beginPath(); ctx.arc(0.60 * px, 0.56 * px, 0.235 * px, 0, Math.PI * 2); ctx.fill()
-      ctx.beginPath(); ctx.ellipse(0.5 * px, 0.64 * px, 0.30 * px, 0.25 * px, 0, 0, Math.PI * 2); ctx.fill()
-      ctx.beginPath(); ctx.rect(0.165 * px, 0.56 * px, 0.67 * px, 0.14 * px); ctx.fill()
-      ctx.globalCompositeOperation = 'destination-out'
-      ctx.beginPath(); ctx.arc(0.80 * px, 0.47 * px, 0.11 * px, 0, Math.PI * 2); ctx.fill()        // bite
-      ctx.beginPath(); ctx.arc(0.50 * px, 0.305 * px, 0.075 * px, 0, Math.PI * 2); ctx.fill()      // top dip
-      ctx.beginPath(); ctx.ellipse(0.5 * px, 0.93 * px, 0.14 * px, 0.08 * px, 0, 0, Math.PI * 2); ctx.fill() // bottom notch
-      ctx.globalCompositeOperation = 'source-over'
-      ctx.beginPath(); ctx.ellipse(0.565 * px, 0.21 * px, 0.055 * px, 0.11 * px, -0.75, 0, Math.PI * 2); ctx.fill() // leaf
+      ctx.fill(path)
+      ctx.restore()
       break
     }
     case 'google': {
