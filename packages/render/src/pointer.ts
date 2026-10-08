@@ -106,11 +106,13 @@ const FAR = -1e6
  * A press captures (as `setPointerCapture` does in the DOM): until up/cancel, moves and the up go to the pressed Surface
  * (`active`) at the ray's point on its content plane, even off its quad or over another Surface, and no other Surface
  * is hovered. Otherwise moves hover the Surface under the pointer (`hovered`), and the one left behind gets its hover
- * cleared. Keys go to `active`, the Surface last pressed (pressing another Surface, or nothing, blurs its focus).
+ * cleared. Keys go to `active`, the Surface last pressed (pressing another Surface, or nothing, blurs its focus); before
+ * any press, the topmost interactive Surface is adopted. Tab steps through its focusables and is prevented, except past
+ * the last (Shift+Tab: before the first), which blurs and lets the browser move focus out of the canvas.
  * `handle` is the testable core; `attach` wires the canvas events to it.
  */
 export class PointerBridge {
-  /** The Surface last pressed: it holds the capture while pressed, and receives the keys. */
+  /** The Surface last pressed (or adopted by a key): it holds the capture while pressed, and receives the keys. */
   active: Surface | null = null
   /** The Surface whose tracker holds the hover. */
   hovered: Surface | null = null
@@ -173,6 +175,16 @@ export class PointerBridge {
     this.active = s
   }
 
+  /**
+   * The way in for keys before any press (Tab onto the canvas): the topmost shown, interactive, error-free Surface,
+   * by `drawOrder` (ties: list order).
+   */
+  private adopt(): Surface | null {
+    let best: Surface | null = null
+    for (const s of this.opts.surfaces()) if (s.interactive && !s.error && shown(s.contentMesh) && (!best || s.drawOrder > best.drawOrder)) best = s
+    return best
+  }
+
   handle(type: BridgeEventType, e: BridgeEvent): void {
     if (e.isPrimary === false) return
     const ptype: PointerType = e.pointerType === 'touch' || e.pointerType === 'pen' || e.pointerType === 'xr' ? e.pointerType : 'mouse'
@@ -200,7 +212,9 @@ export class PointerBridge {
         break
       }
       case 'pointerup': {
-        if (e.button !== undefined && e.button !== 0) break
+        // pointerup comes with the LAST button released (a chord: left down, right down, left up, right up → button 2),
+        // so a held press ends on any button; only a stray up (no press) is filtered like a down
+        if (!this.pressing && e.button !== undefined && e.button !== 0) break
         const hit = this.cast(e)
         const s = this.pressing ? this.active : hit?.surface ?? null
         const captured = this.pressing
@@ -233,11 +247,20 @@ export class PointerBridge {
         break
       }
       case 'keydown': case 'keyup': {
-        const s = this.active
-        if (!s || !e.key) break
+        if (!e.key) break
+        const s = this.active ?? this.adopt()
+        if (!s) break
+        this.active = s
         const tab = e.key === 'Tab', down = type === 'keydown'
+        if (tab && down) {
+          // the way out: Tab past the last focusable (Shift+Tab before the first) blurs, and the browser moves focus on
+          const list = s.focus.focusables(), cur = s.focus.current
+          if (cur && cur === (e.shiftKey ? list[0] : list[list.length - 1])) { s.focus.focus(null); break }
+          s.focus.key(e.shiftKey ? 'Shift+Tab' : 'Tab', true)
+          if (s.focus.current) e.preventDefault?.()   // nothing to focus: Tab leaves the canvas too
+          break
+        }
         s.focus.key(tab && e.shiftKey ? 'Shift+Tab' : e.key, down)
-        if (tab && down && s.focus.current) e.preventDefault?.()   // nothing to focus: Tab may leave the canvas
         break
       }
     }

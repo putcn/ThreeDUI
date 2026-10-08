@@ -252,11 +252,25 @@ describe('PointerBridge.handle', () => {
     bridge.handle('pointermove', { clientX: 450, clientY: 350, pointerId: 1 })   // no capture left: hover follows
     expect(bridge.hovered).toBe(b); expect(bb.state.hover).toBe(true)
   })
+  it('a chorded release ends the press: pointerup comes with the LAST button released', () => {
+    const { a, b, ab, bb, bridge } = two()
+    const click = vi.fn(); a.events.on(ab, 'click', click)
+    bridge.handle('pointerdown', { clientX: 100, clientY: 100, pointerId: 1, button: 0 })
+    bridge.handle('pointermove', { clientX: 100, clientY: 100, pointerId: 1, button: 2 })   // right down: a move
+    bridge.handle('pointermove', { clientX: 100, clientY: 100, pointerId: 1, button: 0 })   // left up: a move
+    bridge.handle('pointerup', { clientX: 100, clientY: 100, pointerId: 1, button: 2 })
+    expect(ab.state.pressed).toBe(false); expect(click).toHaveBeenCalledTimes(1)
+    bridge.handle('pointermove', { clientX: 450, clientY: 350 })                             // no capture left
+    expect(bb.state.hover).toBe(true); expect(bridge.hovered).toBe(b)
+  })
   it('ignores secondary pointers and non-primary buttons', () => {
     const { s, btn, bridge } = scene()
     const click = vi.fn(); s.events.on(btn, 'click', click)
+    const ups = vi.fn(); s.events.on(btn, 'pointerup', ups)
     bridge.handle('pointerdown', { clientX: 200, clientY: 140, pointerId: 1, button: 2 })
     expect(btn.state.pressed).toBe(false); expect(bridge.active).toBeNull()
+    bridge.handle('pointerup', { clientX: 200, clientY: 140, pointerId: 1, button: 2 })     // a stray non-primary up
+    expect(ups).not.toHaveBeenCalled()
     bridge.handle('pointerdown', { clientX: 200, clientY: 140, pointerId: 1, pointerType: 'touch', button: 0, isPrimary: true })
     bridge.handle('pointerdown', { clientX: 600, clientY: 500, pointerId: 2, pointerType: 'touch', isPrimary: false })
     bridge.handle('pointermove', { clientX: 600, clientY: 500, pointerId: 2, pointerType: 'touch', isPrimary: false })
@@ -305,8 +319,39 @@ describe('PointerBridge.handle', () => {
     expect(preventB).not.toHaveBeenCalled()                                         // Tab may leave the canvas
     bridge.handle('pointerdown', { clientX: 2000, clientY: 2000, pointerId: 1 })
     expect(bridge.active).toBeNull()
-    bridge.handle('keydown', { key: 'Tab' })                                        // no active Surface: dropped
-    expect(a.focus.current).toBeNull()
+  })
+  it('a key with no active Surface adopts the topmost shown, interactive, error-free one', () => {
+    const { a, b, ab, bb, bridge } = two()
+    ab.setProp('tabIndex', 0); bb.setProp('tabIndex', 0)
+    const prevent = vi.fn()
+    bridge.handle('keydown', { key: 'Tab', preventDefault: prevent })              // Tab onto the canvas, no click yet
+    expect(bridge.active).toBe(b); expect(b.focus.current).toBe(bb); expect(prevent).toHaveBeenCalledTimes(1)
+    bridge.active = null; b.focus.focus(null); b.interactive = false
+    bridge.handle('keydown', { key: 'Tab' })
+    expect(bridge.active).toBe(a); expect(a.focus.current).toBe(ab)
+    bridge.active = null; a.focus.focus(null); b.interactive = true; b.error = new Error('boom')
+    bridge.handle('keydown', { key: 'Tab' }); expect(bridge.active).toBe(a)
+    bridge.active = null; a.focus.focus(null); b.error = null; b.visible = false
+    bridge.handle('keydown', { key: 'Tab' }); expect(bridge.active).toBe(a)
+    bridge.active = null; a.focus.focus(null); b.visible = true; b.drawOrder = a.drawOrder   // tie: list order
+    bridge.handle('keydown', { key: 'Tab' }); expect(bridge.active).toBe(a)
+    bridge.active = null; a.focus.focus(null)
+    const esc = vi.fn(); a.events.on(a.root, 'keyup', esc)
+    bridge.handle('keyup', { key: 'Escape' })                                       // any key adopts, not only Tab
+    expect(bridge.active).toBe(a); expect(esc).toHaveBeenCalledTimes(1)
+  })
+  it('Tab past the last focusable (Shift+Tab before the first) blurs and lets the browser move focus out', () => {
+    const { s, btn, bridge } = scene()
+    const btn2 = new Node('glass', 'btn2'); btn2.setStyle({ position: 'absolute', left: 400, top: 100, width: 100, height: 80 }); btn2.setProp('tabIndex', 0)
+    s.root.appendChild(btn2); s.tick(0)
+    const tab = (shiftKey = false) => { const preventDefault = vi.fn(); bridge.handle('keydown', { key: 'Tab', shiftKey, preventDefault }); return preventDefault }
+    expect(tab()).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn)
+    expect(tab()).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn2)
+    expect(tab()).not.toHaveBeenCalled(); expect(s.focus.current).toBeNull(); expect(btn2.state.focused).toBe(false)
+    expect(tab()).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn)          // Tab back in: the first again
+    expect(tab(true)).not.toHaveBeenCalled(); expect(s.focus.current).toBeNull(); expect(btn.state.focused).toBe(false)
+    expect(tab(true)).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn2)     // Shift+Tab back in: the last
+    expect(tab(true)).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn)
   })
   it('attach wires the DOM events and sets tabIndex', () => {
     const { bridge, canvas } = scene()
