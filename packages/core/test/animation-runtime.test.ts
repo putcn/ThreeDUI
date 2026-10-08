@@ -5,6 +5,7 @@ import { createYogaLayout, type LayoutEngine } from '../src/layout/yoga'
 import { AnimationRuntime } from '../src/animation/runtime'
 import { ease } from '../src/animation/easing'
 import { defaultTheme as theme } from '../src/style/theme'
+import { buildRenderList } from '../src/renderlist'
 
 let engine: LayoutEngine
 beforeAll(async () => { engine = await createYogaLayout() })
@@ -193,5 +194,33 @@ describe('AnimationRuntime', () => {
     btn.setStyle({ radius: 'sm' })                // 8
     rt.tick(s.root, 0.1)
     expect(btn.visual!.radius).toBeCloseTo(14, 5) // halfway from 20, not from 24
+  })
+  it('resolves a concentric root radius against the surface corner radius it is given', () => {
+    const { s, btn } = button()                   // at (10, 10) in 300 × 200: inset 10
+    s.cornerRadius = 24
+    s.root.setStyle({ radius: 'concentric' })     // the root follows the surface's corners (24), the button nests in it
+    btn.setStyle({ radius: 'concentric', transition: { radius: { duration: 0.2, easing: 'linear' } } })
+    const drawn = buildRenderList(s, theme, 'light').glass[0]!.radius
+    expect(drawn).toBe(14)                        // 24 − 10, as the render list draws it
+    const rt = new AnimationRuntime(theme, 'light')
+    rt.tick(s.root, 1 / 60, s.cornerRadius)
+    btn.setStyle({ radius: 'sm' })                // 8
+    rt.tick(s.root, 0.1, s.cornerRadius)
+    expect(btn.visual!.radius).toBeCloseTo(11, 5) // halfway from 14; without the corner radius it would start at 0
+  })
+  it('forget drops one root\'s state and visuals and keeps the others\'', () => {
+    const a = button(), b = button()
+    const rt = new AnimationRuntime(theme, 'light')
+    rt.tick(a.s.root, 1 / 60); rt.tick(b.s.root, 1 / 60)
+    a.btn.setState({ pressed: true }); b.btn.setState({ pressed: true })
+    rt.tick(a.s.root, 1 / 60); rt.tick(b.s.root, 1 / 60)
+    const both = rt.active
+    expect(a.btn.visual).not.toBeNull()
+    rt.forget(a.s.root)
+    expect(a.btn.visual).toBeNull()
+    expect(rt.active).toBe(both / 2)              // b's channels only
+    expect(rt.tick(b.s.root, 1 / 60)).toBe(true)
+    expect(rt.tick(a.s.root, 1 / 60)).toBe(false) // first sight again: nothing animates from the dropped state
+    expect(a.btn.visual).toBeNull()
   })
 })

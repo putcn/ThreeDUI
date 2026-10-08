@@ -57,8 +57,19 @@ export class AnimationRuntime {
   get active(): number { let n = 0; for (const a of this.state.values()) n += a.channels.size; return n }
   reset(node: Node): void { this.state.delete(node); if (node.visual) node.setVisual(null) }
 
-  /** Advances by `dt` seconds; returns true while any channel is still moving. */
-  tick(root: Node, dt: number): boolean {
+  /**
+   * Drops the state of every node last seen under `root` and clears their visual values (a disposed surface's tree).
+   */
+  forget(root: Node): void {
+    for (const [n, a] of [...this.state]) if (a.root === root) { this.state.delete(n); if (n.visual) n.setVisual(null) }
+  }
+
+  /**
+   * Advances by `dt` seconds; returns true while any channel is still moving. Call it after layout: targets are read
+   * from the fresh layout. `cornerRadius` is the radius a `concentric` root resolves against (the surface's corners,
+   * as `buildRenderList` takes `SurfaceModel.cornerRadius`).
+   */
+  tick(root: Node, dt: number, cornerRadius = 0): boolean {
     const seen = new Set<Node>()
     let moving = false
     const visit = (n: Node, parentRadius: number, parentW: number, parentH: number): void => {
@@ -74,7 +85,7 @@ export class AnimationRuntime {
       }
       for (const c of n.children) visit(c, radius, rect.width, rect.height)
     }
-    visit(root, 0, root.layout.width, root.layout.height)
+    visit(root, cornerRadius, root.layout.width, root.layout.height)
     for (const [n, a] of [...this.state]) if (a.root === root && !seen.has(n)) { this.state.delete(n); if (n.visual) n.setVisual(null) }
     return moving
   }
