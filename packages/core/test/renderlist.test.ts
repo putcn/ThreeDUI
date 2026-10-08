@@ -2,7 +2,8 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import { Node } from '../src/node'
 import { createYogaLayout, type LayoutEngine } from '../src/layout/yoga'
 import { createSurface } from '../src/surface'
-import { buildRenderList, type RenderList } from '../src/renderlist'
+import { buildRenderList, sortKey, type RenderList } from '../src/renderlist'
+import { IDENTITY, apply } from '../src/transform2d'
 import { effectiveStyle } from '../src/style/effective'
 import { defaultTheme as theme, resolveColor } from '../src/style/theme'
 import type { Style } from '../src/style/schema'
@@ -63,7 +64,7 @@ describe('buildRenderList rules', () => {
     const rl = buildRenderList(form().s, theme, 'light')
     expect(rl.panels[0]!.z).toBe(1)   // root 0, card 1
     expect(rl.glass[0]!.z).toBe(2)
-    expect(rl.text[0]!.z).toBe(3)
+    expect(rl.text[0]!.z).toBe(sortKey(3, 'content'))
     const s = layout(surface(
       box('box', 'gone', { display: 'none' }, box('box', 'inner', { bg: 'fill' })),
       box('box', 'after', { bg: 'fill' }),
@@ -172,8 +173,8 @@ describe('buildRenderList rules', () => {
     const side = box('box', 'side', { left: 200, top: 0, width: 20, height: 20, bg: 'fill' })
     const outer = box('box', 'outer', { left: 50, top: 0, width: 300, height: 60, radius: 20, overflow: 'scroll' }, list, side)
     const rl = buildRenderList(layout(surface(outer)), theme, 'light')
-    const clip = { x: 60, y: 10, width: 100, height: 50, radius: 10 }   // the inner rect intersection, the innermost radius
-    expect(rl.panels.find(p => p.node.id === 'side')!.clip).toEqual({ x: 50, y: 0, width: 300, height: 60, radius: 20 })
+    const clip = { x: 60, y: 10, width: 100, height: 50, radius: 10, transform: IDENTITY }   // the inner rect intersection, the innermost radius
+    expect(rl.panels.find(p => p.node.id === 'side')!.clip).toEqual({ x: 50, y: 0, width: 300, height: 60, radius: 20, transform: IDENTITY })
     expect(rl.glass[0]).toMatchObject({ rect: { x: 60, y: 30, width: 80, height: 40 }, clip })
     expect(rl.decorations.map(d => d.clip)).toEqual([clip, clip])
     expect(rl.images[0]).toMatchObject({ src: 'a.png', rect: { x: 60, y: -20, width: 30, height: 30 }, clip, elevation: 0 })
@@ -259,7 +260,8 @@ describe('buildRenderList rules', () => {
     const rl = buildRenderList(layout(surface(plain, styled)), theme, 'dark')
     expect(rl.text[0]).toEqual({
       node: plain, rect: plain.layout, text: 'Hi', font: { family: 'system-ui', size: theme.fontSize.base, weight: 400 },
-      color: resolveColor('label', theme, 'dark'), align: 'left', lineHeight: 22, letterSpacing: 0, wrap: true, z: 1, elevation: 0, scale: 1,
+      color: resolveColor('label', theme, 'dark'), align: 'left', lineHeight: 22, letterSpacing: 0, wrap: true, z: sortKey(1, 'content'),
+      elevation: 0, scale: 1, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity: 1,
     })
     expect(rl.text[1]).toMatchObject({
       text: '', font: { family: 'mono', size: theme.fontSize.sm, weight: 700 }, color: resolveColor('accent', theme, 'dark'),
@@ -314,5 +316,73 @@ describe('createSurface', () => {
     expect(createSurface({ width: 1, height: 1 }).id).toMatch(/^surface-\d+$/)
     expect(createSurface({ width: 1, height: 1, placement: 'world', background: 'glass', ptPerUnit: 100, cornerRadius: 12 }))
       .toMatchObject({ placement: 'world', background: 'glass', ptPerUnit: 100, cornerRadius: 12 })
+  })
+})
+
+describe('transform, opacity and clip composition (Plan 2 seams)', () => {
+  function tree() {
+    const s = createSurface({ id: 't', width: 400, height: 400 })
+    const outer = new Node('box', 'outer'); outer.setStyle({ position: 'absolute', left: 100, top: 100, width: 200, height: 200, bg: 'fill', scale: 0.5, opacity: 0.5, overflow: 'hidden', radius: 20 })
+    const inner = new Node('box', 'inner'); inner.setStyle({ position: 'absolute', left: 50, top: 50, width: 100, height: 100, bg: 'accent', scale: 2, opacity: 0.5 })
+    const glass = new Node('glass', 'g'); glass.setStyle({ position: 'absolute', left: 0, top: 0, width: 40, height: 40 }); glass.tilt = { x: 0.1, y: 0 }
+    const label = new Node('text', 'l'); label.setProp('value', 'x')
+    s.root.appendChild(outer); outer.appendChild(inner); inner.appendChild(glass); glass.appendChild(label)
+    engine.compute(s.root, 400, 400, () => ({ width: 10, height: 10 }))
+    return { s, outer, inner, glass, label }
+  }
+  it('composes scale about each node centre down the chain', () => {
+    const { s } = tree()
+    const rl = buildRenderList(s, theme, 'light')
+    const outer = rl.panels.find(p => p.node.id === 'outer')!, inner = rl.panels.find(p => p.node.id === 'inner')!
+    // outer: 200×200 at (100,100), centre (200,200), scale .5 → its own corner maps to (150,150)
+    expect(apply(outer.transform, 100, 100)).toEqual([150, 150])
+    // inner: 100×100 at (150,150), centre (200,200): scale 2 about its centre, then outer's .5 about (200,200) → net 1 about (200,200)
+    expect(apply(inner.transform, 150, 150)).toEqual([150, 150])
+    expect(inner.scale).toBe(1)
+  })
+  it('multiplies opacity down the tree and carries tilt', () => {
+    const { s } = tree()
+    const rl = buildRenderList(s, theme, 'light')
+    expect(rl.panels.find(p => p.node.id === 'inner')!.opacity).toBeCloseTo(0.25)
+    expect(rl.glass[0]!.opacity).toBeCloseTo(0.25)
+    expect(rl.text[0]!.opacity).toBeCloseTo(0.25)
+    expect(rl.glass[0]!.tilt).toEqual({ x: 0.1, y: 0 })
+    expect(rl.text[0]!.tilt).toEqual({ x: 0, y: 0 })
+  })
+  it('clips carry the clipping ancestor transform and stay in its untransformed space', () => {
+    const { s } = tree()
+    const rl = buildRenderList(s, theme, 'light')
+    const inner = rl.panels.find(p => p.node.id === 'inner')!
+    expect(inner.clip).toMatchObject({ x: 100, y: 100, width: 200, height: 200, radius: 20 })
+    expect(apply(inner.clip!.transform, 100, 100)).toEqual([150, 150])
+  })
+  it('orders pool < glass < content < rim within one node and uses sortKey', () => {
+    const { s } = tree()
+    const rl = buildRenderList(s, theme, 'light')
+    const g = rl.glass[0]!, pool = rl.decorations.find(d => d.kind === 'pool')!, rim = rl.decorations.find(d => d.kind === 'rim')!
+    expect(pool.z).toBe(sortKey(g.z, 'pool')); expect(rim.z).toBe(sortKey(g.z, 'rim'))
+    expect(rl.text[0]!.z).toBe(sortKey(g.z + 1, 'content'))        // the label is the glass node's only child: next pre-order index
+    expect(pool.z).toBeLessThan(g.z); expect(g.z).toBeLessThan(sortKey(g.z, 'content')); expect(sortKey(g.z, 'content')).toBeLessThan(rim.z)
+    // The label is another node: its content, at the next pre-order index, draws above the glass's rim (as in Plan 1).
+    expect(rim.z).toBeLessThan(rl.text[0]!.z)
+  })
+  it('reads visual values instead of style and layout targets', () => {
+    const { s, outer, inner } = tree()
+    outer.setVisual({ x: 110, y: 100, scale: 1, opacity: 1 })
+    inner.setVisual({ bg: [0, 1, 0, 1], radius: 7, elevation: 3 })
+    const rl = buildRenderList(s, theme, 'light')
+    const o = rl.panels.find(p => p.node.id === 'outer')!, i = rl.panels.find(p => p.node.id === 'inner')!
+    expect(o.rect.x).toBe(110); expect(o.scale).toBe(1)
+    expect(i.rect.x).toBe(160)                       // child follows the parent's visual position
+    expect(i.color).toEqual([0, 1, 0, 1]); expect(i.radius).toBe(7); expect(i.elevation).toBe(3)
+    expect(i.opacity).toBeCloseTo(0.5)               // own .5 × parent's visual 1
+  })
+  it('visual glass values override resolved glass params', () => {
+    const { s, glass } = tree()
+    glass.setStyle({ glass: { glow: { color: 'accent', strength: 1 } } })
+    glass.setVisual({ glass: { glowStrength: 0.25, thickness: 3, glowColor: [1, 0, 0, 1] } })
+    const rl = buildRenderList(s, theme, 'light')
+    expect(rl.glass[0]!.params.glow).toEqual({ color: [1, 0, 0, 1], strength: 0.25 })
+    expect(rl.glass[0]!.params.thickness).toBe(3)
   })
 })

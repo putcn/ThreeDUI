@@ -6,7 +6,7 @@ import { defaultTheme, resolveRadius, type Theme } from '../style/theme'
 const finiteOr0 = (v: unknown): number => { const n = Number(v ?? 0); return Number.isFinite(n) ? n : 0 }
 
 /** How far a `scroll` node shifts its children: `props.scrollX/scrollY` (non-finite counts as 0). */
-function scrollOffset(n: Node): { x: number; y: number } {
+export function scrollOffset(n: Node): { x: number; y: number } {
   return n.type === 'scroll' ? { x: finiteOr0(n.props.scrollX), y: finiteOr0(n.props.scrollY) } : { x: 0, y: 0 }
 }
 
