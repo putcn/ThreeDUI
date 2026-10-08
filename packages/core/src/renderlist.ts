@@ -1,7 +1,8 @@
 import type { Node, Rect } from './node'
 import type { Style } from './style/schema'
 import { effectiveStyle } from './style/effective'
-import { resolveColor, resolveFontSize, resolveRadius, type ColorScheme, type RGBA, type Theme } from './style/theme'
+import { resolveColor, resolveRadius, type ColorScheme, type RGBA, type Theme } from './style/theme'
+import { resolveTextStyle } from './style/text'
 import { absoluteRect } from './events/hit'
 import type { SurfaceModel } from './surface'
 
@@ -15,8 +16,11 @@ export interface ClipRect extends Rect { radius: number }
 export interface ResolvedGlass { thickness: number; fillet: number; filletBottom: number; profile: 'fillet' | 'lens'; scatter: number; lift: number; edgeGlow: number; ior: number; dispersion: number; roughness: number; tint: RGBA | null; absorption: number; glow: { color: RGBA; strength: number; split?: number } | null; cornerExponent: number; envIntensity: number; specularIntensity: number; innerGlow: number; adaptive: boolean; variant: 'regular' | 'clear' }
 export interface PanelInstance { node: Node; rect: Rect; radius: number; color: RGBA; border?: { width: number; color: RGBA }; clip?: ClipRect; z: number; elevation: number; opacity: number }
 export interface GlassInstance { node: Node; rect: Rect; radius: number; z: number; elevation: number; params: ResolvedGlass; clip?: ClipRect }
-/** `rect` is the content box (the node's rect minus its padding); `maxLines`, `lineHeight`, `letterSpacing` and `wrap` are present only when the style sets them. */
-export interface TextInstance { node: Node; rect: Rect; text: string; font: { family: string; size: number; weight: number }; color: RGBA; align: 'left' | 'center' | 'right'; maxLines?: number; lineHeight?: number; letterSpacing?: number; wrap?: boolean; z: number; elevation: number; clip?: ClipRect }
+/**
+ * `rect` is the content box (the node's rect minus its padding). Typography comes from `resolveTextStyle`:
+ * `lineHeight` and `letterSpacing` are pt; `maxLines` is present only when the style sets it.
+ */
+export interface TextInstance { node: Node; rect: Rect; text: string; font: { family: string; size: number; weight: number }; color: RGBA; align: 'left' | 'center' | 'right'; lineHeight: number; letterSpacing: number; wrap: boolean; maxLines?: number; z: number; elevation: number; clip?: ClipRect }
 /** Rides on its glass node: `rim` just above it (`z + 0.5`), `pool` just below it (`z - 0.25`), same elevation and clip. */
 export interface DecorationInstance { node: Node; kind: 'rim' | 'pool'; rect: Rect; radius: number; color: RGBA; strength: number; z: number; elevation: number; clip?: ClipRect }
 export interface ImageInstance { node: Node; rect: Rect; src: unknown; radius: number; z: number; elevation: number; clip?: ClipRect }
@@ -99,11 +103,11 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
       rl.panels.push({ node: n, rect, radius, color, ...defined({ border }), ...clipped, z: myZ, elevation, opacity: s.opacity ?? 1 })
     }
     if (n.type === 'text') {
+      const t = resolveTextStyle(n, theme, scheme)
       rl.text.push({
         node: n, rect: contentBox(rect, s), text: String(n.props.value ?? ''),
-        font: { family: s.font ?? 'system', size: resolveFontSize(s.fontSize, theme), weight: s.fontWeight ?? 500 },
-        color: resolveColor(s.color ?? 'label', theme, scheme), align: s.textAlign ?? 'left',
-        ...defined({ maxLines: s.maxLines, lineHeight: s.lineHeight, letterSpacing: s.letterSpacing, wrap: s.wrap }),
+        font: { family: t.family, size: t.size, weight: t.weight }, color: t.color, align: t.align,
+        lineHeight: t.lineHeight, letterSpacing: t.letterSpacing, wrap: t.wrap, ...defined({ maxLines: t.maxLines }),
         z: myZ, elevation, ...clipped,
       })
     }

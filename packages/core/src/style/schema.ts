@@ -60,7 +60,9 @@ const Base = z.object({
   shadow: Token.optional(),
   opacity: z.number().min(0).max(1).optional(),
   font: Token.optional(), fontSize: z.union([Pt, Token]).optional(), fontWeight: z.number().int().min(100).max(900).optional(),
-  lineHeight: z.number().optional(), letterSpacing: z.number().optional(),
+  // lineHeight is a unitless multiplier of the font size (CSS semantics; 1.3 when unset); letterSpacing is pt.
+  // Both are resolved, with the other typography defaults, by resolveTextStyle (style/text.ts).
+  lineHeight: z.number().positive().optional(), letterSpacing: z.number().optional(),
   textAlign: z.enum(['left', 'center', 'right']).optional(), color: Token.optional(),
   maxLines: z.number().int().min(1).optional(), wrap: z.boolean().optional(),
   glass: GlassParamsSchema.partial().optional(),

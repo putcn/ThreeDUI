@@ -224,17 +224,17 @@ describe('buildRenderList rules', () => {
     expect(buildRenderList(s, theme, 'light').text[0]!.rect).toEqual({ x: 20, y: 30, width: 80, height: 20 })
   })
 
-  it('resolves text defaults and forwards optional typography only when set', () => {
+  it('resolves text with resolveTextStyle: lineHeight in pt, letterSpacing and wrap always, maxLines only when set', () => {
     const plain = box('text', 'plain', { width: 50, height: 20 }); plain.setProp('value', 'Hi')
     const styled = box('text', 'styled', { width: 50, height: 20, font: 'mono', fontSize: 'sm', fontWeight: 700, color: 'accent', maxLines: 2, lineHeight: 1.4, letterSpacing: 0.5, wrap: false })
     const rl = buildRenderList(layout(surface(plain, styled)), theme, 'dark')
     expect(rl.text[0]).toEqual({
-      node: plain, rect: plain.layout, text: 'Hi', font: { family: 'system', size: theme.fontSize.base, weight: 500 },
-      color: resolveColor('label', theme, 'dark'), align: 'left', z: 1, elevation: 0,
+      node: plain, rect: plain.layout, text: 'Hi', font: { family: 'system-ui', size: theme.fontSize.base, weight: 400 },
+      color: resolveColor('label', theme, 'dark'), align: 'left', lineHeight: 22, letterSpacing: 0, wrap: true, z: 1, elevation: 0,
     })
     expect(rl.text[1]).toMatchObject({
       text: '', font: { family: 'mono', size: theme.fontSize.sm, weight: 700 }, color: resolveColor('accent', theme, 'dark'),
-      maxLines: 2, lineHeight: 1.4, letterSpacing: 0.5, wrap: false,
+      maxLines: 2, lineHeight: 20, letterSpacing: 0.5, wrap: false,   // 1.4 × 14 pt = 19.6
     })
   })
 })
