@@ -2,7 +2,13 @@ import { GlassUIError } from '../errors'
 import type { Style } from './schema'
 
 export type ColorScheme = 'light' | 'dark'
+/** sRGB-encoded floats in 0..1 (not linear); conversion to linear happens in the renderer. */
 export type RGBA = [number, number, number, number]
+
+/** Own-property lookup so user tokens never resolve to Object.prototype members. */
+function own<T>(table: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined
+}
 
 export interface Theme {
   colors: { light: Record<string, string>; dark: Record<string, string> }
@@ -47,9 +53,15 @@ export function resolveColor(token: string, theme: Theme, scheme: ColorScheme): 
     return c
   }
   const m = /^rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(token)
-  if (m) return [Number(m[1]) / 255, Number(m[2]) / 255, Number(m[3]) / 255, m[4] === undefined ? 1 : Number(m[4])]
+  if (m) {
+    const [r, g, b] = [Number(m[1]), Number(m[2]), Number(m[3])]
+    const a = m[4] === undefined ? 1 : Number(m[4])
+    const inRange = (x: number, max: number) => x >= 0 && x <= max // false for NaN
+    if (![r, g, b].every(x => inRange(x, 255)) || !inRange(a, 1)) throw new GlassUIError('color', `非法颜色 "${token}"`)
+    return [r / 255, g / 255, b / 255, a]
+  }
   const table = theme.colors[scheme]
-  const hex = table[token]
+  const hex = own(table, token)
   if (hex === undefined) throw new GlassUIError('color', `未知颜色 token "${token}"`, { allowed: Object.keys(table), got: token })
   return resolveColor(hex, theme, scheme)
 }
@@ -59,7 +71,7 @@ export function resolveRadius(v: Style['radius'], theme: Theme, width: number, h
   if (typeof v === 'number') return v
   if (v === 'capsule') return Math.min(width, height) / 2
   if (v === 'concentric') return Math.max(parentRadius - inset, 0)
-  const r = theme.radius[v]
+  const r = own(theme.radius, v)
   if (r === undefined) throw new GlassUIError('style.radius', `未知 radius token "${v}"`, { allowed: [...Object.keys(theme.radius), 'capsule', 'concentric'], got: v })
   return r
 }
@@ -67,7 +79,7 @@ export function resolveRadius(v: Style['radius'], theme: Theme, width: number, h
 export function resolveFontSize(v: Style['fontSize'], theme: Theme): number {
   if (v === undefined) return theme.fontSize.base!
   if (typeof v === 'number') return v
-  const s = theme.fontSize[v]
+  const s = own(theme.fontSize, v)
   if (s === undefined) throw new GlassUIError('style.fontSize', `未知 fontSize token "${v}"`, { allowed: Object.keys(theme.fontSize), got: v })
   return s
 }

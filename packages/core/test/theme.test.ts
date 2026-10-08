@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { defaultTheme, resolveColor, resolveRadius, resolveFontSize } from '../src/style/theme'
+import { GlassUIError } from '../src/errors'
 
 describe('theme', () => {
   it('resolves semantic colour tokens per scheme', () => {
@@ -15,6 +16,20 @@ describe('theme', () => {
   })
   it('throws a GlassUIError for unknown tokens with a suggestion', () => {
     expect(() => resolveColor('acent', defaultTheme, 'light')).toThrow('你可能想要：accent')
+  })
+  it('rejects rgba() channels outside 0–255 and alpha outside 0–1', () => {
+    expect(() => resolveColor('rgba(300, 0, 0, 1)', defaultTheme, 'light')).toThrow(GlassUIError)
+    expect(() => resolveColor('rgba(300, 0, 0, 1)', defaultTheme, 'light')).toThrow('[color] 非法颜色 "rgba(300, 0, 0, 1)"')
+    expect(() => resolveColor('rgba(0, 0, 0, 1.5)', defaultTheme, 'light')).toThrow('[color] 非法颜色 "rgba(0, 0, 0, 1.5)"')
+    expect(() => resolveColor('rgb(1.2.3, 0, 0)', defaultTheme, 'light')).toThrow('[color] 非法颜色')
+  })
+  it('does not resolve Object.prototype keys as tokens', () => {
+    expect(() => resolveColor('constructor', defaultTheme, 'light')).toThrow(GlassUIError)
+    expect(() => resolveColor('constructor', defaultTheme, 'light')).toThrow('允许值：accent')
+    expect(() => resolveRadius('toString', defaultTheme, 200, 80)).toThrow(GlassUIError)
+    expect(() => resolveRadius('toString', defaultTheme, 200, 80)).toThrow('[style.radius] 未知 radius token "toString"')
+    expect(() => resolveFontSize('valueOf', defaultTheme)).toThrow(GlassUIError)
+    expect(() => resolveFontSize('valueOf', defaultTheme)).toThrow('[style.fontSize] 未知 fontSize token "valueOf"')
   })
   it('resolves radius keywords', () => {
     expect(resolveRadius('capsule', defaultTheme, 200, 80)).toBe(40)
