@@ -10,8 +10,9 @@ function tabIndexOf(n: Node): number {
 
 /**
  * Keyboard focus for the tree under `root`.
- * Tab order: nodes with `props.tabIndex >= 0`, ascending, ties in tree order (so 0 comes first, unlike the DOM);
- * disabled nodes and `display: 'none'` subtrees (read from the effective style, so state branches count) are skipped.
+ * Tab order follows the DOM: nodes with a positive `props.tabIndex` first, ascending (equal values in tree order),
+ * then the nodes with `tabIndex` 0 in tree order; negative or missing values stay out of the Tab order.
+ * Disabled nodes and `display: 'none'` subtrees (read from the effective style, so state branches count) are skipped.
  * `focus()` also takes nodes without a tabIndex (like the DOM's `tabIndex = -1`), but never one that is detached,
  * disabled or hidden. `state.focused` is updated (through `Node.setState`) before `blur`/`focus` (which do not
  * bubble) are dispatched; a `blur` listener that moves focus elsewhere wins over the focus change that blurred it.
@@ -32,7 +33,8 @@ export class FocusManager {
       for (const c of n.children) visit(c)
     }
     visit(this.root)
-    return out.sort((a, b) => a.tab - b.tab).map(o => o.n)   // sort is stable: ties keep tree order
+    const positive = out.filter(o => o.tab > 0).sort((a, b) => a.tab - b.tab)   // sort is stable: ties keep tree order
+    return [...positive, ...out.filter(o => o.tab === 0)].map(o => o.n)
   }
 
   /** `blur` on the old node, then `focus` on `node`; `null` just blurs. A no-op for nodes that cannot take focus. */

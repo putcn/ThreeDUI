@@ -12,19 +12,27 @@ function tree() {
 }
 
 describe('FocusManager', () => {
-  it('orders focusables by tabIndex then tree order, skipping disabled', () => {
+  it('orders focusables as the DOM does: positive tabIndex ascending, then tabIndex 0 in tree order, skipping disabled', () => {
     const t = tree()
-    expect(t.fm.focusables().map(n => n.id)).toEqual(['a', 'c', 'b'])
+    expect(t.fm.focusables().map(n => n.id)).toEqual(['c', 'b', 'a'])
+  })
+  it('keeps tree order among equal positive tabIndex values and among zeros, nested nodes included', () => {
+    const t = tree()
+    const group = new Node('box', 'group'), z2 = new Node('box', 'z2'), c2 = new Node('box', 'c2'), neg = new Node('box', 'neg')
+    group.setProp('tabIndex', 0); z2.setProp('tabIndex', 0); c2.setProp('tabIndex', 1); neg.setProp('tabIndex', -1)
+    group.appendChild(c2); group.appendChild(z2)
+    t.root.insertBefore(group, t.a); t.root.appendChild(neg)
+    expect(t.fm.focusables().map(n => n.id)).toEqual(['c2', 'c', 'b', 'group', 'z2', 'a'])
   })
   it('moves focus with Tab and Shift+Tab, wrapping, and emits focus/blur', () => {
     const t = tree(); const log: string[] = []
     for (const n of [t.a, t.b, t.c]) { t.d.on(n, 'focus', () => log.push(`focus:${n.id}`)); t.d.on(n, 'blur', () => log.push(`blur:${n.id}`)) }
     t.fm.key('Tab'); t.fm.key('Tab'); t.fm.key('Tab'); t.fm.key('Tab')
-    expect(t.fm.current?.id).toBe('a')
+    expect(t.fm.current?.id).toBe('c')
     t.fm.key('Shift+Tab')
-    expect(t.fm.current?.id).toBe('b')
-    expect(log.slice(0, 4)).toEqual(['focus:a', 'blur:a', 'focus:c', 'blur:c'])
-    expect(t.a.state.focused).toBe(false); expect(t.b.state.focused).toBe(true)
+    expect(t.fm.current?.id).toBe('a')
+    expect(log.slice(0, 4)).toEqual(['focus:c', 'blur:c', 'focus:b', 'blur:b'])
+    expect(t.c.state.focused).toBe(false); expect(t.a.state.focused).toBe(true)
   })
   it('routes other keys to the focused node', () => {
     const t = tree(); let got = ''
@@ -48,15 +56,15 @@ describe('FocusManager edge cases', () => {
     panel.setStyle({ display: 'none' }); inner.setProp('tabIndex', 0); panel.appendChild(inner)
     nul.setProp('tabIndex', null); str.setProp('tabIndex', '1')   // null is what a renderer sets when a prop is removed
     t.root.appendChild(panel); t.root.appendChild(nul); t.root.appendChild(str)
-    expect(t.fm.focusables().map(n => n.id)).toEqual(['a', 'c', 'str', 'b'])
+    expect(t.fm.focusables().map(n => n.id)).toEqual(['c', 'str', 'b', 'a'])
   })
   it('starts Shift+Tab from the last focusable, and clears focus when nothing is focusable', () => {
     const t = tree()
     t.fm.key('Shift+Tab')
-    expect(t.fm.current?.id).toBe('b')
+    expect(t.fm.current?.id).toBe('a')
     for (const n of [t.a, t.b, t.c]) n.setState({ disabled: true })
     expect(() => t.fm.key('Tab')).not.toThrow()
-    expect(t.fm.current).toBeNull(); expect(t.b.state.focused).toBe(false)
+    expect(t.fm.current).toBeNull(); expect(t.a.state.focused).toBe(false)
   })
   it('refuses detached, disabled or hidden nodes and drops focus when the focused node becomes one', () => {
     const t = tree(); const stray = new Node('box', 'stray'); stray.setProp('tabIndex', 0)
