@@ -29,7 +29,7 @@ describe('buildRenderList', () => {
     expect(rl.panels[0]).toMatchObject({ rect: { x: 20, y: 20, width: 200, height: 100 }, radius: theme.radius.lg, elevation: 0 })
     expect(rl.glass).toHaveLength(1)
     expect(rl.glass[0]).toMatchObject({ rect: { x: 30, y: 30, width: 120, height: 40 }, radius: 20, elevation: 4, clip: { x: 20, y: 20, width: 200, height: 100, radius: theme.radius.lg } })
-    expect(rl.glass[0]!.params.glow).toMatchObject({ strength: 1.1 }); expect(rl.glass[0]!.params.fillet).toBe(theme.glass.fillet)
+    expect(rl.glass[0]!.params.glow).toMatchObject({ strength: 1.1 }); expect(rl.glass[0]!.params.fillet).toBeCloseTo(40 * 0.06)
     expect(rl.decorations.map(d => d.kind).sort()).toEqual(['pool', 'rim'])
     expect(rl.text[0]).toMatchObject({ text: '创建账号', align: 'center', elevation: 4 })
     expect(rl.text[0]!.z).toBeGreaterThan(rl.glass[0]!.z)
@@ -95,12 +95,28 @@ describe('buildRenderList rules', () => {
     expect(pool('tinted')).toMatchObject({ color: resolveColor('accent', theme, 'light'), strength: 0.5 })
     const tinted = rl.glass.find(g => g.node.id === 'tinted')!
     expect(tinted.params).toEqual({
-      thickness: theme.glass.thickness, fillet: theme.glass.fillet, filletBottom: theme.glass.filletBottom, profile: 'fillet',
+      thickness: expect.closeTo(8), fillet: expect.closeTo(2.4), filletBottom: expect.closeTo(1.6), profile: 'fillet',   // 100 × 40
       scatter: theme.glass.scatter, lift: theme.glass.lift, edgeGlow: theme.glass.edgeGlow, ior: theme.glass.ior,
       dispersion: theme.glass.dispersion, roughness: theme.glass.roughness, tint: null, absorption: 0,
       glow: { color: resolveColor('accent', theme, 'light'), strength: 1 }, cornerExponent: 4.5,
       envIntensity: 1, specularIntensity: 1, innerGlow: 0, adaptive: true, variant: 'regular',
     })
+  })
+
+  it('scales glass thickness and fillets with the shorter side (spec §5.2) unless the style sets them', () => {
+    const s = layout(surface(
+      box('glass', 'button', { left: 0, width: 240, height: 80 }),
+      box('glass', 'tall', { left: 250, width: 60, height: 200 }),
+      box('glass', 'set', { top: 210, width: 240, height: 80, glass: { thickness: 10 } }),
+    ))
+    const params = (t: typeof theme, id: string) => buildRenderList(s, t, 'light').glass.find(g => g.node.id === id)!.params
+    const geometry = (t: typeof theme, id: string) => { const p = params(t, id); return [p.thickness, p.fillet, p.filletBottom] }
+    const close = (got: number[], want: number[]) => want.forEach((w, i) => expect(got[i]).toBeCloseTo(w))
+    close(geometry(theme, 'button'), [16, 4.8, 3.2])   // the spec's 80 pt reference button
+    close(geometry(theme, 'tall'), [12, 3.6, 2.4])     // the width is the shorter side
+    close(geometry(theme, 'set'), [10, 4.8, 3.2])      // an explicit value wins, per parameter
+    const thin = { ...theme, glass: { ...theme.glass, thicknessRatio: 0.1, filletRatio: 0.05, filletBottomRatio: 0.02 } }
+    close(geometry(thin, 'button'), [8, 4, 1.6])
   })
 
   it('takes glass defaults, including the variant, from the theme', () => {

@@ -46,12 +46,15 @@ function inset(layout: Rect, width: number, height: number): number {
   return Math.max(0, Math.min(layout.x, layout.y, width - layout.x - layout.width, height - layout.y - layout.height))
 }
 
-function resolveGlass(s: Style, theme: Theme, scheme: ColorScheme): ResolvedGlass {
+/** The glass params for a node with style `s` drawn at `rect`; unset slab geometry scales with the rect's shorter side. */
+function resolveGlass(s: Style, rect: Rect, theme: Theme, scheme: ColorScheme): ResolvedGlass {
   const g = s.glass ?? {}
   const d = theme.glass
+  const minSide = Math.min(rect.width, rect.height)
   const variant = g.variant ?? (s.bg === 'glass-clear' ? 'clear' : d.variant)   // explicit, else glass-clear, else the theme's
   return {
-    thickness: g.thickness ?? d.thickness, fillet: g.fillet ?? d.fillet, filletBottom: g.filletBottom ?? d.filletBottom, profile: g.profile ?? 'fillet',
+    thickness: g.thickness ?? minSide * d.thicknessRatio, fillet: g.fillet ?? minSide * d.filletRatio,
+    filletBottom: g.filletBottom ?? minSide * d.filletBottomRatio, profile: g.profile ?? 'fillet',
     scatter: g.scatter ?? (variant === 'clear' ? 0.02 : d.scatter), lift: g.lift ?? d.lift, edgeGlow: g.edgeGlow ?? d.edgeGlow,
     ior: g.ior ?? d.ior, dispersion: g.dispersion ?? d.dispersion, roughness: g.roughness ?? d.roughness,
     tint: g.tint ? resolveColor(g.tint, theme, scheme) : null, absorption: g.absorption ?? 0,
@@ -84,7 +87,7 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
     const radius = Math.max(0, Math.min(resolved, rect.width / 2, rect.height / 2))
     const clipped = defined({ clip })
     if (n.type === 'glass' || s.bg === 'glass' || s.bg === 'glass-clear') {
-      const params = resolveGlass(s, theme, scheme)
+      const params = resolveGlass(s, rect, theme, scheme)
       rl.glass.push({ node: n, rect, radius, z: myZ, elevation, params, ...clipped })
       rl.decorations.push(
         { node: n, kind: 'rim', rect, radius, color: [1, 1, 1, 1], strength: 1, z: myZ + 0.5, elevation, ...clipped },

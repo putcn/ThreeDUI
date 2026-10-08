@@ -16,8 +16,12 @@ export interface Theme {
   radius: Record<string, number>
   fontSize: Record<string, number>
   springs: Record<'snappy' | 'smooth' | 'bouncy', { stiffness: number; damping: number; mass: number }>
+  /**
+   * Glass defaults. The slab geometry scales with the element: thickness, top fillet and bottom fillet are these
+   * fractions of its shorter side (spec §5.2: an 80 pt-high button gets 16 / 4.8 / 3.2 pt).
+   */
   glass: {
-    thickness: number; fillet: number; filletBottom: number; scatter: number; lift: number; edgeGlow: number; ior: number; dispersion: number; roughness: number
+    thicknessRatio: number; filletRatio: number; filletBottomRatio: number; scatter: number; lift: number; edgeGlow: number; ior: number; dispersion: number; roughness: number
     envIntensity: number; specularIntensity: number; innerGlow: number; adaptive: boolean; variant: 'regular' | 'clear'
   }
   metrics: { controlPadding: number; icon: number; iconGap: number; groupGap: number; checkbox: number; checkboxRadius: number; switchWidth: number; switchHeight: number; knob: number; knobMargin: number }
@@ -37,7 +41,7 @@ export const defaultTheme: Theme = {
     bouncy: { stiffness: 300, damping: 15, mass: 1 },
   },
   glass: {
-    thickness: 16, fillet: 5, filletBottom: 3, scatter: 0.05, lift: 0.1, edgeGlow: 0.8, ior: 1.5, dispersion: 0.8, roughness: 0.06,
+    thicknessRatio: 0.2, filletRatio: 0.06, filletBottomRatio: 0.04, scatter: 0.05, lift: 0.1, edgeGlow: 0.8, ior: 1.5, dispersion: 0.8, roughness: 0.06,
     envIntensity: 1, specularIntensity: 1, innerGlow: 0, adaptive: true, variant: 'regular',
   },
   metrics: { controlPadding: 26, icon: 28, iconGap: 14, groupGap: 12, checkbox: 44, checkboxRadius: 12, switchWidth: 136, switchHeight: 62, knob: 48, knobMargin: 7 },

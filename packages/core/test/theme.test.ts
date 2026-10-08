@@ -47,7 +47,7 @@ describe('theme', () => {
   })
   it('ships a default for every glass parameter the theme owns', () => {
     expect(defaultTheme.glass).toEqual({
-      thickness: 16, fillet: 5, filletBottom: 3, scatter: 0.05, lift: 0.1, edgeGlow: 0.8, ior: 1.5, dispersion: 0.8, roughness: 0.06,
+      thicknessRatio: 0.2, filletRatio: 0.06, filletBottomRatio: 0.04, scatter: 0.05, lift: 0.1, edgeGlow: 0.8, ior: 1.5, dispersion: 0.8, roughness: 0.06,
       envIntensity: 1, specularIntensity: 1, innerGlow: 0, adaptive: true, variant: 'regular',
     })
   })
