@@ -11,19 +11,26 @@ import { InstancedBufferGeometry, Float32BufferAttribute, Sphere, Vector3 } from
 //   ring  K+1        wall top
 //   rings K+2..2K+1  top round-over, α = (ring−K−1)/K · π/2 (ring 2K+1 is the plateau edge)
 //   ring  2K+2       plateau centre (one vertex)
-//   ring  2K+3       back centre (one vertex); the back face is ring 0 fanned to it with reversed winding
+//   ring  2K+3       back centre (one vertex)
+//   ring  2K+4       back rim: ring 0's anchors/angles and position, but a flat (0, 0, −1) normal; the back face is
+//                    this ring fanned to the back centre with reversed winding (its own vertices, so the back face is
+//                    not smoothed into ring 0's side normals — a split-normal seam, welded by position to ring 0)
+// Vertex order follows the ring id: rings 0..2K+1 at index ring·M, the two centres at (2K+2)M and (2K+2)M+1, then the
+// back rim from (2K+2)M+2.
 // The lens profile (profile 1) uses the same 2K+2 rings as one convex bevel from the rim (ring 0) to the plateau edge.
 
 export interface SlabInstanceParams { width: number; height: number; radius: number; thickness: number; fillet: number; filletBottom: number; cornerExponent: number; profile: 0 | 1 }
 export interface SlabVertex { ax: number; ay: number; angle: number; ring: number }
 
 /**
- * `cos`/`sin` magnitudes below this are taken as exactly 0. The `slab` attribute stores the contour angle as float32,
- * so a quadrant-boundary vertex (angle kπ/2) yields |cos| or |sin| ≈ 1e-7 rather than 0, and `pow(·, 2/n)` magnifies
- * that (≈1e-4 units at n = 4.5), pulling the vertex off the straight edge. No other contour sample comes near the
- * threshold: the nearest has |cos| = sin(π/2S) (≈ 0.16 at S = 10).
+ * `cos`/`sin` magnitudes below this are taken as exactly 0 — here and in the TSL vertex stage, which imports it.
+ * The `slab` attribute stores the contour angle as float32, so a quadrant-boundary vertex (angle kπ/2) yields |cos| or
+ * |sin| ≈ 1e-7 on the CPU rather than 0, and on the GPU WGSL only bounds f32 sin/cos to 2⁻¹¹ ≈ 4.9e-4 absolute error
+ * inside [−π, π] (none outside; our angles reach 2π). `pow(·, 2/n)` magnifies such a residual (≈1e-4 units at
+ * n = 4.5 from 1e-7; ≈0.034·r from 4.9e-4), pulling the vertex off the straight edge. No other contour sample comes
+ * near the threshold: the nearest has |cos| = sin(π/2S) (≈ 0.16 at S = 10, ≈ 0.0245 at S = 64; above 2e-3 up to S ≈ 785).
  */
-const AXIS_SNAP = 1e-4
+export const AXIS_SNAP = 2e-3
 
 /** The clamped profile numbers: bottom round-over, top round-over, straight wall, max inset, lens bezel. */
 export function slabProfile(p: SlabInstanceParams): { fb: number; f: number; wall: number; maxInset: number; bezel: number } {
@@ -57,7 +64,8 @@ function profileAt(ring: number, K: number, p: SlabInstanceParams): { inset: num
 export function evalSlabVertex(v: SlabVertex, p: SlabInstanceParams, K: number): { position: [number, number, number]; normal: [number, number, number] } {
   if (v.ring === 2 * K + 2) return { position: [0, 0, p.thickness], normal: [0, 0, 1] }
   if (v.ring === 2 * K + 3) return { position: [0, 0, 0], normal: [0, 0, -1] }
-  const { inset, z, nr, nz } = profileAt(v.ring, K, p)
+  const back = v.ring === 2 * K + 4   // back rim: positioned exactly as ring 0, normal replaced by the flat (0, 0, −1)
+  const { inset, z, nr, nz } = profileAt(back ? 0 : v.ring, K, p)
   const n = p.cornerExponent
   // the contour inset by `inset`: a rounded rect whose corners are superellipse quadrants of radius r centred at (±cx, ±cy)
   const hw = p.width / 2 - inset, hh = p.height / 2 - inset
@@ -75,7 +83,7 @@ export function evalSlabVertex(v: SlabVertex, p: SlabInstanceParams, K: number):
   // tilt the horizontal contour normal by the profile normal: radial part along (ox, oy), vertical part nz
   const nx = ox * nr, ny = oy * nr
   const l = Math.hypot(nx, ny, nz) || 1
-  return { position: [px, py, z], normal: [nx / l, ny / l, nz / l] }
+  return { position: [px, py, z], normal: back ? [0, 0, -1] : [nx / l, ny / l, nz / l] }
 }
 
 /** The shared base mesh: attribute `slab` = (anchor.x, anchor.y, angle, ring); see the ring layout in the file comment. */
@@ -96,7 +104,8 @@ export function createSlabBaseGeometry(K = 8, S = 8): InstancedBufferGeometry {
   const top = (2 * K + 1) * M
   for (let i = 0; i < M; i++) indices.push(centreF, top + i, top + (i + 1) % M)
   const centreB = slab.length / 4; slab.push(0, 0, 0, 2 * K + 3)
-  for (let i = 0; i < M; i++) indices.push(centreB, (i + 1) % M, i)
+  const rimB = slab.length / 4; pushRing(2 * K + 4)
+  for (let i = 0; i < M; i++) indices.push(centreB, rimB + (i + 1) % M, rimB + i)
   const g = new InstancedBufferGeometry()
   g.setAttribute('slab', new Float32BufferAttribute(slab, 4))
   g.setIndex(indices)
