@@ -1,0 +1,1 @@
+{ "name": "spike-glyph-cjk", "private": true, "type": "module", "dependencies": { "@pmndrs/glyph": "^0.1.0", "three": "^0.186.1" } }

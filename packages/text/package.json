@@ -1,0 +1,7 @@
+{
+  "name": "@glassui/text",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "devDependencies": { "@napi-rs/canvas": "^1.0.10" }
+}
