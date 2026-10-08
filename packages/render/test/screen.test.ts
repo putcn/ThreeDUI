@@ -14,9 +14,9 @@ beforeAll(async () => {
   ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), quality: { contentType: 'byte', contentScale: 1, backFaces: false, depthReject: false } }
 })
 
-/** CSS px (from the viewport's top-left) of `s`'s local point (x, y) seen through `cam`. */
-function px(s: Surface, cam: PerspectiveCamera | OrthographicCamera, x: number, y: number, vw: number, vh: number): [number, number] {
-  const p = new Vector3(x, y, 0).applyMatrix4(s.matrixWorld).project(cam)
+/** CSS px (from the viewport's top-left) of `s`'s local point (x, y, z) seen through `cam`. */
+function px(s: Surface, cam: PerspectiveCamera | OrthographicCamera, x: number, y: number, vw: number, vh: number, z = 0): [number, number] {
+  const p = new Vector3(x, y, z).applyMatrix4(s.matrixWorld).project(cam)
   return [(p.x + 1) / 2 * vw, (1 - p.y) / 2 * vh]
 }
 
@@ -79,16 +79,46 @@ describe('ScreenLayer', () => {
     const box = new Surface({ width: 40, height: 20, ptPerUnit: 1, placement: 'screen' }, ctx)
     layer.place(fill, { fill: true }); layer.place(box, { left: 10, top: 10 })
     expect([...layer.surfaces]).toEqual([fill, box])
-    layer.update(cam, { width: 800, height: 600 })
-    layer.update(cam, { width: 1024, height: 768 }); layer.updateMatrixWorld(true)
+    layer.update(cam, { width: 800, height: 600 }); layer.updateMatrixWorld(true)
+    cam.position.set(1, -1, 6)
+    layer.update(cam, { width: 1024, height: 768 })   // no updateMatrixWorld: `update` leaves the world matrices current
+    expect(new Vector3().setFromMatrixPosition(layer.matrixWorld).toArray()).toEqual(layer.position.toArray())
     expect(fill.model.width).toBe(1024); expect(fill.model.height).toBe(768)
     expect(box.position.x).toBe(10 + 20 - 512); expect(box.position.y).toBe(384 - (10 + 10))
+    expect(box.position.z).toBe(0); expect(fill.position.z).toBe(0)   // +0: no glass background, no sink (and no −0)
     const [l, t] = px(box, cam, -20, 10, 1024, 768)
     expect(l).toBeCloseTo(10, 4); expect(t).toBeCloseTo(10, 4)
     layer.update(cam, { width: 0, height: 0 })
     expect(layer.viewport).toEqual({ width: 1, height: 1 })
     expect(Number.isFinite(layer.scale.x)).toBe(true)
     expect(fill.model.width).toBe(1); expect(fill.model.height).toBe(1)
+  })
+  it('a glass-background fill surface has its content plane exactly on the viewport', () => {
+    const cam = new PerspectiveCamera(50, 800 / 600, 0.1, 100); cam.position.set(1, 2, 3); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true)
+    const layer = new ScreenLayer()
+    const s = new Surface({ width: 10, height: 10, ptPerUnit: 1, placement: 'screen', background: 'glass' }, ctx)
+    layer.place(s, { fill: true })
+    layer.update(cam, { width: 800, height: 600 }); layer.updateMatrixWorld(true)
+    const z = s.contentPlaneZ
+    expect(z).toBeGreaterThan(1)   // the slab thickness follows the 800×600 size
+    expect(s.position.z).toBe(-z)
+    const tl = new Vector3(-400, 300, z).applyMatrix4(s.matrixWorld).project(cam)
+    const br = new Vector3(400, -300, z).applyMatrix4(s.matrixWorld).project(cam)
+    expect(tl.x).toBeCloseTo(-1, 6); expect(tl.y).toBeCloseTo(1, 6); expect(br.x).toBeCloseTo(1, 6); expect(br.y).toBeCloseTo(-1, 6)
+  })
+  it('a placed glass-background surface has its content-plane top-left at the CSS offset (scale included)', () => {
+    const cam = new PerspectiveCamera(50, 800 / 600, 0.1, 100); cam.position.set(-2, 1, 4); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true)
+    const layer = new ScreenLayer()
+    const s = new Surface({ width: 200, height: 100, ptPerUnit: 1, placement: 'screen', background: 'glass' }, ctx)
+    s.scale.setScalar(0.5)
+    layer.place(s, { left: 20, top: 30 })
+    layer.update(cam, { width: 800, height: 600 }); layer.updateMatrixWorld(true)
+    const z = s.contentPlaneZ
+    expect(z).toBeGreaterThan(0)
+    expect(s.position.z).toBe(-z * 0.5)
+    const [l, t] = px(s, cam, -100, 50, 800, 600, z), [r, b] = px(s, cam, 100, -50, 800, 600, z)
+    expect(l).toBeCloseTo(20, 4); expect(t).toBeCloseTo(30, 4)
+    expect(r).toBeCloseTo(120, 4); expect(b).toBeCloseTo(80, 4)
   })
   it('rejects a surface whose ptPerUnit is not 1', () => {
     const layer = new ScreenLayer()
