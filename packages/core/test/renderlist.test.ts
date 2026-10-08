@@ -142,12 +142,16 @@ describe('buildRenderList rules', () => {
     })
   })
 
-  it('gives capsules a circular corner exponent unless one is set', () => {
+  it('gives capsules a circular corner exponent unless one is set; rim and pool carry their glass\'s exponent', () => {
     const s = layout(surface(
       box('glass', 'pill', { width: 100, height: 40, radius: 'capsule' }),
       box('glass', 'squircle', { width: 100, height: 40, radius: 'capsule', glass: { cornerExponent: 5 } }),
+      box('glass', 'round', { width: 100, height: 40, radius: 20 }),   // a capsule's radius, not written 'capsule': 4.5
     ))
-    expect(buildRenderList(s, theme, 'light').glass.map(g => g.params.cornerExponent)).toEqual([2, 5])
+    const rl = buildRenderList(s, theme, 'light')
+    expect(rl.glass.map(g => g.params.cornerExponent)).toEqual([2, 5, 4.5])
+    const of = (kind: 'rim' | 'pool') => rl.glass.map(g => rl.decorations.find(d => d.kind === kind && d.node === g.node)!.cornerExponent)
+    expect(of('rim')).toEqual([2, 5, 4.5]); expect(of('pool')).toEqual([2, 5, 4.5])
   })
 
   it('layers each glass node as pool < glass < rim < its children, with no ties between neighbours', () => {

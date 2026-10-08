@@ -41,8 +41,11 @@ export interface GlassInstance extends InstanceTransform { node: Node; rect: Rec
  * `lineHeight` and `letterSpacing` are pt; `maxLines` is present only when the style sets it.
  */
 export interface TextInstance extends InstanceTransform { node: Node; rect: Rect; text: string; font: { family: string; size: number; weight: number }; color: RGBA; align: 'left' | 'center' | 'right'; lineHeight: number; letterSpacing: number; wrap: boolean; maxLines?: number; z: number; clip?: ClipRect }
-/** Rides on its glass node: `rim` just above it, `pool` just below it (see `sortKey`), same elevation, transform, opacity and clip. */
-export interface DecorationInstance extends InstanceTransform { node: Node; kind: 'rim' | 'pool'; rect: Rect; radius: number; color: RGBA; strength: number; z: number; clip?: ClipRect }
+/**
+ * Rides on its glass node: `rim` just above it, `pool` just below it (see `sortKey`), same elevation, transform, opacity
+ * and clip; `radius` and `cornerExponent` are the glass's, so the rim's outline follows the glass's silhouette.
+ */
+export interface DecorationInstance extends InstanceTransform { node: Node; kind: 'rim' | 'pool'; rect: Rect; radius: number; cornerExponent: number; color: RGBA; strength: number; z: number; clip?: ClipRect }
 export interface ImageInstance extends InstanceTransform { node: Node; rect: Rect; src: unknown; radius: number; z: number; clip?: ClipRect }
 export interface RenderList { panels: PanelInstance[]; glass: GlassInstance[]; text: TextInstance[]; decorations: DecorationInstance[]; images: ImageInstance[] }
 
@@ -142,8 +145,8 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
       const params = resolveGlass(s, rect, theme, scheme, v?.glass)
       rl.glass.push({ ...base, radius, z: sortKey(myZ, 'glass'), params })
       rl.decorations.push(
-        { ...base, kind: 'rim', radius, color: [1, 1, 1, 1], strength: 1, z: sortKey(myZ, 'rim') },
-        { ...base, kind: 'pool', radius, color: params.glow ? params.glow.color : [1, 1, 1, 1], strength: params.glow ? 0.5 : 0.28, z: sortKey(myZ, 'pool') },
+        { ...base, kind: 'rim', radius, cornerExponent: params.cornerExponent, color: [1, 1, 1, 1], strength: 1, z: sortKey(myZ, 'rim') },
+        { ...base, kind: 'pool', radius, cornerExponent: params.cornerExponent, color: params.glow ? params.glow.color : [1, 1, 1, 1], strength: params.glow ? 0.5 : 0.28, z: sortKey(myZ, 'pool') },
       )
     } else if ((s.bg !== undefined && s.bg !== 'none') || s.border) {
       const color: RGBA = v?.bg ?? (s.bg !== undefined && s.bg !== 'none' ? resolveColor(s.bg, theme, scheme) : [0, 0, 0, 0])

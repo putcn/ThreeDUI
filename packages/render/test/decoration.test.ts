@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { uniform } from 'three/tsl'
-import { Vector2, Vector3, AdditiveBlending, NormalBlending } from 'three'
+import { Vector2, Vector3, NormalBlending, CustomBlending, AddEquation, SrcAlphaFactor, OneFactor, ZeroFactor } from 'three'
 import { Node, IDENTITY, scaleAbout, type ClipRect, type DecorationInstance } from '@glassui/core'
 import { DecorationBatch, DECOR_ATTRS } from '../src/decoration/batch'
 import { createRimMaterial, createPoolMaterial, rimProfile, RIM_OUTLINE_PT, RIM_OUTLINE_ALPHA } from '../src/decoration/material'
@@ -15,7 +15,8 @@ const f32 = (v: number[]) => v.map(Math.fround)
 const s = { width: 400, height: 300, ptPerUnit: 100 }
 const su = () => ({ size: uniform(new Vector2(4, 3)), ptPerUnit: uniform(100) })
 const node = new Node('glass', 'g')
-const base = { node, rect: { x: 10, y: 10, width: 100, height: 40 }, radius: 20, elevation: 4, scale: 1, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity: 1 }
+// a 'capsule' glass: its corner exponent is 2
+const base = { node, rect: { x: 10, y: 10, width: 100, height: 40 }, radius: 20, cornerExponent: 2, elevation: 4, scale: 1, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity: 1 }
 const rim: DecorationInstance = { ...base, kind: 'rim', color: [1, 1, 1, 1], strength: 1, z: 1.5 }
 const pool: DecorationInstance = { ...base, kind: 'pool', color: [0.42, 0.39, 0.96, 1], strength: 0.5, z: 0.75 }
 /** Instance `i`'s packed attributes by name, as `evalNode` takes them. */
@@ -53,6 +54,26 @@ describe('DecorationBatch', () => {
     expect(rims.buffer.get(0, 'iShape')[1]).toBe(1); expect(rims.buffer.get(1, 'iShape')[1]).toBe(0.25)
     expect(rims.buffer.get(1, 'iColor')).toEqual(f32([1, srgbToLinear(0.5), 0, 1]))
   })
+  it('packs its glass\'s corner exponent, not one guessed from the rect', () => {
+    // radius 20 is half of 40 either way: a 'capsule' glass is circular (2), a numeric radius 20 keeps 4.5, and a style
+    // override is whatever it says; the rim's outline must follow the glass's silhouette in each case
+    for (const kind of ['rim', 'pool'] as const) {
+      const b = new DecorationBatch(kind)
+      b.update([2, 4.5, 3].map((n, i) => ({ ...(kind === 'rim' ? rim : pool), cornerExponent: n, z: i })), s)
+      expect([0, 1, 2].map(i => b.buffer.get(i, 'iShape')[2])).toEqual([2, 4.5, 3])
+    }
+  })
+  it('skips degenerate and invisible decorations (zero area, zero strength or opacity)', () => {
+    for (const kind of ['rim', 'pool'] as const) {
+      const d = kind === 'rim' ? rim : pool
+      const b = new DecorationBatch(kind)
+      b.update([
+        { ...d, rect: { ...d.rect, height: 0 } }, { ...d, rect: { ...d.rect, width: 0 } },
+        { ...d, strength: 0 }, { ...d, opacity: 0 }, { ...d, strength: 0.7 },
+      ], s)
+      expect(b.buffer.count).toBe(1); expect(b.buffer.get(0, 'iShape')[1]).toBe(Math.fround(0.7))
+    }
+  })
   it('inflates and lowers the pool rect', () => {
     const pools = new DecorationBatch('pool')
     pools.update([pool], s)
@@ -76,11 +97,16 @@ describe('DecorationBatch', () => {
     }
     expect(worst).toBeLessThan(1e-5)   // float32 packing
   })
-  it('materials build with the right blending', () => {
+  it('materials build with the right blending: rims blend normally, pools add colour and leave alpha alone', () => {
     const b = new DecorationBatch('rim'); b.update([rim], s)
     const su = { size: uniform(new Vector2(4, 3)), ptPerUnit: uniform(100) }
     expect(createRimMaterial(b.geometry, su).blending).toBe(NormalBlending)
-    expect(createPoolMaterial(b.geometry, su).blending).toBe(AdditiveBlending)
+    // the content RT's alpha is the content quad's opacity (alphaTest 0.02): a pool adding its α there would composite
+    // as rgb·α² and lose its faint fringe to the alpha test
+    const p = createPoolMaterial(b.geometry, su)
+    expect(p.blending).toBe(CustomBlending); expect(p.premultipliedAlpha).toBe(false)
+    expect([p.blendEquation, p.blendSrc, p.blendDst]).toEqual([AddEquation, SrcAlphaFactor, OneFactor])
+    expect([p.blendEquationAlpha, p.blendSrcAlpha, p.blendDstAlpha]).toEqual([AddEquation, ZeroFactor, OneFactor])
   })
 })
 
