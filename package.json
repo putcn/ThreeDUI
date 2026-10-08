@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "spike:glass": "vite spikes/glass --open"
+    "spike:glass": "vite spikes/glass",
+    "spike:glass3d": "vite spikes/glass3d --port 5174"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",

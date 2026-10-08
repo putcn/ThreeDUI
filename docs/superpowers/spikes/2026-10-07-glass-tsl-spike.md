@@ -13,3 +13,23 @@
 ## 遗留
 - 未做：smin 形状融合、自适应亮度、深度拒绝、dual-Kawase、质量分级。
 - 文字用 Canvas2D 贴图临时方案（spike ③ 另测 @pmndrs/glyph）。
+
+---
+
+# Spike ②b：真 3D 版本（`spikes/glass3d/`，`pnpm spike:glass3d`）
+
+按修订后的 spec §5 重做：玻璃是真实几何，光照/反射/阴影由引擎完成。
+
+## 做法
+- `slab.ts`：超椭圆圆角矩形 × 凸起剖面（squircle/circle）的实体网格，前面 + 倒角 + 背面，`computeVertexNormals`。胶囊/圆用指数 2。
+- `glass.ts`：`MeshPhysicalNodeMaterial` + `backdropNode`/`backdropAlphaNode`（three 内置钩子：backdrop 替换 diffuse 项，specular 仍由灯光与环境贴图提供）。backdrop = 用真实法线做 Snell 折射、沿折射方向穿过真实厚度到背面、投影到屏幕采样 `viewportMipTexture`（roughness → mip lod），三通道不同 IOR 做色散，Beer-Lambert 吸收做 tint。clearcoat 作为抛光顶层。
+- 场景：RoomEnvironment PMREM 环境贴图、方向光 VSM 阴影（UI 元素互相投射、投到世界几何）、MSAA。按压 = 真实缩放 + 下沉，悬停 = 真实倾斜。
+
+## 结论
+- 与平面版相比，倒角高光、厚度、边缘折射、元素间阴影全部"免费"且随相机/灯光正确变化；WebGPU 与 WebGL2 后端一致，无控制台错误。
+- `backdropNode` 钩子完全够用，不需要改 three 内部；spec §5.3 可直接按此实现。
+- 坑：① 网格绕序反了会只看到平的背面（表现为"没有任何高光"），用法线采样即可定位；② 倒角太窄时高光只有几像素，按钮应用接近半圆的 pillow 剖面（bezel = 半高）；③ 无 tone mapping 时灯光预算要控制在 ≈1，否则白玻璃过曝；④ frosted 玻璃的 diffuse 项要用 tint 着色，否则 tint 被洗白；⑤ 透过玻璃能看到世界几何在墙上的阴影，物理正确但视觉上像污渍，正式实现中内容面板应作为主要 backdrop。
+- 性能（1512×808@2x，WebGPU）：1 面板 + 11 玻璃 + 3 物体，41 draws，42.7k tris，60 fps（含两次全屏 mip 拷贝与一次 VSM 阴影 pass）。
+
+## 遗留
+- 贴在内容面上的玻璃改为面板空间采样（去掉屏幕拷贝）；9-slice 实例化几何；smin/几何融合；自适应明暗；dual-Kawase；质量分级；文字仍是 Canvas2D 贴图。
