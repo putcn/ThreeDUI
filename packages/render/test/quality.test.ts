@@ -119,6 +119,52 @@ describe('QualityController', () => {
     q.setReducedTransparency(true); q.setReducedTransparency(true)
     expect(fn).toHaveBeenCalledExactlyOnceWith('minimal', 'medium')
   })
+  it('set while pinned keeps minimal, emits nothing, and is where clearing the pin returns', () => {
+    const q = new QualityController({ initial: 'high', reducedTransparency: true })
+    const fn = vi.fn(); q.onChange(fn)
+    q.set('high')
+    expect(q.tier).toBe('minimal'); expect(fn).not.toHaveBeenCalled()
+    q.setReducedTransparency(false)
+    expect(q.tier).toBe('high'); expect(fn).toHaveBeenCalledExactlyOnceWith('high', 'minimal')
+    q.setReducedTransparency(true); expect(q.tier).toBe('minimal')   // the pin can be re-applied
+  })
+  it('the request recorded while pinned replaces the cap as the return target, never above it, for that pin only', () => {
+    const q = new QualityController({ initial: 'medium', reducedTransparency: true })
+    q.set('low'); q.setReducedTransparency(false)
+    expect(q.tier).toBe('low')
+    q.setReducedTransparency(true); q.set('high'); q.setReducedTransparency(false)
+    expect(q.tier).toBe('medium')                                // clamped to the cap
+    q.set('low'); q.setReducedTransparency(true); q.setReducedTransparency(false)
+    expect(q.tier).toBe('medium')                                // no request this time: back to the cap
+  })
+  it('listeners get a snapshot: one added during delivery waits for the next change', () => {
+    const q = new QualityController({ initial: 'high' })
+    const late = vi.fn()
+    q.onChange(() => { q.onChange(late) })
+    q.set('low'); expect(late).not.toHaveBeenCalled()
+    q.set('medium'); expect(late).toHaveBeenCalledExactlyOnceWith('medium', 'low')
+  })
+  it('a listener calling set does not reorder what later listeners see', () => {
+    const q = new QualityController({ initial: 'high' })
+    const seen: string[] = []
+    q.onChange(t => { if (t === 'medium') q.set('low') })
+    q.onChange((t, p) => seen.push(`${p}→${t}`))
+    q.set('medium')
+    expect(seen).toEqual(['high→medium', 'medium→low']); expect(q.tier).toBe('low')
+  })
+  it('a throwing listener is reported and neither stops the others nor escapes sample', () => {
+    const logged: unknown[][] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { logged.push(a) })
+    try {
+      const q = new QualityController({ initial: 'high', window: 1 })
+      const boom = new Error('boom'), after = vi.fn()
+      q.onChange(() => { throw boom }); q.onChange(after)
+      q.sample(25)
+      expect(q.sample(25)).toBe('medium')
+      expect(after).toHaveBeenCalledExactlyOnceWith('medium', 'high')
+      expect(logged).toHaveLength(1); expect(logged[0]).toContain(boom)
+    } finally { spy.mockRestore() }
+  })
   it('tier is read-only from outside', () => {
     const q = new QualityController()
     // @ts-expect-error tier changes through set()
