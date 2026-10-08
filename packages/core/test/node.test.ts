@@ -124,6 +124,17 @@ describe('paint signals (Plan 2 seams)', () => {
     a.elevation = 4   // same value: no signal
     expect(a.dirty.paint).toBe(false)
   })
+  it('tilt is copied in and read-only out, so it cannot change behind the paint signal', () => {
+    const a = new Node('glass', 'a'); const t = { x: 0.1, y: 0.2 }
+    a.tilt = t; t.x = 0.5
+    expect(a.tilt).toEqual({ x: 0.1, y: 0.2 })
+    a.dirty.paint = false
+    a.tilt = { x: 0.1, y: 0.2 }   // equal value: no signal
+    expect(a.dirty.paint).toBe(false)
+    // @ts-expect-error -- the getter is Readonly; write through the setter so paint is marked
+    const mutate = (): void => { a.tilt.x = 0.3 }
+    expect(mutate).toBeTypeOf('function')
+  })
   it('visual values default to null and setVisual marks paint', () => {
     const a = new Node('box', 'a')
     expect(a.visual).toBeNull()

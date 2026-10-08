@@ -60,8 +60,8 @@ export class Node {
   /** Lift along the Surface normal, pt (spec §3.3). Not laid out; assigning a new value marks `paint`. */
   get elevation(): number { return this.el }
   set elevation(v: number) { if (v !== this.el) { this.el = v; this.markDirty('paint') } }
-  /** Hover tilt in radians about x and y; assigning marks `paint` when either component changes. */
-  get tilt(): { x: number; y: number } { return this.tl }
+  /** Hover tilt in radians about x and y. Read-only out, copied in; assigning marks `paint` when either component changes. */
+  get tilt(): Readonly<{ x: number; y: number }> { return this.tl }
   set tilt(v: { x: number; y: number }) { if (v.x !== this.tl.x || v.y !== this.tl.y) { this.tl = { x: v.x, y: v.y }; this.markDirty('paint') } }
 
   setVisual(v: VisualValues | null): void { this.visual = v; this.markDirty('paint') }
