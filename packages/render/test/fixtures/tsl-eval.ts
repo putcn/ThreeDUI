@@ -27,7 +27,7 @@ const OPS: Record<string, (x: number, y: number) => number> = {
   '==': (x, y) => +(x === y), '!=': (x, y) => +(x !== y), '&&': (x, y) => +(!!x && !!y), '||': (x, y) => +(!!x || !!y),
 }
 const UNARY: Record<string, (x: number) => number> = {
-  abs: Math.abs, sign: Math.sign, sin: Math.sin, cos: Math.cos, sqrt: Math.sqrt, negate: x => -x,
+  abs: Math.abs, sign: Math.sign, sin: Math.sin, cos: Math.cos, sqrt: Math.sqrt, exp: Math.exp, negate: x => -x,
 }
 
 /**
