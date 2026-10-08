@@ -1,4 +1,4 @@
-import { Group, Matrix4, Mesh, NoColorSpace, Texture, TextureLoader, type InstancedBufferGeometry } from 'three'
+import { Matrix4, Mesh, NoColorSpace, Object3D, Texture, TextureLoader, type InstancedBufferGeometry } from 'three'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
 import { texture, float, fwidth, smoothstep, max } from 'three/tsl'
 import type { ImageInstance, Node } from '@glassui/core'
@@ -99,27 +99,38 @@ export function createImageMaterial(g: InstancedBufferGeometry, su: SurfaceUnifo
 }
 
 /** One image's draw: its mesh, the mesh's one-instance buffer, the `src` it shows and the texture made for it. */
-interface Entry { mesh: Mesh; buffer: InstanceBuffer; material: MeshBasicNodeMaterial; src: unknown; texture: Texture }
+interface Entry {
+  mesh: Mesh; buffer: InstanceBuffer; material: MeshBasicNodeMaterial; src: unknown; texture: Texture
+  /** The texture's `version` and readiness as of the last `pollChanged`. */
+  version: number; ready: boolean
+}
+
+/** Whether a texture's image can be uploaded: present, and not an element still loading. */
+const isReady = (image: unknown): boolean => image != null && (image as { complete?: boolean }).complete !== false
 
 /**
  * Every image of one Surface, one mesh each (spec §5.5: images are separate draws in this phase): a one-instance
  * `InstanceBuffer` on its own quad, with `createImageMaterial` over the texture the loader makes for its `src`.
  * Meshes are kept by `node` across updates (the texture loads once), re-created when the `src` changes, and removed
- * when the node's image disappears or loses its `src`. `renderOrder = z` orders them within `group` (whose own
- * `renderOrder` places them among the Surface's draws). An image with no area (its AA margin would still rasterise, at
+ * when the node's image disappears or loses its `src`. An image with no area (its AA margin would still rasterise, at
  * q / size = 0/0) or no opacity is hidden, keeping its texture. Images are lifted `elevation + lift(i)` pt.
+ *
+ * Draw order: the meshes sit in `container`, a plain `Object3D` (a `Group` would reset three's group order and pull
+ * them out of their Surface's layer), at `renderOrder` ∈ [base, base + ½) in z order, so a caller places the whole set
+ * between two of its batched draws (the Surface: after panels and pools, before glyphs). Known limitation: an image is
+ * not interleaved with a batched draw, so a photo meant to cover some text still draws under the glyph batch.
  */
 export class ImageSet {
-  readonly group = new Group()
+  readonly container = new Object3D()
   private readonly entries = new Map<Node, Entry>()
   private readonly m = new Matrix4()
   constructor(private readonly su: SurfaceUniforms, private readonly load: ImageLoader = defaultImageLoader) {}
 
-  update(instances: readonly ImageInstance[], s: SurfaceDims, lift: (i: ImageInstance) => number = () => 0): void {
+  update(instances: readonly ImageInstance[], s: SurfaceDims, lift: (i: ImageInstance) => number = () => 0, base = 0): void {
     const live = new Set<Node>()
     const ppu = s.ptPerUnit
-    for (const inst of instances) {
-      if (inst.src == null) continue   // no source, nothing to show
+    const shown = instances.filter(i => i.src != null).sort((a, b) => a.z - b.z)   // no source, nothing to show
+    shown.forEach((inst, k) => {
       live.add(inst.node)
       let e = this.entries.get(inst.node)
       if (e && e.src !== inst.src) { this.release(e); e = undefined }
@@ -133,10 +144,28 @@ export class ImageSet {
       writeMatrixRows(b, 0, instanceMatrix({ ...inst, elevation: inst.elevation + lift(inst) }, s, this.m))
       writeClip(b, 0, inst.clip)
       b.commit()
-      e.mesh.renderOrder = inst.z
+      // by rank rather than base + z·ε: bounded however many nodes the tree has
+      e.mesh.renderOrder = base + 0.5 * k / shown.length
       e.mesh.visible = inst.rect.width > 0 && inst.rect.height > 0 && inst.opacity > 0
-    }
+    })
     for (const [node, e] of this.entries) if (!live.has(node)) { this.release(e); this.entries.delete(node) }
+  }
+
+  /**
+   * Whether any image's texture changed since the last poll (its `version` moved: a URL finished loading, a video
+   * frame, a caller's `needsUpdate`), or its image became ready. An element still loading when it was first uploaded is
+   * marked for upload again here: three skips an incomplete image and does not retry it by itself. Images created by
+   * `update` count from their creation (the update that made them has redrawn already).
+   */
+  pollChanged(): boolean {
+    let changed = false
+    for (const e of this.entries.values()) {
+      const t = e.texture, ready = isReady(t.image)
+      if (ready && !e.ready && t.version === e.version) t.needsUpdate = true
+      if (ready !== e.ready || t.version !== e.version) changed = true
+      e.ready = ready; e.version = t.version
+    }
+    return changed
   }
 
   dispose(): void {
@@ -153,12 +182,12 @@ export class ImageSet {
     const mesh = new Mesh(geometry, material)
     mesh.frustumCulled = false
     mesh.userData = { node: inst.node, buffer }
-    this.group.add(mesh)
-    return { mesh, buffer, material, src, texture: tex }
+    this.container.add(mesh)
+    return { mesh, buffer, material, src, texture: tex, version: tex.version, ready: isReady(tex.image) }
   }
 
   private release(e: Entry): void {
-    this.group.remove(e.mesh)
+    this.container.remove(e.mesh)
     e.material.dispose(); e.buffer.dispose()
     if (e.texture !== e.src) e.texture.dispose()   // a Texture src stays the caller's
   }

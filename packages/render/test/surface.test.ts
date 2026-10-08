@@ -1,10 +1,10 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { CustomBlending, Group, Mesh, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture } from 'three'
+import { CustomBlending, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, Vector3 } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
-import { Surface, createContentMaterial, type SurfaceContext } from '../src/surface/surface'
+import { Surface, createContentMaterial, CONTENT_ORDER, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
 import { AtlasPages } from '../src/text/pages'
 import { createMeasureFn } from '../src/text/measure'
 import { REFLECTION_STRENGTH } from '../src/glass/batch'
@@ -28,7 +28,14 @@ function signup(c: SurfaceContext = ctx) {
 }
 
 const stubRenderer = () => ({ setRenderTarget: vi.fn(), render: vi.fn(), setClearColor: vi.fn(), getClearColor: vi.fn(c => c), getClearAlpha: vi.fn(() => 1) })
-const meshes = (o: { children: unknown[] }) => o.children.filter((c): c is Mesh => c instanceof Mesh)
+/** Every mesh under `o` (a Surface's draws, or the content scene's). */
+function meshes(o: Object3D): Mesh[] { const out: Mesh[] = []; o.traverse(c => { if (c instanceof Mesh) out.push(c) }); return out }
+/** `o`'s z in its Surface's own frame. */
+function localZ(s: Surface, o: Object3D): number { s.updateMatrixWorld(true); return s.worldToLocal(o.getWorldPosition(new Vector3())).z }
+/** A `w × h` image node at (x, y) showing `src`. */
+function image(id: string, src: unknown, x = 0, y = 0, w = 40, h = 40): Node {
+  const n = new Node('image', id); n.setProp('src', src); n.setStyle({ position: 'absolute', left: x, top: y, width: w, height: h }); return n
+}
 
 interface GraphNode { value?: unknown; isTextureNode?: boolean; constructor: { type?: string }; getBase?(): unknown; getChildren(): Iterable<GraphNode> }
 /** Every node reachable from `root`, once each. */
@@ -108,11 +115,13 @@ describe('Surface', () => {
     s.tick(1 / 60)
     expect(s.contentPlaneZ).toBeCloseTo(0.15)   // min(400, 300) · 0.05 pt / 100
     expect(s.backgroundGlass!.buffer.count).toBe(1)
-    expect(s.contentMesh.position.z).toBeCloseTo(s.contentPlaneZ)
-    const lifted = s.children.filter((c): c is Mesh => c instanceof Mesh && c.renderOrder >= 0)
-    expect(lifted.length).toBeGreaterThan(1); expect(lifted.every(m => Math.abs(m.position.z - s.contentPlaneZ) < 1e-9)).toBe(true)
-    expect(s.children.filter((c): c is Mesh => c instanceof Mesh && c.renderOrder < 0).every(m => m.position.z === 0)).toBe(true)
-    expect(s.foregroundImages.group.position.z).toBeCloseTo(s.contentPlaneZ)
+    expect(localZ(s, s.contentMesh)).toBeCloseTo(s.contentPlaneZ)
+    const lifted = meshes(s).filter(m => m.renderOrder >= 0)
+    expect(lifted.length).toBeGreaterThan(1); expect(lifted.every(m => Math.abs(localZ(s, m) - s.contentPlaneZ) < 1e-9)).toBe(true)
+    expect(meshes(s).filter(m => m.renderOrder < 0).every(m => localZ(s, m) === 0)).toBe(true)
+    expect(localZ(s, s.foregroundImages.container)).toBeCloseTo(s.contentPlaneZ)
+    // one write moves the whole plane: everything on it is a child of `plane`
+    expect(lifted.every(m => m.parent === s.plane)).toBe(true); expect(s.foregroundImages.container.parent).toBe(s.plane)
     // the slab: the Surface rect, its corner radius, the shape and optics the brief gives a background
     const b = s.backgroundGlass!.buffer
     expect(b.get(0, 'iRect')).toEqual([0, 0, 4, 3])
@@ -122,38 +131,108 @@ describe('Surface', () => {
   })
   it('the glass background refracts one screen capture with both its faces', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, ctx)
-    const slab = s.children.filter((c): c is Mesh => c instanceof Mesh && c.renderOrder < 0)
+    const slab = meshes(s).filter(m => m.renderOrder < 0)
     expect(slab).toHaveLength(2)
     const bases = new Set(slab.flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode)
       .filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!())))
     expect(bases.size).toBe(1)
   })
+  it('the glass background follows the Surface size, and is never 0 thick', () => {
+    const s = new Surface({ width: 10, height: 10, ptPerUnit: 100, background: 'glass' }, ctx)   // as the root makes fill surfaces
+    expect(s.contentPlaneZ).toBeCloseTo(0.01)   // max(1, 10 · 0.05) pt
+    s.setSize(400, 300)
+    expect(s.contentPlaneZ).toBeCloseTo(0.15)
+    expect(s.backgroundGlass!.buffer.get(0, 'iShape')[1]).toBeCloseTo(0.15); expect(s.backgroundGlass!.buffer.get(0, 'iRect')).toEqual([0, 0, 4, 3])
+    expect(localZ(s, s.contentMesh)).toBeCloseTo(0.15)
+    const empty = new Surface({ width: 0, height: 0, ptPerUnit: 100, background: 'glass' }, ctx)
+    expect(empty.backgroundGlass!.buffer.get(0, 'iShape')[1]).toBeCloseTo(0.01)   // the refraction divides by it
+  })
+  it('dispose frees the screen capture, including the copies three made per target', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, ctx)
+    const sample = meshes(s).filter(m => m.renderOrder < 0).flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode))
+      .find(n => n.constructor.type === 'ViewportTextureNode') as unknown as { getTextureForReference(ref: object): Texture; getBase(): { value: Texture } }
+    const copy = sample.getTextureForReference({})   // what a frame drawn into a target (or the canvas) copies into
+    const own = sample.getBase().value
+    expect(copy).not.toBe(own)
+    const freed: Texture[] = []
+    for (const t of [copy, own]) t.addEventListener('dispose', () => freed.push(t))
+    s.dispose()
+    expect(freed).toHaveLength(2); expect(new Set(freed)).toEqual(new Set([copy, own]))
+  })
   it('places every draw in the documented order, on its layer', () => {
-    const { s } = signup()
+    const { s, btn } = signup()
+    s.root.appendChild(image('photo', new Texture(), 300, 30)); btn.appendChild(image('icon', new Texture(), 8, 8, 32, 32))
     s.tick(1 / 60)
+    expect(SURFACE_ORDER).toEqual({ slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, images: 3.5, glyphs: 4 })
+    expect(CONTENT_ORDER).toEqual({ panels: 0, pools: 1, images: 1.5, glyphs: 2 })
     const fg = meshes(s)
-    const quad = fg.filter(m => m.renderOrder === 0)
+    const quad = fg.filter(m => m.renderOrder === SURFACE_ORDER.content)
     expect(quad).toHaveLength(1); expect(quad[0]).toBe(s.contentMesh)
-    const [back, front] = [fg.filter(m => m.renderOrder === 1), fg.filter(m => m.renderOrder === 2)]
+    const [back, front] = [fg.filter(m => m.renderOrder === SURFACE_ORDER.glassBack), fg.filter(m => m.renderOrder === SURFACE_ORDER.glassFront)]
     expect(back).toHaveLength(1); expect(front).toHaveLength(1)
     for (const m of [...back, ...front]) { expect(m.geometry).toBe(s.glass.geometry); expect(m.castShadow).toBe(true); expect(m.receiveShadow).toBe(false) }
-    const rim = fg.filter(m => m.renderOrder === 3)
+    const rim = fg.filter(m => m.renderOrder === SURFACE_ORDER.rims)
     expect(rim).toHaveLength(1); expect(rim[0]!.geometry).toBe(s.rims.geometry)
-    const fgGlyphs = fg.filter(m => m.renderOrder === 4)
+    const fgGlyphs = fg.filter(m => m.renderOrder === SURFACE_ORDER.glyphs)
     expect(fgGlyphs.map(m => m.geometry)).toEqual([...s.foregroundText.perPage.values()].map(p => p.geometry))
-    expect(s.foregroundImages.group.parent).toBe(s); expect(s.foregroundImages.group.renderOrder).toBe(4)
+    // the icon rides on the glass: over its rim, under its label
+    const icon = s.foregroundImages.container.children as Mesh[]
+    expect(icon).toHaveLength(1); expect(icon[0]!.renderOrder).toBe(SURFACE_ORDER.images)
     const content = meshes(s.contentPass.scene)
-    expect(content.find(m => m.geometry === s.panels.geometry)!.renderOrder).toBe(0)
-    expect(content.find(m => m.geometry === s.pools.geometry)!.renderOrder).toBe(1)
-    expect(content.filter(m => m.renderOrder === 2).map(m => m.geometry)).toEqual([...s.contentText.perPage.values()].map(p => p.geometry))
-    expect(s.contentImages.group.parent).toBe(s.contentPass.scene); expect(s.contentImages.group.renderOrder).toBe(2)
+    expect(content.find(m => m.geometry === s.panels.geometry)!.renderOrder).toBe(CONTENT_ORDER.panels)
+    expect(content.find(m => m.geometry === s.pools.geometry)!.renderOrder).toBe(CONTENT_ORDER.pools)
+    expect(content.filter(m => m.renderOrder === CONTENT_ORDER.glyphs).map(m => m.geometry)).toEqual([...s.contentText.perPage.values()].map(p => p.geometry))
+    // the photo is content: over panels and pools, under the text
+    const photo = s.contentImages.container.children as Mesh[]
+    expect(photo).toHaveLength(1); expect(photo[0]!.renderOrder).toBe(CONTENT_ORDER.images)
+    expect(s.contentImages.container.parent).toBe(s.contentPass.scene)
     for (const m of [...fg, ...content]) { expect(m.frustumCulled).toBe(false); expect((m.material as MeshStandardNodeMaterial).toneMapped).toBe(false) }
     expect(s.contentMesh.receiveShadow).toBe(true); expect(s.contentMesh.castShadow).toBe(false)
   })
+  it('keeps every draw in one layer group ordered by drawOrder, with no group below it', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, ctx)
+    const pill = new Node('glass', 'pill'); pill.setStyle({ position: 'absolute', left: 10, top: 10, width: 120, height: 48 })
+    pill.appendChild(image('icon', new Texture(), 8, 8, 32, 32)); s.root.appendChild(pill)
+    s.tick(1 / 60)
+    expect(s.foregroundImages.container.children).toHaveLength(1)
+    expect(s.drawOrder).toBe(0)
+    s.drawOrder = 5
+    expect(s.layer).toBeInstanceOf(Group); expect(s.layer.renderOrder).toBe(5); expect(s.layer.parent).toBe(s)
+    const all = meshes(s)
+    expect(all.length).toBeGreaterThan(4)
+    for (const m of all) {
+      let nearestGroup: Object3D | null = null
+      for (let p = m.parent; p && !nearestGroup; p = p.parent) if ((p as Group).isGroup) nearestGroup = p
+      expect(nearestGroup).toBe(s.layer)        // three takes the nearest group's renderOrder as the draw's group order
+    }
+  })
   it('without back faces (quality) the glass draws its front only', () => {
     const { s } = signup({ ...ctx, quality: { ...ctx.quality, backFaces: false } })
-    expect(meshes(s).filter(m => m.renderOrder === 1)).toHaveLength(0)
-    expect(meshes(s).filter(m => m.renderOrder === 2)).toHaveLength(1)
+    expect(meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.glassBack)).toHaveLength(0)
+    expect(meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.glassFront)).toHaveLength(1)
+  })
+  it('redraws the content when a content image\'s texture changes (a URL that loaded), and only then', () => {
+    const tex = new Texture({ width: 2, height: 2 })
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, ctx)
+    s.root.appendChild(image('photo', tex))
+    const renderer = stubRenderer()
+    s.tick(1 / 60); s.prepare(renderer, { width: 400, height: 300 }, 1)
+    s.tick(1 / 60); s.prepare(renderer, { width: 400, height: 300 }, 1)
+    expect(renderer.render).toHaveBeenCalledTimes(1)
+    tex.needsUpdate = true
+    s.tick(1 / 60); s.prepare(renderer, { width: 400, height: 300 }, 1)
+    expect(renderer.render).toHaveBeenCalledTimes(2)
+  })
+  it('asks for a frame (not a content redraw) when an image riding on glass changes', () => {
+    const tex = new Texture({ width: 2, height: 2 })
+    const { s, btn } = signup()
+    btn.appendChild(image('icon', tex, 8, 8, 32, 32))
+    s.tick(1 / 60); s.contentDirty = false
+    s.tick(1 / 60)
+    expect(s.needsFrame).toBe(false)
+    tex.needsUpdate = true
+    s.tick(1 / 60)
+    expect(s.needsFrame).toBe(true); expect(s.contentDirty).toBe(false)
   })
   it('lifts rims and the glass\'s text onto the glass top face, and leaves content text on the plane', () => {
     const { s } = signup()
@@ -220,6 +299,28 @@ describe('Surface', () => {
     s.tick(1 / 60)                                // a failed Surface stays down: no more frames, no more events
     expect(onError).toHaveBeenCalledTimes(1)
   })
+  it('a throwing error listener does not escape the frame', () => {
+    const { s } = signup()
+    const bad = new Node('box', 'bad'); bad.setStyle({ bg: 'no-such-token' }); s.root.appendChild(bad)
+    s.addEventListener('error', () => { throw new Error('listener bug') })
+    const logged: unknown[][] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { logged.push(a) })
+    try {
+      expect(() => s.tick(1 / 60)).not.toThrow()
+    } finally { spy.mockRestore() }
+    expect(s.error).toBeInstanceOf(Error); expect(logged).toHaveLength(1)
+    expect(String(logged[0]![0])).toContain('"error" listener'); expect((logged[0]![1] as Error).message).toBe('listener bug')
+  })
+  it('a failed Surface no longer asks for frames', () => {
+    const { s, btn } = signup()
+    s.tick(1 / 60)
+    btn.setState({ pressed: true }); s.tick(1 / 60)
+    expect(s.needsFrame).toBe(true)
+    btn.setState({ pressed: false })
+    const bad = new Node('box', 'bad'); bad.setStyle({ bg: 'no-such-token' }); s.root.appendChild(bad)
+    s.tick(1 / 60)                                // still animating when the render list throws
+    expect(s.error).toBeInstanceOf(Error); expect(s.needsFrame).toBe(false)
+  })
   it('isolates a failing content pass too', () => {
     const { s } = signup()
     s.tick(1 / 60)
@@ -272,6 +373,24 @@ describe('createContentMaterial', () => {
     const sampled = [...nodesOf(m.colorNode), ...nodesOf(m.opacityNode)].filter(n => n.isTextureNode).map(n => n.value)
     expect(new Set(sampled)).toEqual(new Set([tex]))
   })
+})
+
+describe('background slab shaders (generated under Node)', () => {
+  for (const forceWebGL of [false, true]) {
+    it(`${forceWebGL ? 'GLSL' : 'WGSL'}: both faces build around the disposable screen capture`, () => {
+      // the slab geometry has no `position` attribute on purpose (positionNode replaces it); three warns once per build
+      const warnings: string[] = []
+      const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
+      try {
+        const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, ctx)
+        for (const m of meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab)) {
+          const out = buildShaders(m.material as MeshPhysicalNodeMaterial, s.backgroundGlass!.geometry, forceWebGL)
+          expect(out.fragment).toContain('discard')
+        }
+      } finally { spy.mockRestore() }
+      expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
+    })
+  }
 })
 
 describe('content quad material shaders (generated under Node)', () => {

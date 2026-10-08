@@ -17,7 +17,7 @@ const img = (id: string, src: unknown): ImageInstance => ({ node: new Node('imag
 /** Instance attributes are float32: the expected value of a stored number is its float32 rounding. */
 const f32 = (v: number[]) => v.map(Math.fround)
 const bufferOf = (mesh: Mesh) => mesh.userData.buffer as InstanceBuffer
-const meshOf = (set: ImageSet, node: Node) => set.group.children.find(c => c.userData.node === node) as Mesh
+const meshOf = (set: ImageSet, node: Node) => set.container.children.find(c => c.userData.node === node) as Mesh
 /** The mesh's packed attributes by name, as `evalNode` takes them. */
 const packed = (mesh: Mesh) => Object.fromEntries(IMAGE_ATTRS.map(name => [name, bufferOf(mesh).get(0, name)]))
 const close = (got: number[], want: number[]) => got.forEach((x, k) => expect(x).toBeCloseTo(want[k]!, 6))
@@ -30,16 +30,16 @@ describe('ImageSet', () => {
     const set = new ImageSet(su, src => { calls.push(src); return new Texture() })
     const a = img('a', 'a.png'), b = img('b', new Texture())
     set.update([a, b], s)
-    expect(set.group.children).toHaveLength(2); expect(calls).toHaveLength(2)
-    const meshA = set.group.children.find(c => c.userData.node === a.node) as Mesh
+    expect(set.container.children).toHaveLength(2); expect(calls).toHaveLength(2)
+    const meshA = set.container.children.find(c => c.userData.node === a.node) as Mesh
     set.update([a], s)
-    expect(set.group.children).toHaveLength(1); expect(set.group.children[0]).toBe(meshA); expect(calls).toHaveLength(2)
+    expect(set.container.children).toHaveLength(1); expect(set.container.children[0]).toBe(meshA); expect(calls).toHaveLength(2)
     expect(IMAGE_ATTRS).toHaveLength(8)
   })
   it('packs radius as a capsule exponent and opacity', () => {
     const set = new ImageSet(su, () => new Texture())
     set.update([img('a', 'a.png')], s)
-    const mesh = set.group.children[0] as Mesh
+    const mesh = set.container.children[0] as Mesh
     const shape = (mesh.userData.buffer as { get(i: number, n: string): number[] }).get(0, 'iShape')
     expect(shape).toEqual(f32([0.5, 2, 0.8, 0]))   // float32 storage: 0.8 reads back as fround(0.8)
   })
@@ -47,7 +47,7 @@ describe('ImageSet', () => {
     const clip: ClipRect = { x: 0, y: 0, width: 200, height: 100, radius: 12, transform: IDENTITY }
     const set = new ImageSet(su, () => new Texture())
     set.update([{ ...img('a', 'a.png'), rect: { x: 10, y: 10, width: 100, height: 40 }, radius: 12, clip }], s)
-    const b = bufferOf(set.group.children[0] as Mesh)
+    const b = bufferOf(set.container.children[0] as Mesh)
     expect(b.get(0, 'iRect')).toEqual(f32([-1.4, 1.2, 1, 0.4]))
     expect(b.get(0, 'iShape')).toEqual(f32([0.12, 4.5, 0.8, 0]))
     expect(b.get(0, 'iClipRect')).toEqual([0, 0, 200, 100]); expect(b.get(0, 'iClipT')[2]).toBe(12)
@@ -57,7 +57,7 @@ describe('ImageSet', () => {
     const set = new ImageSet(su, () => new Texture())
     const a: ImageInstance = { ...img('a', 'a.png'), elevation: 2, transform: scaleAbout(60, 60, 0.5), tilt: { x: 0.2, y: 0 } }
     set.update([a], s, i => (i === a ? 8 : 0))
-    const b = bufferOf(set.group.children[0] as Mesh)
+    const b = bufferOf(set.container.children[0] as Mesh)
     const M = instanceMatrix({ ...a, elevation: 10 }, s), el = M.elements
     expect(b.get(0, 'iMat0')).toEqual(f32([el[0]!, el[4]!, el[8]!, el[12]!]))
     expect(b.get(0, 'iMat1')).toEqual(f32([el[1]!, el[5]!, el[9]!, el[13]!]))
@@ -68,13 +68,49 @@ describe('ImageSet', () => {
     const near = { ...img('near', 'n.png'), z: 3.25 }, far = img('far', 'f.png')
     set.update([near, far], s)
     const mn = meshOf(set, near.node), mf = meshOf(set, far.node)
-    expect([mn.renderOrder, mf.renderOrder]).toEqual([3.25, 1.25])
+    expect([mf.renderOrder, mn.renderOrder]).toEqual([0, 0.25])   // by z rank within [base, base + ½)
     expect([mn.frustumCulled, mf.frustumCulled]).toEqual([false, false])
     const mat = mn.material as MeshBasicNodeMaterial
     expect([mat.transparent, mat.depthWrite, mat.blending]).toEqual([true, false, NormalBlending])
     expect(mn.geometry).not.toBe(mf.geometry)
     set.update([{ ...near, z: 0.25 }, far], s)
-    expect(meshOf(set, near.node)).toBe(mn); expect(mn.renderOrder).toBe(0.25)
+    expect(meshOf(set, near.node)).toBe(mn); expect(mn.renderOrder).toBeLessThan(mf.renderOrder)
+  })
+  it('places the set at a base renderOrder, below base + ½ however deep the tree is', () => {
+    const set = new ImageSet(su, () => new Texture())
+    const many = Array.from({ length: 40 }, (_, k) => ({ ...img(`i${k}`, `${k}.png`), z: 1000 + k * 7.25 }))
+    set.update(many, s, undefined, 1.5)
+    const orders = many.map(i => meshOf(set, i.node).renderOrder)
+    expect(orders[0]).toBe(1.5); expect(Math.max(...orders)).toBeLessThan(2)
+    expect(orders).toEqual([...orders].sort((a, b) => a - b))
+    expect(set.container.isObject3D).toBe(true); expect((set.container as { isGroup?: boolean }).isGroup).toBeUndefined()   // keeps its layer's group order
+  })
+  it('pollChanged reports a texture whose version moved since the last poll', () => {
+    const t = new Texture({ width: 2, height: 2 })
+    const set = new ImageSet(su, () => t)
+    set.update([img('a', 'a.png')], s)
+    expect(set.pollChanged()).toBe(false)         // the update that made it has drawn it already
+    t.needsUpdate = true                          // a URL finished loading, a video frame, a caller's update
+    expect(set.pollChanged()).toBe(true); expect(set.pollChanged()).toBe(false)
+  })
+  it('pollChanged re-uploads an element that finished loading after its first upload', () => {
+    const el = { width: 2, height: 2, complete: false }
+    const t = defaultImageLoader(el), set = new ImageSet(su, () => t)
+    set.update([img('a', 'a.png')], s)
+    const v = t.version
+    expect(set.pollChanged()).toBe(false)
+    el.complete = true
+    expect(set.pollChanged()).toBe(true); expect(t.version).toBe(v + 1)   // three skips an incomplete image and never retries
+    expect(set.pollChanged()).toBe(false)
+  })
+  it('pollChanged does not mark a texture again when its loader already did (URL load)', () => {
+    const t = new Texture()                       // TextureLoader's: no image until it arrives, then image + needsUpdate
+    const set = new ImageSet(su, () => t)
+    set.update([img('a', 'a.png')], s)
+    expect(set.pollChanged()).toBe(false)
+    t.image = { width: 2, height: 2 }; t.needsUpdate = true
+    const v = t.version
+    expect(set.pollChanged()).toBe(true); expect(t.version).toBe(v)
   })
   it('re-creates the mesh when src changes, disposing the old one and the texture the loader made for it', () => {
     const made: Texture[] = []
@@ -88,7 +124,7 @@ describe('ImageSet', () => {
     made[0]!.addEventListener('dispose', disposed.texture as never)
     set.update([{ ...a, src: 'b.png' }], s)
     const fresh = meshOf(set, a.node)
-    expect(fresh).not.toBe(old); expect(set.group.children).toHaveLength(1); expect(made).toHaveLength(2)
+    expect(fresh).not.toBe(old); expect(set.container.children).toHaveLength(1); expect(made).toHaveLength(2)
     expect([disposed.material, disposed.geometry, disposed.texture].map(f => f.mock.calls.length)).toEqual([1, 1, 1])
   })
   it('never disposes a texture passed as the src itself (the caller owns it)', () => {
@@ -108,7 +144,7 @@ describe('ImageSet', () => {
     const a = img('a', 'a.png'), b = img('b', 'b.png'), c = img('c', 'c.png')
     set.update([a, b, c], s)
     set.update([b, { ...c, src: null }], s)   // a leaves; c's src goes to null
-    expect(set.group.children).toHaveLength(1); expect(meshOf(set, b.node)).toBeDefined(); expect(meshOf(set, c.node)).toBeUndefined()
+    expect(set.container.children).toHaveLength(1); expect(meshOf(set, b.node)).toBeDefined(); expect(meshOf(set, c.node)).toBeUndefined()
     expect(disposed).toEqual(new Set([made[0], made[2]]))
     set.dispose()
     expect(disposed).toEqual(new Set(made))
@@ -117,7 +153,7 @@ describe('ImageSet', () => {
     const calls: unknown[] = []
     const set = new ImageSet(su, src => { calls.push(src); return new Texture() })
     set.update([img('none', undefined), img('null', null)], s)
-    expect(set.group.children).toHaveLength(0); expect(calls).toHaveLength(0)
+    expect(set.container.children).toHaveLength(0); expect(calls).toHaveLength(0)
     const a = img('a', 'a.png')
     for (const [inst, visible] of [
       [{ ...a, rect: { ...a.rect, width: 0 } }, false], [{ ...a, rect: { ...a.rect, height: 0 } }, false],
@@ -126,17 +162,17 @@ describe('ImageSet', () => {
       set.update([inst], s)
       expect(meshOf(set, a.node).visible).toBe(visible)
     }
-    expect(set.group.children).toHaveLength(1); expect(calls).toEqual(['a.png'])
+    expect(set.container.children).toHaveLength(1); expect(calls).toEqual(['a.png'])
   })
   it('dispose releases every mesh and empties the group', () => {
     const set = new ImageSet(su, () => new Texture())
     set.update([img('a', 'a.png'), img('b', 'b.png')], s)
     const onDispose = vi.fn()
-    for (const c of set.group.children) (c as Mesh).geometry.addEventListener('dispose', onDispose as never)
+    for (const c of set.container.children) (c as Mesh).geometry.addEventListener('dispose', onDispose as never)
     set.dispose()
-    expect(set.group.children).toHaveLength(0); expect(onDispose).toHaveBeenCalledTimes(2)
+    expect(set.container.children).toHaveLength(0); expect(onDispose).toHaveBeenCalledTimes(2)
     set.update([img('a', 'a.png')], s)   // usable again
-    expect(set.group.children).toHaveLength(1)
+    expect(set.container.children).toHaveLength(1)
   })
 })
 
@@ -178,7 +214,7 @@ describe('image material', () => {
   const frag = (inst: ImageInstance, qx: number, qy: number, t = tex(SRGBColorSpace, false), texel = [0.2, 0.4, 0.6, 0.5]) => {
     const uvs: number[][] = []
     const set = new ImageSet(su, () => t); set.update([inst], s)
-    const mesh = set.group.children[0] as Mesh, m = mesh.material as MeshBasicNodeMaterial
+    const mesh = set.container.children[0] as Mesh, m = mesh.material as MeshBasicNodeMaterial
     const sample = (got: unknown, uv: readonly number[]) => { expect(got).toBe(t); uvs.push([...uv]); return texel }
     const grow = (2 * AA_MARGIN_PT) / s.ptPerUnit
     const at = { ...packed(mesh), position: [qx / (inst.rect.width / 100 + grow), qy / (inst.rect.height / 100 + grow), 0] }
@@ -236,7 +272,7 @@ describe('image material', () => {
     const set = new ImageSet(su, () => new Texture())
     const a = { ...img('a', 'a.png'), transform: scaleAbout(60, 60, 0.8) }
     set.update([a], s)
-    const mesh = set.group.children[0] as Mesh, m = mesh.material as MeshBasicNodeMaterial
+    const mesh = set.container.children[0] as Mesh, m = mesh.material as MeshBasicNodeMaterial
     const M = instanceMatrix(a, s), grow = (2 * AA_MARGIN_PT) / s.ptPerUnit
     let worst = 0
     for (const [x, y] of [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const) {
@@ -253,7 +289,7 @@ describe('image material', () => {
       try {
         // the default loader's texture: the full path (un-premultiply, then the sRGB decode)
         const set = new ImageSet(su, () => defaultImageLoader({ width: 4, height: 4 })); set.update([img('a', 'a.png')], s)
-        const mesh = set.group.children[0] as Mesh
+        const mesh = set.container.children[0] as Mesh
         const out = buildShaders(mesh.material as MeshBasicNodeMaterial, mesh.geometry, forceWebGL)
         // q/size (the uv comes from q, not the grown quad's uv attribute), the clip pair and iShape; unlit, so no view position
         expect([...out.varyings].sort()).toEqual(['vFlatClip', 'vFlatClipR', 'vFlatQ', 'v_iShape'])
