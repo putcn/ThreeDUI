@@ -33,3 +33,22 @@
 
 ## 遗留
 - 贴在内容面上的玻璃改为面板空间采样（去掉屏幕拷贝）；9-slice 实例化几何；smin/几何融合；自适应明暗；dual-Kawase；质量分级；文字仍是 Canvas2D 贴图。
+
+---
+
+# Spike ②c：对标参考图的质感迭代
+
+## 新增做法
+- **棚拍环境图**（`studio.ts`）：暗房 + 左上大柔光箱 + 底部细光带 + 一个小热点，PMREM 后做 `scene.environment`。倒角面反射柔光箱 → 顶边细亮线（Apple glint）自然出现；RoomEnvironment 太均匀，出不来。
+- **彩色透射阴影**：three 原生支持——`renderer.shadowMap.transmitted = true` + `material.castShadowNode = vec4(透过色, alpha)`。接收面在阴影处乘以透过色，彩色玻璃下面就有同色光晕/阴影，世界几何也能收到。自己写的"灯光视角透射贴图 pass"已删除（原生更简单、更一致）。
+- **iridescence**（薄膜干涉）用于清色玻璃的彩虹边；折射色散加大。
+- 文字是按钮网格的子节点（随抬起/倾斜/缩放）。
+- 几何：平顶 + 窄圆弧倒角（bezel ≈ 32% 半高，厚度 ≈ 9% 高）；整半圆 pillow 会像塑料糖。
+
+## 坑
+- **VSM 下 `receiveShadow` 的物体也会被画进阴影贴图**（`ShadowBaseNode.js:90`），要让布景不投影得同时关掉 castShadow 和 receiveShadow。
+- `shadow.intensity` 同时缩放彩色阴影；0.6 左右能看到颜色又不脏。
+- 清色玻璃的"白"来自磨砂层对天光的反射，用 `lift`（透射项向白混合 ~0.14）表达；没有它清色按钮会灰。
+- 灯光预算（无 tone mapping）：hemi 0.65 + key 1.8 + env 0.45，墙面基色 ×0.95。
+
+## 性能（1565×784@2x，WebGPU）：51 draws、52k tris、70 fps（含 VSM 阴影 pass 与两次全屏 mip 拷贝）。

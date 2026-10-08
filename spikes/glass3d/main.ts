@@ -9,9 +9,9 @@ import {
 import { WebGPURenderer, MeshStandardNodeMaterial, MeshBasicNodeMaterial, PMREMGenerator } from 'three/webgpu'
 import { Fn, uv, vec3, mix, smoothstep, length, vec2, float, viewportMipTexture } from 'three/tsl'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js'
 import { createSlabGeometry } from './slab'
 import { createGlass3DMaterial } from './glass'
+import { createStudioScene } from './studio'
 
 const params = new URLSearchParams(location.search)
 const forceWebGL = params.has('webgl')
@@ -21,6 +21,7 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.setSize(innerWidth, innerHeight)
 renderer.shadowMap.enabled = true
 renderer.shadowMap.type = VSMShadowMap
+renderer.shadowMap.transmitted = true
 document.body.appendChild(renderer.domElement)
 await renderer.init()
 
@@ -30,59 +31,61 @@ camera.position.set(0, 0.2, 7.2)
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.enableDamping = true
 
-// environment for reflections
+// studio environment for reflections (softbox top-left, strip below)
 {
   const pmrem = new PMREMGenerator(renderer)
-  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
-  scene.environmentIntensity = 0.5
+  scene.environment = pmrem.fromScene(createStudioScene(), 0.02).texture
+  scene.environmentIntensity = 0.45
 }
 
-// ---------- backdrop: lit pastel wall (receives shadows) + 3D objects ----------
+// ---------- backdrop: lit pastel wall (receives shadows + transmitted light) ----------
+let key!: DirectionalLight
 {
   const wallMat = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 })
   wallMat.colorNode = Fn(() => {
     const q = uv()
-    let c: any = mix(vec3(0.93, 0.90, 0.88), vec3(0.80, 0.84, 0.92), q.y)
+    let c: any = mix(vec3(0.95, 0.92, 0.90), vec3(0.82, 0.85, 0.93), q.y)
     const blob = (cx: number, cy: number, rad: number, col: [number, number, number]) => {
       const d = length(q.sub(vec2(cx, cy)))
-      c = mix(c, vec3(...col), float(1).sub(smoothstep(0, rad, d)).mul(0.85))
+      c = mix(c, vec3(...col), float(1).sub(smoothstep(0, rad, d)).mul(0.8))
     }
-    blob(0.15, 0.8, 0.45, [0.78, 0.70, 0.95])
-    blob(0.85, 0.75, 0.40, [0.62, 0.86, 0.90])
-    blob(0.70, 0.15, 0.45, [0.95, 0.72, 0.82])
-    blob(0.25, 0.25, 0.35, [0.40, 0.38, 0.62])
-    return c.mul(0.6)
+    blob(0.12, 0.85, 0.5, [0.80, 0.72, 0.96])
+    blob(0.88, 0.78, 0.45, [0.66, 0.88, 0.92])
+    blob(0.72, 0.12, 0.5, [0.96, 0.75, 0.84])
+    blob(0.22, 0.22, 0.4, [0.46, 0.44, 0.68])
+    const vign = float(1).sub(smoothstep(0.35, 0.9, length(q.sub(vec2(0.42, 0.6))).mul(0.9)))
+    return c.mul(0.95).mul(float(0.78).add(vign.mul(0.3)))
   })()
   const wall = new Mesh(new PlaneGeometry(16, 11), wallMat)
   wall.position.z = -2.5
   wall.receiveShadow = true
   scene.add(wall)
 
-  scene.add(new HemisphereLight(0xffffff, 0x8899bb, 0.35))
-  const key = new DirectionalLight(0xffffff, 1.3)
-  key.position.set(1.5, 4, 5)
+  scene.add(new HemisphereLight(0xffffff, 0x8899bb, 0.65))
+  key = new DirectionalLight(0xffffff, 1.8)
+  key.position.set(-2.2, 3.4, 3.2)
   key.castShadow = true
   key.shadow.mapSize.set(2048, 2048)
   key.shadow.camera.left = -4; key.shadow.camera.right = 4
   key.shadow.camera.top = 4; key.shadow.camera.bottom = -4
   key.shadow.camera.near = 0.5; key.shadow.camera.far = 14
-  key.shadow.radius = 6
-  key.shadow.blurSamples = 12
+  key.shadow.radius = 9
+  key.shadow.blurSamples = 16
   key.shadow.bias = -0.0005
-  key.shadow.intensity = 0.65
+  key.shadow.intensity = 0.6
   scene.add(key)
   scene.add(key.target)
 
-  const pastel = (hex: number) => new MeshStandardNodeMaterial({ color: new Color(hex), roughness: 0.35, metalness: 0.05 })
-  const knot = new Mesh(new TorusKnotGeometry(0.55, 0.18, 160, 24), pastel(0x7a6cf0))
-  knot.position.set(-2.4, 1.3, -1.7)
-  const ball = new Mesh(new SphereGeometry(0.5, 48, 32), pastel(0xf2a35c))
-  ball.position.set(1.7, -1.3, -0.7)
-  const ico = new Mesh(new IcosahedronGeometry(0.45, 0), pastel(0x5fd3cf))
-  ico.position.set(1.4, 1.6, -1.2)
+  const pastel = (hex: number) => new MeshStandardNodeMaterial({ color: new Color(hex), roughness: 0.4, metalness: 0.05 })
+  const knot = new Mesh(new TorusKnotGeometry(0.55, 0.18, 160, 24), pastel(0x8c80f2))
+  knot.position.set(-2.6, 1.3, -1.8)
+  const ball = new Mesh(new SphereGeometry(0.5, 48, 32), pastel(0xf2b27a))
+  ball.position.set(1.9, -1.3, -0.9)
+  const ico = new Mesh(new IcosahedronGeometry(0.45, 0), pastel(0x7fd8d2))
+  ico.position.set(1.6, 1.7, -1.3)
   const objs = new Group()
   objs.add(knot, ball, ico)
-  for (const o of objs.children) { o.castShadow = true; o.receiveShadow = true }
+  for (const o of objs.children) { o.castShadow = false; o.receiveShadow = false }
   scene.add(objs)
   ;(window as any).__objs = objs
 }
@@ -90,7 +93,7 @@ controls.enableDamping = true
 // ---------- label helper (temporary Canvas2D text path) ----------
 function label(text: string, opts: { size?: number; weight?: number; color?: string; width?: number; align?: CanvasTextAlign } = {}) {
   const size = opts.size ?? 0.16, weight = opts.weight ?? 600
-  const pxPerUnit = 320
+  const pxPerUnit = 512
   const fontPx = size * pxPerUnit
   const cv = document.createElement('canvas')
   const ctx = cv.getContext('2d')!
@@ -124,16 +127,20 @@ scene.add(panel)
 const panelBackdrop = viewportMipTexture()   // level 0: sees the world
 const buttonBackdrop = viewportMipTexture()  // level 1: sees the panel too
 
-function slab(parent: Object3D, w: number, h: number, x: number, y: number, z: number, o: {
-  radius?: number; bezel?: number; thickness?: number; roughness?: number; tint?: Color; absorption?: number; dispersion?: number;
-  backdrop?: ReturnType<typeof viewportMipTexture>; cornerExponent?: number; castShadow?: boolean; profile?: 'squircle' | 'circle'
-} = {}) {
+type SlabOpts = {
+  radius?: number; bezel?: number; thickness?: number; roughness?: number; scatter?: number; tint?: Color; absorption?: number; dispersion?: number;
+  diffuse?: number; lift?: number; env?: number; iridescence?: number; backdrop?: ReturnType<typeof viewportMipTexture>; cornerExponent?: number; castShadow?: boolean; profile?: 'squircle' | 'circle'; shadowOpacity?: number
+}
+function slab(parent: Object3D, w: number, h: number, x: number, y: number, z: number, o: SlabOpts = {}) {
   const radius = o.radius ?? h / 2
   const cornerExponent = o.cornerExponent ?? (radius >= Math.min(w, h) / 2 - 1e-6 ? 2 : 4.5)
   const thickness = o.thickness ?? Math.min(w, h) * 0.09
   const bezel = o.bezel ?? Math.min(w, h) * 0.32
   const geo = createSlabGeometry({ width: w, height: h, radius, bezel, thickness, cornerExponent, profile: o.profile ?? 'circle' })
-  const { material, uniforms } = createGlass3DMaterial({ thickness, roughness: o.roughness ?? 0.3, tint: o.tint, absorption: o.absorption ?? 0, dispersion: o.dispersion ?? 0.3, backdrop: o.backdrop ?? buttonBackdrop })
+  const { material, uniforms } = createGlass3DMaterial({
+    thickness, roughness: o.roughness ?? 0.3, scatter: o.scatter, diffuse: o.diffuse, tint: o.tint, absorption: o.absorption ?? 0, dispersion: o.dispersion ?? 0.3,
+    iridescence: o.iridescence, lift: o.lift, envIntensity: o.env, backdrop: o.backdrop ?? buttonBackdrop, shadowOpacity: o.shadowOpacity,
+  })
   const mesh = new Mesh(geo, material)
   mesh.position.set(x, y, z)
   mesh.castShadow = o.castShadow ?? true
@@ -145,14 +152,15 @@ function slab(parent: Object3D, w: number, h: number, x: number, y: number, z: n
 }
 
 const PW = 3.6, PH = 4.4
-slab(panel, PW, PH, 0, 0, 0, { radius: 0.36, bezel: 0.30, thickness: 0.10, roughness: 0.8, backdrop: panelBackdrop, castShadow: true, profile: 'squircle' })
+const panelSlab = slab(panel, PW, PH, 0, 0, 0, { radius: 0.36, bezel: 0.26, thickness: 0.10, roughness: 0.9, scatter: 0.5, diffuse: 1.0, backdrop: panelBackdrop, castShadow: true, profile: 'squircle', shadowOpacity: 0.5 })
 const PANEL_TOP = 0.10
 
-const btn = (w: number, h: number, x: number, y: number, text: string, o: Parameters<typeof slab>[6] = {}, textColor = '#1c1c22') => {
-  const { it, thickness } = slab(panel, w, h, x, y, PANEL_TOP + 0.06, { roughness: 0.12, ...o })
+const CLEAR: SlabOpts = { roughness: 0.12, scatter: 0.15, iridescence: 0.5, dispersion: 0.6, lift: 0.14, env: 1.8 }
+const btn = (w: number, h: number, x: number, y: number, text: string, o: SlabOpts = {}, textColor = '#1c1c22') => {
+  const { it, thickness } = slab(panel, w, h, x, y, PANEL_TOP + 0.06, { ...CLEAR, ...o })
   if (text) {
     const l = label(text, { size: 0.14, color: textColor })
-    l.position.set(0, 0, thickness + 0.004)   // local to the slab: moves with it
+    l.position.set(0, 0, thickness + 0.004)
     l.renderOrder = 10
     it.mesh.add(l)
   }
@@ -164,18 +172,18 @@ title.position.set(-0.35, 1.72, PANEL_TOP + 0.004); title.renderOrder = 10; pane
 const sub = label('Search projects…', { size: 0.15, weight: 500, color: '#5a5a66', align: 'left', width: 2.6 })
 sub.position.set(-0.35, 1.36, PANEL_TOP + 0.004); sub.renderOrder = 10; panel.add(sub)
 
-btn(1.15, 0.46, -1.05, 0.75, 'Primary', { tint: new Color(0x6b63f5), absorption: 2.4, roughness: 0.3 }, '#ffffff')
-btn(1.15, 0.46, 0.25, 0.75, 'Secondary', { tint: new Color(0x6ee7e0), absorption: 1.6, roughness: 0.25 })
+btn(1.15, 0.46, -1.05, 0.75, 'Primary', { tint: new Color(0x6b63f5), absorption: 3.0, roughness: 0.3, scatter: 0.3, iridescence: 0 }, '#ffffff')
+btn(1.15, 0.46, 0.25, 0.75, 'Secondary', { tint: new Color(0x6ee7e0), absorption: 1.6, roughness: 0.25, scatter: 0.2, iridescence: 0 })
 btn(1.05, 0.46, -1.10, 0.10, 'Invite member')
-btn(1.5, 0.46, 0.35, 0.10, 'Search projects…', { roughness: 0.15 }, '#4a4a58')
-btn(1.9, 0.52, -0.65, -0.60, 'Create workspace…', { roughness: 0.3 }, '#2a2a33')
-btn(0.9, 0.46, 0.95, -0.60, '', { tint: new Color(0x6b63f5), absorption: 2.4, roughness: 0.3 })
-slab(panel, 0.36, 0.36, 0.95 + 0.2, -0.60, PANEL_TOP + 0.06 + 0.05, { roughness: 0.6, thickness: 0.05 })
-const card = btn(1.5, 1.45, 0.35, -1.52, '', { radius: 0.3, bezel: 0.3, thickness: 0.07, roughness: 0.35, tint: new Color(0xb8a6f0), absorption: 0.8, profile: 'squircle' })
+btn(1.5, 0.46, 0.35, 0.10, 'Search projects…', {}, '#4a4a58')
+btn(1.9, 0.52, -0.65, -0.60, 'Create workspace…', {}, '#2a2a33')
+btn(0.9, 0.46, 0.95, -0.60, '', { tint: new Color(0x6b63f5), absorption: 2.4, roughness: 0.3, scatter: 0.3, iridescence: 0 })
+slab(panel, 0.36, 0.36, 0.95 + 0.2, -0.60, PANEL_TOP + 0.06 + 0.05, { tint: new Color(0xf5a35c), absorption: 1.8, roughness: 0.4, scatter: 0.4, thickness: 0.05 })
+const card = btn(1.5, 1.45, 0.35, -1.52, '', { radius: 0.3, bezel: 0.3, thickness: 0.07, roughness: 0.4, scatter: 0.3, tint: new Color(0xb8a6f0), absorption: 1.0, profile: 'squircle', iridescence: 0 })
 const cardText = label('Upgrade plan', { size: 0.14, color: '#2a2a33' })
 cardText.position.set(0, -0.43, 0.07 + 0.004); cardText.renderOrder = 10; card.mesh.add(cardText)
-slab(panel, 0.5, 0.5, 0.35, -1.35, PANEL_TOP + 0.06 + 0.07 + 0.02, { radius: 0.14, bezel: 0.16, thickness: 0.06, roughness: 0.55 })
-slab(panel, 0.9, 0.9, -1.0, -1.55, PANEL_TOP + 0.06, { radius: 0.45, bezel: 0.3, thickness: 0.12, roughness: 0.03, dispersion: 0.8 })
+slab(panel, 0.5, 0.5, 0.35, -1.35, PANEL_TOP + 0.06 + 0.07 + 0.02, { radius: 0.14, bezel: 0.16, thickness: 0.06, roughness: 0.6, scatter: 0.5 })
+slab(panel, 0.9, 0.9, -1.0, -1.55, PANEL_TOP + 0.06, { ...CLEAR, radius: 0.45, bezel: 0.3, thickness: 0.12, roughness: 0.03, dispersion: 1, iridescence: 0.6 })
 
 // ---------- interaction: hover tilt + press (real transforms) ----------
 const ray = new Raycaster()
@@ -231,3 +239,4 @@ addEventListener('resize', () => {
   camera.updateProjectionMatrix()
   renderer.setSize(innerWidth, innerHeight)
 })
+;(window as any).__dbg = { scene, key }
