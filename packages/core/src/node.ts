@@ -1,10 +1,26 @@
 import { LAYOUT_KEYS, TEXT_LAYOUT_KEYS, type Style } from './style/schema'
 import { GlassUIError } from './errors'
+import type { RGBA } from './style/theme'
 
 export type NodeType = 'box' | 'text' | 'image' | 'glass' | 'scroll' | 'portal' | 'anchor'
 export interface Rect { x: number; y: number; width: number; height: number }
 export interface DirtyFlags { layout: boolean; paint: boolean; text: boolean; tree: boolean }
 export interface NodeState { hover: boolean; pressed: boolean; focused: boolean; disabled: boolean }
+
+/** Glass numbers the animation runtime can drive (`glow.strength` as `glowStrength`). */
+export type GlassNumericKey = 'thickness' | 'fillet' | 'filletBottom' | 'scatter' | 'lift' | 'edgeGlow' | 'ior' | 'dispersion' | 'roughness' | 'absorption' | 'glowStrength' | 'envIntensity' | 'specularIntensity' | 'innerGlow'
+
+/**
+ * Animated "visual values" (spec §4.4): what the render list draws instead of the node's layout/style targets while a
+ * transition is in flight. Absolute values, not deltas; `x`/`y`/`width`/`height` replace `layout`. Written only by
+ * `AnimationRuntime`; `null` when nothing is animating, so steady-state nodes cost nothing.
+ */
+export interface VisualValues {
+  x?: number; y?: number; width?: number; height?: number
+  scale?: number; opacity?: number; elevation?: number; tilt?: { x: number; y: number }
+  color?: RGBA; bg?: RGBA; radius?: number
+  glass?: Partial<Record<GlassNumericKey, number>> & { glowColor?: RGBA; tint?: RGBA | null }
+}
 
 let nextId = 1
 
@@ -25,8 +41,10 @@ export class Node {
   style: Style = {} as Style
   layout: Rect = { x: 0, y: 0, width: 0, height: 0 }
   private readonly st: NodeState = { hover: false, pressed: false, focused: false, disabled: false }
-  elevation = 0
-  tilt = { x: 0, y: 0 }
+  private el = 0
+  private tl = { x: 0, y: 0 }
+  /** Animated overrides, see `VisualValues`; set through `setVisual`. */
+  visual: VisualValues | null = null
   dirty: DirtyFlags = { layout: true, paint: true, text: true, tree: true }
 
   constructor(type: NodeType, id?: string) {
@@ -38,6 +56,15 @@ export class Node {
 
   /** Interaction state; change it with `setState`, which keeps the dirty flags right. */
   get state(): Readonly<NodeState> { return this.st }
+
+  /** Lift along the Surface normal, pt (spec §3.3). Not laid out; assigning a new value marks `paint`. */
+  get elevation(): number { return this.el }
+  set elevation(v: number) { if (v !== this.el) { this.el = v; this.markDirty('paint') } }
+  /** Hover tilt in radians about x and y; assigning marks `paint` when either component changes. */
+  get tilt(): { x: number; y: number } { return this.tl }
+  set tilt(v: { x: number; y: number }) { if (v.x !== this.tl.x || v.y !== this.tl.y) { this.tl = { x: v.x, y: v.y }; this.markDirty('paint') } }
+
+  setVisual(v: VisualValues | null): void { this.visual = v; this.markDirty('paint') }
 
   appendChild(child: Node): void { this.insertBefore(child, null) }
 
@@ -52,7 +79,7 @@ export class Node {
     const idx = ref ? this.children.indexOf(ref) : -1
     if (idx < 0) this.children.push(child); else this.children.splice(idx, 0, child)
     child.parent = this
-    this.markDirty('tree'); this.markDirty('layout')
+    this.markDirty('tree'); this.markDirty('layout'); this.markDirty('paint')
   }
 
   removeChild(child: Node): void {
@@ -60,7 +87,7 @@ export class Node {
     if (idx < 0) return
     this.children.splice(idx, 1)
     child.parent = null
-    this.markDirty('tree'); this.markDirty('layout')
+    this.markDirty('tree'); this.markDirty('layout'); this.markDirty('paint')
   }
 
   remove(): void { this.parent?.removeChild(this) }

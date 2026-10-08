@@ -101,3 +101,37 @@ describe('Node tree', () => {
     expect(c.root).toBe(a)
   })
 })
+
+describe('paint signals (Plan 2 seams)', () => {
+  it('insertBefore and removeChild mark paint on the parent chain', () => {
+    const root = new Node('box', 'r'); const a = new Node('box', 'a'); const b = new Node('box', 'b')
+    root.appendChild(a); root.dirty.paint = false; a.dirty.paint = false
+    a.appendChild(b)
+    expect(a.dirty.paint).toBe(true); expect(root.dirty.paint).toBe(true)
+    root.dirty.paint = false; a.dirty.paint = false
+    a.removeChild(b)
+    expect(a.dirty.paint).toBe(true); expect(root.dirty.paint).toBe(true)
+  })
+  it('elevation and tilt are accessors that mark paint', () => {
+    const root = new Node('box', 'r'); const a = new Node('glass', 'a'); root.appendChild(a)
+    root.dirty.paint = false; a.dirty.paint = false
+    a.elevation = 4
+    expect(a.elevation).toBe(4); expect(root.dirty.paint).toBe(true)
+    root.dirty.paint = false; a.dirty.paint = false
+    a.tilt = { x: 0.1, y: 0 }
+    expect(a.tilt).toEqual({ x: 0.1, y: 0 }); expect(a.dirty.paint).toBe(true)
+    a.dirty.paint = false
+    a.elevation = 4   // same value: no signal
+    expect(a.dirty.paint).toBe(false)
+  })
+  it('visual values default to null and setVisual marks paint', () => {
+    const a = new Node('box', 'a')
+    expect(a.visual).toBeNull()
+    a.dirty.paint = false
+    a.setVisual({ scale: 0.96, opacity: 0.5 })
+    expect(a.visual).toEqual({ scale: 0.96, opacity: 0.5 }); expect(a.dirty.paint).toBe(true)
+    a.dirty.paint = false
+    a.setVisual(null)
+    expect(a.visual).toBeNull(); expect(a.dirty.paint).toBe(true)
+  })
+})
