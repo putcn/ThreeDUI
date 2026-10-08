@@ -1,4 +1,4 @@
-import { CustomBlending, AddEquation, SrcAlphaFactor, OneFactor, ZeroFactor, type InstancedBufferGeometry } from 'three'
+import { CustomBlending, AddEquation, SrcAlphaFactor, OneFactor, OneMinusSrcAlphaFactor, type InstancedBufferGeometry } from 'three'
 import { MeshBasicNodeMaterial } from 'three/webgpu'
 import { float, abs, max, min, exp, smoothstep, fwidth, length } from 'three/tsl'
 import { flatVertex, AA_MARGIN_PT, type FlatVertex, type SurfaceUniforms } from '../flat'
@@ -64,9 +64,10 @@ export function createRimMaterial(g: InstancedBufferGeometry, su: SurfaceUniform
  * inflated rect, alpha = max(0, 1 − ‖q / half‖) · strength · opacity, colour `iColor`. The falloff reaches 0 on the
  * ellipse inscribed in the rect, so the quad needs no AA margin.
  *
- * Colour adds (`rgb · α + dst`) and the destination alpha is left as it is: the content RT's alpha is the content quad's
- * opacity (with an alpha test), so a pool adding its α there would composite as rgb·α² over a transparent region and
- * lose its faint fringe to the alpha test.
+ * Additive light with coverage: colour adds (`dst.rgb + rgb · α`) and alpha accumulates "over" (`α + dst.a · (1 − α)`).
+ * The content RT is premultiplied by construction (panels and glyphs blend into a transparent clear) and the content
+ * quad composites it premultiplied, so over a transparent region the halo lands as (rgb·α, α), visible and correctly
+ * weighted, while over opaque content alpha stays 1 and the light only adds: alpha is bounded by 1 either way.
  *
  * Varyings: `flatVertex`'s three + `iShape`, `iColor` = 5.
  */
@@ -77,7 +78,7 @@ export function createPoolMaterial(g: InstancedBufferGeometry, su: SurfaceUnifor
   const m = decal(fv)
   m.blending = CustomBlending   // premultipliedAlpha stays false: the source factor applies α to the colour
   m.blendEquation = AddEquation; m.blendSrc = SrcAlphaFactor; m.blendDst = OneFactor
-  m.blendEquationAlpha = AddEquation; m.blendSrcAlpha = ZeroFactor; m.blendDstAlpha = OneFactor
+  m.blendEquationAlpha = AddEquation; m.blendSrcAlpha = OneFactor; m.blendDstAlpha = OneMinusSrcAlphaFactor
 
   const r01 = length(fv.q.div(fv.size.mul(0.5)))
   m.colorNode = color.rgb

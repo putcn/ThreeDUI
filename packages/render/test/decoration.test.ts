@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { uniform } from 'three/tsl'
-import { Vector2, Vector3, NormalBlending, CustomBlending, AddEquation, SrcAlphaFactor, OneFactor, ZeroFactor } from 'three'
+import { Vector2, Vector3, NormalBlending, CustomBlending, AddEquation, SrcAlphaFactor, OneFactor, OneMinusSrcAlphaFactor } from 'three'
 import { Node, IDENTITY, scaleAbout, type ClipRect, type DecorationInstance } from '@glassui/core'
 import { DecorationBatch, DECOR_ATTRS } from '../src/decoration/batch'
 import { createRimMaterial, createPoolMaterial, rimProfile, RIM_OUTLINE_PT, RIM_OUTLINE_ALPHA } from '../src/decoration/material'
@@ -97,16 +97,16 @@ describe('DecorationBatch', () => {
     }
     expect(worst).toBeLessThan(1e-5)   // float32 packing
   })
-  it('materials build with the right blending: rims blend normally, pools add colour and leave alpha alone', () => {
+  it('materials build with the right blending: rims blend normally, pools add colour and accumulate coverage', () => {
     const b = new DecorationBatch('rim'); b.update([rim], s)
     const su = { size: uniform(new Vector2(4, 3)), ptPerUnit: uniform(100) }
     expect(createRimMaterial(b.geometry, su).blending).toBe(NormalBlending)
-    // the content RT's alpha is the content quad's opacity (alphaTest 0.02): a pool adding its α there would composite
-    // as rgb·α² and lose its faint fringe to the alpha test
+    // the content RT is premultiplied (and composited so): colour adds as light, alpha accumulates coverage "over" the
+    // destination, so the halo shows over a transparent clear and its alpha stays ≤ 1 over opaque content
     const p = createPoolMaterial(b.geometry, su)
     expect(p.blending).toBe(CustomBlending); expect(p.premultipliedAlpha).toBe(false)
     expect([p.blendEquation, p.blendSrc, p.blendDst]).toEqual([AddEquation, SrcAlphaFactor, OneFactor])
-    expect([p.blendEquationAlpha, p.blendSrcAlpha, p.blendDstAlpha]).toEqual([AddEquation, ZeroFactor, OneFactor])
+    expect([p.blendEquationAlpha, p.blendSrcAlpha, p.blendDstAlpha]).toEqual([AddEquation, OneFactor, OneMinusSrcAlphaFactor])
   })
 })
 
