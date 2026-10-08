@@ -124,13 +124,31 @@ describe('EventDispatcher + PointerTracker', () => {
     p.down(55, 55); p.up(55, 55)
     expect(log.at(-1)).toBe('root:panel')
   })
-  it('does not click when up happens on a different node', () => {
-    const s = scene(); const d = new EventDispatcher(); let clicks = 0
-    d.on(s.root, 'click', () => clicks++)
+  it('clicks the nearest common ancestor when up happens on a different node, and nothing when up misses the tree', () => {
+    const s = scene(); const d = new EventDispatcher(); const clicks: string[] = []
+    d.on(s.root, 'click', e => clicks.push(e.target.id))
     const p = new PointerTracker(s.root, d)
-    p.down(100, 80); p.up(10, 10)
-    expect(clicks).toBe(0)
+    p.down(100, 80); p.up(10, 10)     // btn → root
+    expect(clicks).toEqual(['root'])
     expect(s.btn.state.pressed).toBe(false)
+    p.down(100, 80); p.up(55, 55)     // btn → panel
+    expect(clicks).toEqual(['root', 'panel'])
+    p.down(100, 80); p.up(250, 250)   // outside the root: hitTest is null
+    expect(clicks).toEqual(['root', 'panel'])
+    expect(s.btn.state.pressed).toBe(false)
+  })
+  it('clicks the button when a press on its padding is released over its label', () => {
+    const s = scene(); const d = new EventDispatcher(); const clicks: string[] = []
+    const label = box({ position: 'absolute', left: 20, top: 10, width: 40, height: 20 }, 'label')   // abs 80..120 × 70..90
+    s.btn.appendChild(label)
+    engine.compute(s.root, 200, 200)
+    d.on(s.btn, 'click', e => clicks.push(`${e.currentTarget.id}:${e.target.id}`))
+    const p = new PointerTracker(s.root, d)
+    p.down(70, 80)
+    expect(p.pressed?.id).toBe('btn')
+    p.up(100, 80)
+    expect(p.hovered?.id).toBe('label')
+    expect(clicks).toEqual(['btn:btn'])
   })
   it('gives local coordinates relative to the current target', () => {
     const s = scene(); const d = new EventDispatcher(); let local: [number, number] | null = null

@@ -68,8 +68,9 @@ export class EventDispatcher {
  * Turns one pointer's move/down/up/cancel (Surface pt) into node events and `state.hover/pressed`.
  * Like CSS `:hover`/`:active`, hover and press cover the hit node and all its ancestors up to `root`;
  * `pointerenter`/`pointerleave` go to each node entered (outermost first) or left (innermost first).
- * `click` fires on up only when the up hits the same node as the down. State is updated before events are
- * dispatched, so listeners see it. Call `cancel()` when the pointer is lost or leaves the Surface.
+ * As in the DOM, `click` fires on up at the nearest common ancestor of the down and up targets (none when the up
+ * misses the tree, or the pressed node has since left it). State is updated before events are dispatched,
+ * so listeners see it. Call `cancel()` when the pointer is lost or leaves the Surface.
  */
 export class PointerTracker {
   /** Hit node first, then its ancestors up to `root`, as of the last hover / press. */
@@ -104,7 +105,8 @@ export class PointerTracker {
     this.release()
     this.hover(hit)
     if (hit) this.d.dispatch(hit, 'pointerup', this.last)
-    if (was && hit === was) this.d.dispatch(was, 'click', this.last)
+    const target = was && hit ? this.commonAncestor(was, hit) : null
+    if (target) this.d.dispatch(target, 'click', this.last)
   }
 
   /** Drops the press (`pointercancel` to the pressed node) and the hover (`pointerleave`s), at the last position. */
@@ -124,6 +126,12 @@ export class PointerTracker {
     const path: Node[] = []
     for (let p: Node | null = n; p; p = p === this.root ? null : p.parent) path.push(p)
     return path
+  }
+
+  /** Nearest node that is `a` or an ancestor of it and also `b` or an ancestor of it, read from the tree as it is now. */
+  private commonAncestor(a: Node, b: Node): Node | null {
+    const ofB = this.pathTo(b)
+    return this.pathTo(a).find(n => ofB.includes(n)) ?? null
   }
 
   private hover(hit: Node | null): void {
