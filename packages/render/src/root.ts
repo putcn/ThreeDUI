@@ -70,7 +70,10 @@ export interface UIRoot {
   render(): void
   /** Overlay: the UI scene alone, over what the host drew this frame (`autoClear` false for the call, then true); a no-op when shared. */
   renderUI(): void
-  /** `tick` (dt from the scheduler) + `render` (+ the quality sample with `quality: 'auto'`); `nowMs` default `performance.now()`. */
+  /**
+   * `tick` (dt from the scheduler, clamped) + `render`; with `quality: 'auto'`, the interval since the previous `frame`
+   * is the quality sample. `nowMs` (default `performance.now()`): the same clock on every call, e.g. the animation loop's.
+   */
   frame(nowMs?: number): void
   autoTick(on: boolean): void
   on<K extends keyof UIRootEventMap>(type: K, fn: (e: UIRootEventMap[K]) => void): () => void
@@ -79,6 +82,8 @@ export interface UIRoot {
 
 /** Screen Surfaces' draw orders start here; world ones take 1 (farthest) up to just below it. */
 const SCREEN_ORDER = 1000
+/** A longer interval between frames is a pause (a hidden tab, a breakpoint), not a frame time. */
+const MAX_FRAME_INTERVAL_MS = 250
 const CORNERS = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const
 
 const media = (q: string): boolean => typeof matchMedia === 'function' && matchMedia(q).matches
@@ -144,6 +149,12 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     if (canvas.style) canvas.style.touchAction = 'none'   // touch drags go to the UI, not to page scrolling/zoom
   }
 
+  /**
+   * Calls `fn` on a snapshot of the Surfaces, skipping any removed meanwhile: a Surface that fails emits `'error'`
+   * synchronously, and a listener may remove it (or another) while the loop runs.
+   */
+  function each(fn: (s: Surface) => void): void { for (const s of [...surfaces]) if (surfaces.includes(s)) fn(s) }
+
   const listeners: { [K in keyof UIRootEventMap]: Set<(e: UIRootEventMap[K]) => void> } = { quality: new Set(), error: new Set() }
   function emit<K extends keyof UIRootEventMap>(type: K, e: UIRootEventMap[K]): void {
     for (const fn of [...listeners[type]]) try { fn(e) } catch (err) { console.error(`[glassui] a "${type}" listener threw:`, err) }
@@ -152,7 +163,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const offQuality = quality.onChange((tier, prev) => {
     const profile = QUALITY[tier]   // not `quality.profile`: a listener may have moved on already (queued delivery)
     ctx.quality = profile
-    for (const s of surfaces) s.setQuality(profile)
+    each(s => s.setQuality(profile))
     lights.key.shadow.mapSize.set(profile.shadowMap, profile.shadowMap)   // three's shadow node resizes its maps from it
     lights.key.shadow.needsUpdate = true
     emit('quality', { tier, prev, profile })
@@ -161,6 +172,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3()
   const lastCamera = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
   let lastFitted = -1, looping = false, disposed = false
+  /** The previous `frame` timestamp (ms), for the quality sample. */
+  let lastFrameMs: number | null = null
   const scheduler = new FrameScheduler()
 
   /** CSS px the Surface covers: screen ones their scaled size; world ones the bounds of their projected content quad. */
@@ -231,13 +244,13 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       lastCamera.copy(camera.matrixWorld)
       for (const s of surfaces) if (s.model.placement === 'world') s.updateWorldMatrix(true, true)
       const epoch = text.atlas.epoch
-      for (const s of surfaces) s.tick(dt)
+      each(s => s.tick(dt))
       // the pages are shared: a later Surface's glyphs may have evicted an earlier one's this tick
-      if (text.atlas.epoch !== epoch) for (const s of surfaces) s.refreshText()
+      if (text.atlas.epoch !== epoch) each(s => s.refreshText())
       for (const s of surfaces) if (!s.error && (s.contentDirty || s.needsFrame)) changed = true   // rebuilt or animating
       assignDrawOrders()
       const dpr = renderer.getPixelRatio()
-      for (const s of surfaces) s.prepare(renderer, projectedPx(s), dpr)
+      each(s => s.prepare(renderer, projectedPx(s), dpr))
       fitShadows(changed)
     },
     render() {
@@ -252,10 +265,15 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       try { renderer.render(uiScene, camera) } finally { renderer.autoClear = true }
     },
     frame(nowMs) {
-      root.tick(scheduler.dt(nowMs ?? performance.now()))
-      const t0 = performance.now()
+      const now = nowMs ?? performance.now()
+      root.tick(scheduler.dt(now))
       root.render()
-      if (adaptive) quality.sample(performance.now() - t0)
+      // The quality sample is the interval between frames (unclamped): it covers the content passes and, through the
+      // swap chain's back-pressure, GPU time, which the CPU time around `render` would not (WebGPU submits
+      // asynchronously). GPU timestamp queries are a later refinement. A pause (> 250 ms) is not a frame time.
+      if (!Number.isFinite(now)) return
+      if (adaptive && lastFrameMs !== null && now - lastFrameMs <= MAX_FRAME_INTERVAL_MS) quality.sample(now - lastFrameMs)
+      lastFrameMs = now
     },
     autoTick(on) {
       if (!renderer.setAnimationLoop) throw new GlassUIError('UIRoot.autoTick', '渲染器没有 setAnimationLoop：请在宿主的渲染循环里调用 root.frame()')

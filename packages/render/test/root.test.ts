@@ -159,14 +159,31 @@ describe('createUIRoot', () => {
     const auto = await createUIRoot({ ...base(), quality: 'auto' })
     expect(auto.quality.tier).toBe('high')                    // no touch (Node), transparency allowed
     const sample = vi.spyOn(auto.quality, 'sample')
-    auto.frame(0); expect(sample).toHaveBeenCalledTimes(1)
+    auto.frame(0); auto.frame(16); expect(sample).toHaveBeenCalledTimes(1)
     const pinned = await createUIRoot({ ...base(), quality: 'auto', reducedTransparency: true })
     expect(pinned.quality.tier).toBe('minimal')
     pinned.quality.setReducedTransparency(false)
     expect(pinned.quality.tier).toBe('high')                  // the cap ignores the pin
     const fixed = await createUIRoot(base())
     const fixedSample = vi.spyOn(fixed.quality, 'sample')
-    fixed.frame(0); expect(fixedSample).not.toHaveBeenCalled()
+    fixed.frame(0); fixed.frame(16); expect(fixedSample).not.toHaveBeenCalled()
+  })
+  it('auto quality samples the interval between frames, skipping the first frame and a hidden-tab gap', async () => {
+    const root = await createUIRoot({ ...base(), quality: 'auto' })
+    const sample = vi.spyOn(root.quality, 'sample')
+    root.frame(1000); expect(sample).not.toHaveBeenCalled()    // no interval yet
+    root.frame(1016); expect(sample).toHaveBeenLastCalledWith(16)
+    root.frame(6016); expect(sample).toHaveBeenCalledTimes(1)  // 5 s later (a hidden tab): not a frame time
+    root.frame(6041); expect(sample).toHaveBeenLastCalledWith(25); expect(sample).toHaveBeenCalledTimes(2)
+    root.frame(6041 + 100); expect(sample).toHaveBeenLastCalledWith(100)   // unclamped (the scheduler's dt is)
+    root.frame(NaN); root.frame(6141 + 16); expect(sample).toHaveBeenLastCalledWith(16)   // a bad stamp leaves the clock
+  })
+  it('auto quality steps down when frames come slowly (GPU-bound frames included)', async () => {
+    const root = await createUIRoot({ ...base(), quality: 'auto' })
+    expect(root.quality.tier).toBe('high')
+    let t = 0
+    for (let i = 0; i <= 60; i++) root.frame(t += 25)          // two 30-frame windows of 25 ms intervals
+    expect(root.quality.tier).toBe('medium')
   })
   it('applies reduced motion to the shared animation runtime', async () => {
     expect((await createUIRoot({ ...base(), reducedMotion: true })).anim.reducedMotion).toBe(true)
@@ -235,6 +252,29 @@ describe('createUIRoot', () => {
     expect(refresh).toHaveReturnedWith(true)
     expect(refresh.mock.invocationCallOrder[0]!).toBeLessThan(prepare.mock.invocationCallOrder[0]!)
     expect(a.contentDirty).toBe(false)                         // drawn after the refresh
+  })
+  it('a listener removing Surfaces mid-tick does not make the tick skip the next one, nor touch a removed one', async () => {
+    const o = base(); const root = await createUIRoot(o)
+    const bad = root.createSurface({ width: 10, height: 10, fill: true })
+    const next = root.createSurface({ width: 200, height: 100, left: 0, top: 0 })
+    const later = root.createSurface({ width: 200, height: 100, left: 0, top: 200 })
+    const n = new Node('box'); n.setStyle({ bg: 'nope' }); bad.root.appendChild(n)
+    root.on('error', e => { root.removeSurface(e.surface); root.removeSurface(later) })
+    const spies = [next, later].map(s => [vi.spyOn(s, 'tick'), vi.spyOn(s, 'prepare')])
+    root.tick(1 / 60)
+    expect(root.surfaces).toHaveLength(1); expect(root.surfaces[0]).toBe(next)
+    expect(spies[0]!.map(s => s.mock.calls.length)).toEqual([1, 1])
+    expect(spies[1]!.map(s => s.mock.calls.length)).toEqual([0, 0])
+  })
+  it('a listener removing a Surface during a quality change does not skip the next one', async () => {
+    const o = base(); const root = await createUIRoot(o)
+    const bad = root.createSurface({ width: 10, height: 10, fill: true })
+    const next = root.createSurface({ width: 200, height: 100, left: 0, top: 0 })
+    bad.glass.geometry.deleteAttribute('iTouch')               // its glass rebuild throws
+    root.on('error', e => root.removeSurface(e.surface))
+    const set = vi.spyOn(next, 'setQuality')
+    root.quality.set('low')
+    expect(root.surfaces).toHaveLength(1); expect(root.surfaces[0]).toBe(next); expect(set).toHaveBeenCalledTimes(1)
   })
   it('removeSurface forgets, unplaces and disposes it', async () => {
     const o = base(); const root = await createUIRoot(o)

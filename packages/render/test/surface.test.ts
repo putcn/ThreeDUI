@@ -358,10 +358,14 @@ describe('Surface', () => {
     expect(before).toHaveLength(2)
     const freed: unknown[] = []
     for (const m of before) (m.material as MeshPhysicalNodeMaterial).addEventListener('dispose', () => freed.push(m.material))
-    const low = Object.freeze({ ...ctx.quality, backFaces: false })
+    const shared = c.quality
+    const low = Object.freeze({ ...ctx.quality, backFaces: false, contentScale: 0.5 })
     s.setQuality(low)
-    expect(c.quality).toBe(low); expect(ctx.quality).not.toBe(low)   // replaced, never written into
+    expect(c.quality).toBe(shared); expect(c.quality.contentScale).toBe(1)   // the root owns the shared profile
     expect(s.contentDirty).toBe(true)
+    s.prepare(stubRenderer(), { width: 400, height: 300 }, 1)
+    expect(s.contentPass.target.width).toBe(256)              // 400 · ½ = 200 → 256: this Surface's own profile
+    expect(new Surface({ width: 400, height: 300, ptPerUnit: 100 }, c).contentPass.texture.type).toBe(UnsignedByteType)
     expect(freed).toHaveLength(2)
     const after = glassMeshes()
     expect(after).toHaveLength(1); expect(after[0]!.renderOrder).toBe(SURFACE_ORDER.glassFront)

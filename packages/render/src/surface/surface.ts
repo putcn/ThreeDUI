@@ -24,7 +24,7 @@ import { toColor } from '../color'
 export interface SurfaceOptions { id?: string; width: number; height: number; ptPerUnit?: number; placement?: 'screen' | 'world'; background?: 'none' | 'glass' | string; cornerRadius?: number; interactive?: boolean; castToWorld?: boolean; contentScale?: number }
 /** The quality knobs a Surface reads (`QualityProfile` in `quality.ts` extends it into a full tier). */
 export interface QualitySettings { contentType: 'byte' | 'half'; contentScale: number; backFaces: boolean; depthReject: boolean; blur: 'kawase' | 'mip' }
-/** What every Surface of one root shares. */
+/** What every Surface of one root shares; `quality` is the root's current tier, the one new Surfaces start from. */
 export interface SurfaceContext { theme: Theme; scheme: ColorScheme; layout: LayoutEngine; measure: MeasureFn; anim: AnimationRuntime; text: TextEngine; pages: AtlasPages; quality: QualitySettings }
 export interface SurfaceEventMap extends Object3DEventMap { error: { error: Error } }
 
@@ -97,6 +97,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private readonly ctx: SurfaceContext
   private readonly su: SurfaceUniforms
   private readonly contentScale: number
+  /** The quality this Surface's draws were built for: `ctx.quality` at construction, then the last `setQuality`. */
+  private quality: QualitySettings
   private readonly contentClear: { color: Color; alpha: number } = { color: new Color(0, 0, 0), alpha: 0 }
   private readonly glassMaterials: GlassMaterial[] = []
   /** The meshes `buildGlass` made (slab and element glass), replaced on a quality change. */
@@ -123,7 +125,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.pointer = new PointerTracker(this.model.root, this.events, ctx.theme)
     this.focus = new FocusManager(this.model.root, this.events)
     this.su = { size: uniform(new Vector2()), ptPerUnit: uniform(this.model.ptPerUnit) }
-    this.contentPass = new ContentPass({ type: ctx.quality.contentType })
+    this.quality = ctx.quality
+    this.contentPass = new ContentPass({ type: this.quality.contentType })
     this.seenEpoch = ctx.text.atlas.epoch
 
     this.add(this.layer)
@@ -143,7 +146,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     Object.defineProperty(this.contentMesh.userData, 'surface', { value: this, enumerable: false })
     this.plane.add(this.contentMesh)
 
-    this.buildGlass(ctx.quality)
+    this.buildGlass(this.quality)
     const rimMesh = new Mesh(this.rims.geometry, this.own(createRimMaterial(this.rims.geometry, this.su)))
     rimMesh.renderOrder = SURFACE_ORDER.rims; rimMesh.frustumCulled = false
     this.plane.add(rimMesh)
@@ -191,12 +194,13 @@ export class Surface extends Object3D<SurfaceEventMap> {
   }
 
   /**
-   * A quality change (the root calls it on every Surface): replaces the shared `ctx.quality` with `q` (profile rows are
-   * frozen, never written into), rebuilds the glass draws, switches the content RT's texel type and marks the content
-   * dirty (the RT's size follows `q.contentScale` at the next `prepare`). A throw fails the Surface instead of propagating.
+   * A quality change for this Surface: rebuilds the glass draws for `q`, switches the content RT's texel type and marks
+   * the content dirty (the RT's size follows `q.contentScale` at the next `prepare`). A throw fails the Surface instead
+   * of propagating. It leaves the shared `ctx.quality` alone: the root owns that (it is what new Surfaces start from),
+   * replaces it on a tier change and then calls this on every Surface.
    */
   setQuality(q: QualitySettings): void {
-    this.ctx.quality = q
+    this.quality = q
     if (this.error) return
     try {
       this.buildGlass(q)
@@ -354,7 +358,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number): void {
     if (this.error) return
     try {
-      const size = contentRTSize(projectedPx, dpr, { scale: this.ctx.quality.contentScale * this.contentScale })
+      const size = contentRTSize(projectedPx, dpr, { scale: this.quality.contentScale * this.contentScale })
       if (this.contentPass.resize(size.width, size.height)) this.contentDirty = true
       if (!this.contentDirty) return
       this.contentPass.setView(this.model)
