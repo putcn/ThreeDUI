@@ -130,8 +130,8 @@ function slab(parent: Object3D, w: number, h: number, x: number, y: number, z: n
 } = {}) {
   const radius = o.radius ?? h / 2
   const cornerExponent = o.cornerExponent ?? (radius >= Math.min(w, h) / 2 - 1e-6 ? 2 : 4.5)
-  const thickness = o.thickness ?? Math.min(w, h) * 0.13
-  const bezel = o.bezel ?? Math.min(w, h) * 0.5
+  const thickness = o.thickness ?? Math.min(w, h) * 0.09
+  const bezel = o.bezel ?? Math.min(w, h) * 0.32
   const geo = createSlabGeometry({ width: w, height: h, radius, bezel, thickness, cornerExponent, profile: o.profile ?? 'circle' })
   const { material, uniforms } = createGlass3DMaterial({ thickness, roughness: o.roughness ?? 0.3, tint: o.tint, absorption: o.absorption ?? 0, dispersion: o.dispersion ?? 0.3, backdrop: o.backdrop ?? buttonBackdrop })
   const mesh = new Mesh(geo, material)
@@ -149,12 +149,12 @@ slab(panel, PW, PH, 0, 0, 0, { radius: 0.36, bezel: 0.30, thickness: 0.10, rough
 const PANEL_TOP = 0.10
 
 const btn = (w: number, h: number, x: number, y: number, text: string, o: Parameters<typeof slab>[6] = {}, textColor = '#1c1c22') => {
-  const { it, thickness } = slab(panel, w, h, x, y, PANEL_TOP + 0.06, { roughness: 0.25, ...o })
+  const { it, thickness } = slab(panel, w, h, x, y, PANEL_TOP + 0.06, { roughness: 0.12, ...o })
   if (text) {
     const l = label(text, { size: 0.14, color: textColor })
-    l.position.set(x, y, PANEL_TOP + 0.06 + thickness + 0.004)
+    l.position.set(0, 0, thickness + 0.004)   // local to the slab: moves with it
     l.renderOrder = 10
-    panel.add(l)
+    it.mesh.add(l)
   }
   return it
 }
@@ -164,18 +164,18 @@ title.position.set(-0.35, 1.72, PANEL_TOP + 0.004); title.renderOrder = 10; pane
 const sub = label('Search projects…', { size: 0.15, weight: 500, color: '#5a5a66', align: 'left', width: 2.6 })
 sub.position.set(-0.35, 1.36, PANEL_TOP + 0.004); sub.renderOrder = 10; panel.add(sub)
 
-btn(1.15, 0.46, -1.05, 0.75, 'Primary', { tint: new Color(0x6b63f5), absorption: 2.6, roughness: 0.5 }, '#ffffff')
-btn(1.15, 0.46, 0.25, 0.75, 'Secondary', { tint: new Color(0x6ee7e0), absorption: 1.8, roughness: 0.4 })
+btn(1.15, 0.46, -1.05, 0.75, 'Primary', { tint: new Color(0x6b63f5), absorption: 2.4, roughness: 0.3 }, '#ffffff')
+btn(1.15, 0.46, 0.25, 0.75, 'Secondary', { tint: new Color(0x6ee7e0), absorption: 1.6, roughness: 0.25 })
 btn(1.05, 0.46, -1.10, 0.10, 'Invite member')
 btn(1.5, 0.46, 0.35, 0.10, 'Search projects…', { roughness: 0.15 }, '#4a4a58')
 btn(1.9, 0.52, -0.65, -0.60, 'Create workspace…', { roughness: 0.3 }, '#2a2a33')
-btn(0.9, 0.46, 0.95, -0.60, '', { tint: new Color(0x6b63f5), absorption: 2.6, roughness: 0.5 })
+btn(0.9, 0.46, 0.95, -0.60, '', { tint: new Color(0x6b63f5), absorption: 2.4, roughness: 0.3 })
 slab(panel, 0.36, 0.36, 0.95 + 0.2, -0.60, PANEL_TOP + 0.06 + 0.05, { roughness: 0.6, thickness: 0.05 })
-btn(1.5, 1.45, 0.35, -1.52, '', { radius: 0.3, bezel: 0.45, thickness: 0.09, roughness: 0.5, tint: new Color(0xb8a6f0), absorption: 0.8, profile: 'squircle' })
+const card = btn(1.5, 1.45, 0.35, -1.52, '', { radius: 0.3, bezel: 0.3, thickness: 0.07, roughness: 0.35, tint: new Color(0xb8a6f0), absorption: 0.8, profile: 'squircle' })
 const cardText = label('Upgrade plan', { size: 0.14, color: '#2a2a33' })
-cardText.position.set(0.35, -1.95, PANEL_TOP + 0.06 + 0.07 + 0.004); cardText.renderOrder = 10; panel.add(cardText)
+cardText.position.set(0, -0.43, 0.07 + 0.004); cardText.renderOrder = 10; card.mesh.add(cardText)
 slab(panel, 0.5, 0.5, 0.35, -1.35, PANEL_TOP + 0.06 + 0.07 + 0.02, { radius: 0.14, bezel: 0.16, thickness: 0.06, roughness: 0.55 })
-slab(panel, 0.9, 0.9, -1.0, -1.55, PANEL_TOP + 0.06, { radius: 0.45, bezel: 0.45, thickness: 0.22, roughness: 0.05, dispersion: 0.8 })
+slab(panel, 0.9, 0.9, -1.0, -1.55, PANEL_TOP + 0.06, { radius: 0.45, bezel: 0.3, thickness: 0.12, roughness: 0.03, dispersion: 0.8 })
 
 // ---------- interaction: hover tilt + press (real transforms) ----------
 const ray = new Raycaster()

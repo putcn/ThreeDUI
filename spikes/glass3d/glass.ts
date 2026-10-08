@@ -25,7 +25,7 @@ export interface Glass3DOptions {
 export function createGlass3DMaterial(o: Glass3DOptions) {
   const u = {
     thickness: uniform(o.thickness),
-    ior: uniform(o.ior ?? 1.6),
+    ior: uniform(o.ior ?? 1.5),
     dispersion: uniform(o.dispersion ?? 0.3),
     frost: uniform(o.roughness ?? 0.3),
     tint: uniform(o.tint ?? new Color(1, 1, 1)),
@@ -39,13 +39,12 @@ export function createGlass3DMaterial(o: Glass3DOptions) {
   const m = new MeshPhysicalNodeMaterial()
   m.transparent = true
   m.depthWrite = true
-  m.roughness = 0.22           // specular lobe size (highlights); frost is separate
+  m.roughness = 0.07           // glass: small, sharp highlights; frost is separate
   m.metalness = 0
-  m.clearcoat = 1               // polished top layer: second specular lobe (sharper)
-  m.clearcoatRoughness = 0.12
-  m.envMapIntensity = o.envIntensity ?? 1.6
+  m.clearcoat = 0
+  m.envMapIntensity = o.envIntensity ?? 0.9
   m.specularIntensity = 1
-  m.colorNode = u.tint.mul(u.tint).mul(0.9)  // diffuse part = frosted scattering (tinted), lit & shadowed
+  m.colorNode = u.tint.mul(u.tint).mul(0.55)  // scattering part (tinted), lit & shadowed
 
   // refracted backdrop
   m.backdropNode = Fn(() => {
@@ -76,12 +75,12 @@ export function createGlass3DMaterial(o: Glass3DOptions) {
     const sigma = float(1).sub(u.tint).mul(u.absorption)
     c = c.mul(exp(sigma.mul(g.t.div(u.thickness)).negate()))
     // slight brightening typical of frosted glass
-    c = mix(c, vec3(1), u.frost.mul(0.12))
+    c = mix(c, vec3(1), u.frost.mul(0.06))
     return c
   })()
 
   // how much of the diffuse term is transmitted backdrop vs. scattered (lit) white
-  m.backdropAlphaNode = float(1).sub(u.frost.mul(0.3))
+  m.backdropAlphaNode = float(1).sub(u.frost.mul(0.18))
 
   // press: inner glow from the touch point
   m.emissiveNode = Fn(() => {
