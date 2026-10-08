@@ -64,6 +64,18 @@ describe('parseTw', () => {
     expect(() => parseTw('w-[42', t)).toThrow('[tw] 非法任意值 "[42"')
     expect(() => parseTw('dark:flex-rwo', t)).toThrow('不支持的前缀 "dark"')
   })
+  it('parses scale as a percent (scale-95) or an arbitrary factor (scale-[1.03]), as in the spec example', () => {
+    expect(parseTw('flex flex-row gap-2 p-3 rounded-full hover:scale-[1.03]', t)).toEqual({
+      display: 'flex', flexDirection: 'row', gap: 8, padding: 12, radius: 'capsule', hover: { scale: 1.03 },
+    })
+    expect(parseTw('scale-95 active:scale-100 focus:scale-105', t)).toEqual({ scale: 0.95, pressed: { scale: 1 }, focused: { scale: 1.05 } })
+    for (const bad of ['scale-0', 'scale-[0]', 'scale-[-1]', 'scale-[1.0.3]', 'scale-[50%]']) {
+      expect(() => parseTw(bad, t), bad).toThrow(GlassUIError)
+      expect(() => parseTw(bad, t), bad).toThrow('[tw] scale 必须为正数')
+    }
+    expect(() => parseTw('scale-[1.03', t)).toThrow('[tw] 非法任意值 "[1.03"')
+    expect(() => parseTw('scal-[1.03]', t)).toThrow('未知 class "scal-[1.03]"')
+  })
   it('validates the assembled style against the schema', () => {
     expect(() => parseTw(`w-[${'9'.repeat(400)}]`, t, 'Box.tw')).toThrow('[Box.tw.width] 非法取值 "Infinity"')
   })

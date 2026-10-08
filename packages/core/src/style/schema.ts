@@ -59,6 +59,8 @@ const Base = z.object({
   border: Border.optional(),
   shadow: Token.optional(),
   opacity: z.number().min(0).max(1).optional(),
+  // A render-time transform about the node's centre (spec §4.4, §8.3 press 0.96): not laid out, like elevation.
+  scale: z.number().positive().optional(),
   font: Token.optional(), fontSize: z.union([Pt, Token]).optional(), fontWeight: z.number().int().min(100).max(900).optional(),
   // lineHeight is a unitless multiplier of the font size (CSS semantics; 1.3 when unset); letterSpacing is pt.
   // Both are resolved, with the other typography defaults, by resolveTextStyle (style/text.ts).

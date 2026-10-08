@@ -24,6 +24,11 @@ describe('validateStyle', () => {
   it('rejects bad length strings', () => {
     expect(() => validateStyle({ width: '10px' })).toThrow('[style.width]')
   })
+  it('accepts a positive scale, in branches too', () => {
+    expect(validateStyle({ scale: 0.96, hover: { scale: 1.03 } })).toEqual({ scale: 0.96, hover: { scale: 1.03 } })
+    expect(() => validateStyle({ scale: 0 })).toThrow('[style.scale]')
+    expect(() => validateStyle({ pressed: { scale: -1 } })).toThrow('[style.pressed.scale]')
+  })
   it('exports the key list for tooling', () => {
     expect(STYLE_KEYS).toContain('padding')
     expect(STYLE_KEYS).toContain('glass')

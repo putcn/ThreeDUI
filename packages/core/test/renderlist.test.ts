@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import { Node } from '../src/node'
 import { createYogaLayout, type LayoutEngine } from '../src/layout/yoga'
 import { createSurface } from '../src/surface'
-import { buildRenderList } from '../src/renderlist'
+import { buildRenderList, type RenderList } from '../src/renderlist'
 import { effectiveStyle } from '../src/style/effective'
 import { defaultTheme as theme, resolveColor } from '../src/style/theme'
 import type { Style } from '../src/style/schema'
@@ -179,6 +179,21 @@ describe('buildRenderList rules', () => {
     expect(rl.images[0]).toMatchObject({ src: 'a.png', rect: { x: 60, y: -20, width: 30, height: 30 }, clip, elevation: 0 })
   })
 
+  it('carries each node\'s effective scale (default 1) on all its instances, without touching layout', () => {
+    const btn = box('glass', 'btn', { width: 120, height: 40, pressed: { scale: 0.96 } })
+    const label = box('text', 'label', { top: 50, width: 50, height: 20, scale: 1.1 })
+    const panel = box('box', 'panel', { top: 80, width: 50, height: 20, bg: 'fill', hover: { scale: 1.03 } })
+    const img = box('image', 'img', { top: 110, width: 20, height: 20 })
+    const s = layout(surface(btn, label, panel, img))
+    const scales = (rl: RenderList) => [
+      rl.glass[0]!.scale, ...rl.decorations.map(d => d.scale), rl.text[0]!.scale, rl.panels[0]!.scale, rl.images[0]!.scale,
+    ]
+    expect(scales(buildRenderList(s, theme, 'light'))).toEqual([1, 1, 1, 1.1, 1, 1])
+    btn.setState({ pressed: true }); panel.setState({ hover: true })
+    expect(scales(buildRenderList(s, theme, 'light'))).toEqual([0.96, 0.96, 0.96, 1.1, 1.03, 1])
+    expect(s.root.dirty.layout).toBe(false)   // a render-time transform: no new layout
+  })
+
   it('leaves clip absent outside clipping ancestors', () => {
     const rl = buildRenderList(layout(surface(box('box', 'p', { bg: 'fill', width: 10, height: 10 }))), theme, 'light')
     expect(rl.panels[0]).not.toHaveProperty('clip')
@@ -230,7 +245,7 @@ describe('buildRenderList rules', () => {
     const rl = buildRenderList(layout(surface(plain, styled)), theme, 'dark')
     expect(rl.text[0]).toEqual({
       node: plain, rect: plain.layout, text: 'Hi', font: { family: 'system-ui', size: theme.fontSize.base, weight: 400 },
-      color: resolveColor('label', theme, 'dark'), align: 'left', lineHeight: 22, letterSpacing: 0, wrap: true, z: 1, elevation: 0,
+      color: resolveColor('label', theme, 'dark'), align: 'left', lineHeight: 22, letterSpacing: 0, wrap: true, z: 1, elevation: 0, scale: 1,
     })
     expect(rl.text[1]).toMatchObject({
       text: '', font: { family: 'mono', size: theme.fontSize.sm, weight: 700 }, color: resolveColor('accent', theme, 'dark'),

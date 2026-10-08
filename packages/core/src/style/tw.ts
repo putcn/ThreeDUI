@@ -39,7 +39,7 @@ const LENGTH: Record<string, keyof Base> = { w: 'width', h: 'height', 'min-w': '
 function known(theme: Theme): string[] {
   const colours = Object.keys(theme.colors.light)
   return [
-    ...Object.keys(ENUMS), ...Object.keys(SPACING).map(k => `${k}-N`), ...Object.keys(LENGTH).map(k => `${k}-N`), 'font-{weight}', 'opacity-N',
+    ...Object.keys(ENUMS), ...Object.keys(SPACING).map(k => `${k}-N`), ...Object.keys(LENGTH).map(k => `${k}-N`), 'font-{weight}', 'opacity-N', 'scale-N', 'scale-[N]',
     ...Object.keys(theme.fontSize).map(k => `text-${k}`), ...colours.map(c => `text-${c}`), ...colours.map(c => `bg-${c}`), 'text-[#hex]', 'bg-[#hex]',
   ]
 }
@@ -70,6 +70,15 @@ function parseValue(raw: string, theme: Theme, scope: string, prop: keyof Base, 
   return pt
 }
 
+/** `scale-N` is a percentage (`scale-95` → 0.95), `scale-[N]` a factor (`scale-[1.03]`); either must be positive. */
+function parseScale(raw: string, scope: string): number {
+  const hint = '写成 scale-95 或 scale-[1.03]'
+  const v = bracketed(raw, scope, hint)
+  const n = v === undefined ? Number(raw) / 100 : /^\d+(\.\d+)?$/.test(v) ? Number(v) : NaN
+  if (!(n > 0 && Number.isFinite(n))) throw new GlassUIError(scope, `scale 必须为正数（${hint}），得到 "${raw}"`)
+  return n
+}
+
 function one(cls: string, theme: Theme, scope: string): Partial<Base> {
   const e = own(ENUMS, cls); if (e) return e
   // Key may carry one hyphenated segment (gap-x, min-w); a value starting with `[` is validated by bracketed().
@@ -81,6 +90,7 @@ function one(cls: string, theme: Theme, scope: string): Partial<Base> {
     const len = own(LENGTH, key)
     if (len) return { [len]: parseValue(raw, theme, scope, len, true) }
     if (key === 'opacity') { const n = Number(raw); if (n < 0 || n > 100 || raw.startsWith('[')) throw new GlassUIError(scope, `opacity 取值 0–100，得到 "${raw}"`); return { opacity: n / 100 } }
+    if (key === 'scale') return { scale: parseScale(raw, scope) }
     if (key === 'font') { const n = Number(raw); if (n % 100 || n < 100 || n > 900) throw new GlassUIError(scope, `font 字重 100–900，得到 "${raw}"`); return { fontWeight: n } }
   }
   // text-/bg- take a theme token or a bracketed literal; bg-glass|glass-clear|none are ENUMS.
