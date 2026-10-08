@@ -30,7 +30,7 @@ export interface Glass3DOptions {
   reflection?: { node: any; strength: number }   // planar reflection node (TSL reflector)
   side?: Side
   edgeGlow?: number          // fake internal reflection: brighten steep (edge) normals
-  innerGlow?: { color: Color; strength: number; split?: number }   // light inside the glass; split = only left of this uv.x
+  innerGlow?: { color: Color; strength: number; split?: number; softness?: number }   // light inside the glass; split = only left of this uv.x
 }
 
 export function createGlass3DMaterial(o: Glass3DOptions) {
@@ -106,7 +106,8 @@ export function createGlass3DMaterial(o: Glass3DOptions) {
     if (o.innerGlow) {
       // light trapped inside the slab: soft fill, stronger where the glass is thick/steep, optional left-only mask
       const gc = vec3(o.innerGlow.color.r, o.innerGlow.color.g, o.innerGlow.color.b)
-      const mask = o.innerGlow.split !== undefined ? smoothstep(float(o.innerGlow.split).add(0.04), float(o.innerGlow.split).sub(0.04), uv().x) : float(1)
+      const soft = o.innerGlow.softness ?? 0.04
+      const mask = o.innerGlow.split !== undefined ? smoothstep(float(o.innerGlow.split).add(soft), float(o.innerGlow.split).sub(soft), uv().x) : float(1)
       const body = float(0.55).add(fres.mul(1.2))
       e = e.add(gc.mul(body).mul(o.innerGlow.strength).mul(mask))
     }

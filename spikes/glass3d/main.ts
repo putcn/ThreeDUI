@@ -3,7 +3,7 @@
 // ?webgl forces the WebGL2 backend. Drag to orbit.
 
 import {
-  Scene, PerspectiveCamera, PlaneGeometry, Mesh, Group, Color, Object3D, TorusGeometry,
+  Scene, PerspectiveCamera, PlaneGeometry, Mesh, Group, Color, Object3D,
   HemisphereLight, DirectionalLight, Raycaster, Vector2, VSMShadowMap, Vector3, BackSide,
 } from 'three'
 import { WebGPURenderer, MeshStandardNodeMaterial, PMREMGenerator } from 'three/webgpu'
@@ -95,7 +95,7 @@ const buttonBackdrop = viewportMipTexture()  // sees the panel (used by back fac
 const frontBackdrop = viewportMipTexture()   // sees panel + back faces (used by front faces)
 
 type SlabOpts = {
-  radius?: number; fillet?: number; filletBottom?: number; bezel?: number; thickness?: number; profile?: 'fillet' | 'squircle' | 'circle'; edgeGlow?: number; twoSided?: boolean; innerGlow?: { color: Color; strength: number; split?: number }; rim?: number
+  radius?: number; fillet?: number; filletBottom?: number; bezel?: number; thickness?: number; profile?: 'fillet' | 'squircle' | 'circle'; edgeGlow?: number; twoSided?: boolean; innerGlow?: { color: Color; strength: number; split?: number; softness?: number }; rim?: number
   roughness?: number; scatter?: number; diffuse?: number; lift?: number; env?: number; specularRoughness?: number
   tint?: Color; absorption?: number; dispersion?: number; iridescence?: number; backdrop?: ReturnType<typeof viewportMipTexture>
   cornerExponent?: number; castShadow?: boolean; shadowOpacity?: number; interactive?: boolean; reflection?: { node: any; strength: number }
@@ -150,10 +150,10 @@ const TOP = 0.10
 const LIFT = 0.04
 
 // style presets (measured from the reference)
-const WHITE: SlabOpts = { roughness: 0.06, scatter: 0.05, diffuse: 0.5, lift: 0.10, env: 2.2, iridescence: 0.5, dispersion: 0.8, specularRoughness: 0.07, edgeGlow: 0.8, twoSided: true, thickness: U(18), fillet: U(10), filletBottom: U(6), dispersion: 1.0 }
-const BLUE = new Color(0x6b63f5), CYAN = new Color(0x74e2dc), LAVENDER = new Color(0xc2b3f3), ORANGE = '#f2a340'
-const GLOWING = (color: Color, strength = 0.7, split?: number): SlabOpts => ({ tint: color.clone().lerp(new Color(1, 1, 1), 0.15), absorption: 1.4, innerGlow: { color, strength, split }, roughness: 0.1, scatter: 0.06, diffuse: 0.4, lift: 0.0, env: 1.6, iridescence: 0, dispersion: 0.6, specularRoughness: 0.08, edgeGlow: 0.5, twoSided: true, thickness: U(18), fillet: U(10), filletBottom: U(6) })
-const TINTED = (tint: Color, absorption: number, solid = false): SlabOpts => ({ tint, absorption, roughness: solid ? 0.5 : 0.15, scatter: solid ? 0.6 : 0.1, diffuse: solid ? 0.8 : 0.5, env: 1.5, iridescence: 0, dispersion: 0.6, specularRoughness: 0.1, edgeGlow: 0.4, twoSided: !solid, thickness: U(18), fillet: U(10), filletBottom: solid ? 0 : U(6) })
+const WHITE: SlabOpts = { roughness: 0.06, scatter: 0.05, diffuse: 0.5, lift: 0.10, env: 2.2, iridescence: 0.5, dispersion: 0.8, specularRoughness: 0.07, edgeGlow: 0.8, twoSided: true, thickness: U(16), fillet: U(5), filletBottom: U(3), dispersion: 1.0 }
+const BLUE = new Color(0x6b63f5)
+const GLOWING = (color: Color, strength = 0.7, split?: number, softness?: number): SlabOpts => ({ tint: color.clone().lerp(new Color(1, 1, 1), 0.15), absorption: 1.4, innerGlow: { color, strength, split, softness }, roughness: 0.1, scatter: 0.06, diffuse: 0.4, lift: 0.0, env: 1.6, iridescence: 0, dispersion: 0.6, specularRoughness: 0.08, edgeGlow: 0.5, twoSided: true, thickness: U(16), fillet: U(5), filletBottom: U(3) })
+const TINTED = (tint: Color, absorption: number, solid = false): SlabOpts => ({ tint, absorption, roughness: solid ? 0.5 : 0.15, scatter: solid ? 0.6 : 0.1, diffuse: solid ? 0.8 : 0.5, env: 1.5, iridescence: 0, dispersion: 0.6, specularRoughness: 0.1, edgeGlow: 0.4, twoSided: !solid, thickness: U(16), fillet: U(5), filletBottom: solid ? 0 : U(3) })
 
 function pill(w: number, h: number, cx: number, cy: number, o: SlabOpts = {}, z = TOP + LIFT) {
   const opts = { ...WHITE, ...o }
@@ -177,82 +177,53 @@ function checkbox(parent: Mesh, size: number, dx: number, dy: number, thickness:
   put(parent, icon('check', U(size * 0.72), checkColor, 0.13), dx, dy, thickness, 0.006)
 }
 
-// header
-put(PANEL.mesh, label('Liquid Glass', { size: U(46), weight: 700, align: 'left' }), 122 - 512, 190 - 642, TOP)
-put(PANEL.mesh, label('Search projects…', { size: U(24), weight: 500, color: '#6a6a78', align: 'left' }), 122 - 512, 237 - 642, TOP)
-for (const [cx, name] of [[806, 'arrow-left'], [878, 'plus']] as [number, IconName][]) {
-  const b = pill(52, 52, cx, 200, { scatter: 0.5 })
-  put(b.mesh, icon(name, U(26), '#4a4a58'), 0, 0, b.thickness)
-}
-// row 1
+// ---------- sign-up form (reference coordinate system: 1024 px wide, panel 885×1045 centred at 512,642) ----------
+const INK = '#1c1c22', MUTED = '#6a6a78', HINT = '#8a8a98'
+put(PANEL.mesh, label('Create your account', { size: U(44), weight: 700, align: 'left' }), 122 - 512, 192 - 642, TOP)
+put(PANEL.mesh, label('Start your 14-day free trial. No credit card needed.', { size: U(22), weight: 500, color: MUTED, align: 'left' }), 122 - 512, 240 - 642, TOP)
 {
-  const p = pill(214, 80, 229, 350, GLOWING(BLUE, 1.1))
-  put(p.mesh, label('Primary', { size: U(24), color: '#ffffff' }), 0, 0, p.thickness)
-  const s = pill(216, 80, 490, 350, GLOWING(CYAN, 0.9))
-  put(s.mesh, label('Secondary', { size: U(24), color: '#1c2a2a' }), 0, 0, s.thickness)
-  const q = pill(255, 86, 778, 356)
-  put(q.mesh, label('Search projects…', { size: U(22), weight: 500, color: '#3a3a48' }), 0, 0, q.thickness)
-  put(q.mesh, circle(U(14), '#5fd6d0'), 870 - 778, 328 - 356, q.thickness)
+  const close = pill(52, 52, 878, 200, { scatter: 0.5 })
+  put(close.mesh, icon('x', U(24), '#4a4a58'), 0, 0, close.thickness)
 }
-// row 2
+// inputs: full width 760 px, centre x = 502
+const input = (cy: number, iconName: IconName, placeholder: string, trailing?: IconName) => {
+  const f = pill(760, 84, 502, cy)
+  put(f.mesh, icon(iconName, U(34), HINT, 0.1), 150 - 502, 0, f.thickness)
+  put(f.mesh, label(placeholder, { size: U(24), weight: 500, color: HINT, align: 'left' }), 196 - 502, 0, f.thickness)
+  if (trailing) put(f.mesh, icon(trailing, U(32), HINT, 0.1), 846 - 502, 0, f.thickness)
+  return f
+}
+input(345, 'user', 'Full name')
+input(455, 'mail', 'Email address')
+input(565, 'lock', 'Password', 'eye')
+// terms checkbox (flat box inside a glass pill) + remember-me toggle
 {
-  const c = pill(476, 78, 360, 508)
-  put(c.mesh, label('Create workspace…', { size: U(24), color: '#1c1c22' }), -60, 0, c.thickness)
-  put(c.mesh, circle(U(64), '#6b63f5', { shadow: 0.012 }), 552 - 360, 0, c.thickness, 0.004)
-  put(c.mesh, icon('search', U(30), '#ffffff', 0.11), 552 - 360, 0, c.thickness, 0.006)
-  const sel = pill(255, 78, 778, 513)
-  put(sel.mesh, label('Select', { size: U(24), color: '#1c1c22' }), -55, 0, sel.thickness)
-  put(sel.mesh, icon('arrow-right', U(30), '#1c1c22'), 865 - 778, 0, sel.thickness)
+  const terms = pill(440, 72, 342, 680)
+  checkbox(terms.mesh, 40, 160 - 357, 0, terms.thickness, '#6b63f5')
+  put(terms.mesh, label('I agree to the Terms & Privacy', { size: U(21), weight: 500, color: '#3a3a48', align: 'left' }), 196 - 357, 0, terms.thickness)
+  put(PANEL.mesh, label('Remember me', { size: U(20), weight: 500, color: '#3a3a48', align: 'left' }), 590 - 512, 680 - 642, TOP)
+  const KNOB_X = 54    // knob offset from the toggle centre, px
+  const tg = pill(136, 62, 838, 680, GLOWING(BLUE, 1.1, 0.5 + KNOB_X / 136, 0.012))
+  put(tg.mesh, circle(U(48), '#ffffff', { shadow: 0.014 }), KNOB_X, 0, tg.thickness)
 }
-// row 3
+// primary action
 {
-  const f = pill(220, 76, 232, 650)
-  checkbox(f.mesh, 40, 160 - 232, 0, f.thickness, '#6b63f5')
-  put(f.mesh, label('field', { size: U(22), weight: 500, color: '#3a3a48' }), 222 - 232, 0, f.thickness)
-  const t = pill(210, 76, 493, 650)
-  checkbox(t.mesh, 40, 428 - 493, 0, t.thickness, '#1c1c22')
-  put(t.mesh, label('text', { size: U(22), weight: 500, color: '#3a3a48' }), 530 - 493, 0, t.thickness)
-  const modal = pill(255, 78, 778, 690)
-  put(modal.mesh, label('Modal', { size: U(24), color: '#1c1c22' }), 720 - 778, 0, modal.thickness)
-  put(modal.mesh, roundedRect(U(72), U(50), U(25), '#dfe3ea', { shadow: 0.012, edge: 'rgba(0,0,0,0.06)' }), 858 - 778, 0, modal.thickness, 0.004)
-  put(modal.mesh, icon('menu', U(30), '#3a3a48'), 858 - 778, 0, modal.thickness, 0.006)
+  const go = pill(760, 84, 502, 795, GLOWING(BLUE, 1.15))
+  put(go.mesh, label('Create account', { size: U(25), weight: 700, color: '#ffffff' }), -18, 0, go.thickness)
+  put(go.mesh, icon('arrow-right', U(30), '#ffffff', 0.12), 122, 0, go.thickness)
 }
-// row 4
+put(PANEL.mesh, label('or continue with', { size: U(19), weight: 500, color: HINT }), 0, 878 - 642, TOP)
+// social sign-in
 {
-  const sw = pill(220, 76, 232, 780)
-  put(sw.mesh, icon('arrow-right', U(30), '#1c1c22'), 160 - 232, 0, sw.thickness)
-  put(sw.mesh, label('switch', { size: U(22), weight: 500, color: '#3a3a48' }), 225 - 232, 0, sw.thickness)
-  put(sw.mesh, circle(U(36), '#ffffff', { alpha: 0.55, edge: 'rgba(0,0,0,0.08)' }), 305 - 232, 0, sw.thickness)
-  const inv = pill(210, 76, 493, 780)
-  put(inv.mesh, label('Invite member', { size: U(23), color: '#1c1c22' }), 0, 0, inv.thickness)
+  const apple = pill(365, 78, 312, 955)
+  put(apple.mesh, icon('apple', U(30), INK), -92, 0, apple.thickness)
+  put(apple.mesh, label('Apple', { size: U(23), color: INK }), 10, 0, apple.thickness)
+  const google = pill(365, 78, 692, 955)
+  put(google.mesh, icon('google', U(30), INK, 0.12), -96, 0, google.thickness)
+  put(google.mesh, label('Google', { size: U(23), color: INK }), 10, 0, google.thickness)
 }
-// card
-{
-  const card = pill(250, 300, 780, 950, { ...GLOWING(LAVENDER, 0.7), radius: U(34), thickness: U(16), fillet: U(8), filletBottom: U(5) })
-  put(card.mesh, label('Plan details', { size: U(16), weight: 600, color: '#5a5470', align: 'left' }), 690 - 780, 835 - 950, card.thickness)
-  put(card.mesh, roundedRect(U(75), U(75), U(16), '#ffffff', { shadow: 0.02, edge: 'rgba(0,0,0,0.05)' }), 0, 940 - 950, card.thickness)
-  put(card.mesh, icon('check', U(50), '#6b63f5', 0.13), 0, 940 - 950, card.thickness, 0.006)
-  const up = slab(card.mesh, U(200), U(52), 0, U(-(1057 - 950)), card.thickness + 0.005, { ...WHITE, twoSided: false, thickness: 0.03, scatter: 0.9, diffuse: 1.1, lift: 0.25, iridescence: 0, edgeGlow: 0.1 })
-  put(up.mesh, label('Upgrade plan', { size: U(22), color: '#1c1c22' }), 0, 0, up.thickness)
-}
-// ring (3D glass torus) + flat tile inside
-{
-  const { material } = createGlass3DMaterial({ thickness: U(36), roughness: 0.02, scatter: 0.0, dispersion: 1, iridescence: 1.0, envIntensity: 2.6, tint: new Color(0xe4d8ff), absorption: 0.35, edgeGlow: 0.6, backdrop: frontBackdrop })
-  const ring = new Mesh(new TorusGeometry(U(96), U(18), 24, 128), material)
-  ring.position.set(X(230), Y(985), TOP + LIFT + U(18))
-  ring.castShadow = true; ring.receiveShadow = true
-  panel.add(ring)
-  put(PANEL.mesh, roundedRect(U(70), U(70), U(16), '#ffffff', { shadow: 0.02, edge: 'rgba(0,0,0,0.05)' }), 230 - 512, 985 - 642, TOP)
-  put(PANEL.mesh, icon('check', U(44), '#1c1c22', 0.13), 230 - 512, 985 - 642, TOP, 0.006)
-}
-// toggle (3D track, flat knob) + output
-{
-  const tg = pill(210, 70, 490, 920, GLOWING(BLUE, 1.1, 0.58))
-  put(tg.mesh, circle(U(60), ORANGE, { shadow: 0.015 }), 497 - 490, 0, tg.thickness)
-  const out = pill(210, 70, 490, 1058)
-  put(out.mesh, label('Output', { size: U(22), weight: 500, color: '#3a3a48' }), 455 - 490, 0, out.thickness)
-  put(out.mesh, icon('x', U(28), '#3a3a48'), 562 - 490, 0, out.thickness)
-}
+put(PANEL.mesh, label('Already have an account?', { size: U(20), weight: 500, color: MUTED }), -60, 1072 - 642, TOP)
+put(PANEL.mesh, label('Sign in', { size: U(20), weight: 700, color: '#5b52f0' }), 112, 1072 - 642, TOP)
 
 // ---------- interaction: hover tilt + press (real transforms) ----------
 const ray = new Raycaster()

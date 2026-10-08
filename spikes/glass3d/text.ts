@@ -38,7 +38,7 @@ export function label(text: string, opts: { size?: number; weight?: number; colo
   return m
 }
 
-export type IconName = 'check' | 'arrow-right' | 'arrow-left' | 'search' | 'plus' | 'menu' | 'x' | 'chevron-right'
+export type IconName = 'check' | 'arrow-right' | 'arrow-left' | 'search' | 'plus' | 'menu' | 'x' | 'chevron-right' | 'user' | 'mail' | 'lock' | 'eye' | 'apple' | 'google'
 
 export function icon(name: IconName, size: number, color = '#1c1c22', stroke = 0.12) {
   const px = Math.ceil(size * PX_PER_UNIT)
@@ -60,6 +60,12 @@ export function icon(name: IconName, size: number, color = '#1c1c22', stroke = 0
     case 'plus': line([[0.5, 0.25], [0.5, 0.75]]); line([[0.25, 0.5], [0.75, 0.5]]); break
     case 'menu': line([[0.26, 0.36], [0.74, 0.36]]); line([[0.26, 0.5], [0.74, 0.5]]); line([[0.26, 0.64], [0.74, 0.64]]); break
     case 'x': line([[0.3, 0.3], [0.7, 0.7]]); line([[0.7, 0.3], [0.3, 0.7]]); break
+    case 'user': ctx.beginPath(); ctx.arc(0.5 * px, 0.36 * px, 0.14 * px, 0, Math.PI * 2); ctx.stroke(); ctx.beginPath(); ctx.arc(0.5 * px, 0.86 * px, 0.3 * px, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke(); break
+    case 'mail': ctx.beginPath(); ctx.roundRect(0.2 * px, 0.28 * px, 0.6 * px, 0.44 * px, 0.06 * px); ctx.stroke(); line([[0.22, 0.32], [0.5, 0.54], [0.78, 0.32]]); break
+    case 'lock': ctx.beginPath(); ctx.roundRect(0.26 * px, 0.46 * px, 0.48 * px, 0.36 * px, 0.06 * px); ctx.stroke(); ctx.beginPath(); ctx.arc(0.5 * px, 0.42 * px, 0.16 * px, Math.PI, 0); ctx.stroke(); break
+    case 'eye': ctx.beginPath(); ctx.moveTo(0.2 * px, 0.5 * px); ctx.quadraticCurveTo(0.5 * px, 0.15 * px, 0.8 * px, 0.5 * px); ctx.quadraticCurveTo(0.5 * px, 0.85 * px, 0.2 * px, 0.5 * px); ctx.stroke(); ctx.beginPath(); ctx.arc(0.5 * px, 0.5 * px, 0.1 * px, 0, Math.PI * 2); ctx.stroke(); break
+    case 'apple': ctx.fillStyle = color; ctx.beginPath(); ctx.ellipse(0.5 * px, 0.56 * px, 0.26 * px, 0.3 * px, 0, 0, Math.PI * 2); ctx.fill(); ctx.globalCompositeOperation = 'destination-out'; ctx.beginPath(); ctx.arc(0.74 * px, 0.52 * px, 0.12 * px, 0, Math.PI * 2); ctx.fill(); ctx.globalCompositeOperation = 'source-over'; ctx.beginPath(); ctx.ellipse(0.58 * px, 0.2 * px, 0.07 * px, 0.11 * px, -0.6, 0, Math.PI * 2); ctx.fill(); break
+    case 'google': ctx.lineWidth = stroke * px * 1.4; ctx.beginPath(); ctx.arc(0.5 * px, 0.5 * px, 0.26 * px, Math.PI * 0.12, Math.PI * 1.88); ctx.stroke(); line([[0.5, 0.5], [0.78, 0.5]]); break
   }
   return quad(cv)
 }
