@@ -1,8 +1,8 @@
 import { BackSide, DataTexture, FrontSide, RGBAFormat, UnsignedByteType, type InstancedBufferGeometry, type Texture, type Vector2 } from 'three'
-import { MeshPhysicalNodeMaterial, type Node, type TextureNode, type UniformNode } from 'three/webgpu'
+import { MeshPhysicalNodeMaterial, ViewportDepthTextureNode, ViewportTextureNode, type Node, type TextureNode, type UniformNode } from 'three/webgpu'
 import {
   attribute, float, vec2, vec3, vec4, uniform, texture, varying, positionView, positionViewDirection, normalView,
-  transformNormalToView, negateOnBackSide, modelViewMatrix, cameraProjectionMatrix, viewportMipTexture, viewportDepthTexture,
+  transformNormalToView, negateOnBackSide, modelViewMatrix, cameraProjectionMatrix, viewportMipTexture,
   linearDepth, screenUV, refract, reflect, normalize, dot, max, min, abs, exp, mix, clamp, pow, smoothstep, step, select, length,
 } from 'three/tsl'
 import { GLASS_ATTRS } from './batch'
@@ -20,7 +20,7 @@ export interface GlassMaterialOptions {
   surface: { size: UniformNode<'vec2', Vector2>; ptPerUnit: UniformNode<'float', number> }
   /** The content RT texture (panel only; required there); `setContent` swaps it. */
   content?: Texture | undefined
-  /** The screen capture to refract (screen only), shared per layer; default: a new `viewportMipTexture()`. */
+  /** The screen capture to refract (screen only), shared per layer and disposed by its owner; default: a new `ScreenCapture` this material owns. */
   screen?: ReturnType<typeof viewportMipTexture> | undefined
   /** Backdrop luma per instance (Task 23); default: 1×1 black, i.e. never darken. `setLuma` swaps it. */
   luma?: Texture | undefined
@@ -35,6 +35,41 @@ export interface GlassMaterial {
   /** Swaps the luma texture in place: `count` texels in a row, texel `i` = instance `i`'s backdrop luma. */
   setLuma(tex: Texture, count: number): void
   dispose(): void
+}
+
+/*
+ * Viewport captures that can be disposed: three copies the framebuffer (or depth buffer) into a clone of the node's
+ * template texture per render target or canvas target, cached in a private WeakMap, so disposing the node's own texture
+ * frees nothing that was drawn. Every copy is resolved through `getTextureForReference` (a material samples clones of
+ * the node that resolve through it as their base), so the base records them (`copies`) and frees them on `dispose`.
+ */
+type CaptureReference = Parameters<ViewportTextureNode['getTextureForReference']>[0]
+interface Capture { referenceNode: unknown; copies: Set<Texture> }
+/** Records `t` on the capture's base (a sampled clone resolves through it). */
+function record(node: Capture, t: Texture): Texture { ((node.referenceNode as Capture | null) ?? node).copies.add(t); return t }
+/** Frees every copy, and the template when the node owns it (else it is three's, or the base's). */
+function freeCopies(node: Capture, ownsTemplate: boolean): void {
+  const template = (node as unknown as { defaultFramebuffer: Texture }).defaultFramebuffer
+  if (ownsTemplate) node.copies.add(template); else node.copies.delete(template)
+  for (const t of node.copies) t.dispose()
+  node.copies.clear()
+}
+
+/** `viewportMipTexture()` that frees every framebuffer copy, and its own template, on `dispose`. */
+export class ScreenCapture extends ViewportTextureNode {
+  readonly copies = new Set<Texture>()
+  /** It made its template (no texture passed in; `clone()` passes the base's). */
+  private readonly ownsTemplate: boolean
+  constructor(...args: ConstructorParameters<typeof ViewportTextureNode>) { super(...args); this.generateMipmaps = true; this.ownsTemplate = args[2] == null }
+  override getTextureForReference(reference?: CaptureReference): Texture { return record(this, super.getTextureForReference(reference)) }
+  override dispose(): void { freeCopies(this, this.ownsTemplate); super.dispose() }
+}
+
+/** `viewportDepthTexture()` that frees every depth copy on `dispose`; its template is three's, shared by all: kept. */
+export class DepthCapture extends ViewportDepthTextureNode {
+  readonly copies = new Set<Texture>()
+  override getTextureForReference(reference?: CaptureReference): Texture { return record(this, super.getTextureForReference(reference)) }
+  override dispose(): void { freeCopies(this, false); super.dispose() }
 }
 
 /** Shadow colour of untinted glass (spec §5.4): a slightly cool grey. */
@@ -112,10 +147,11 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const contentTex = o.backdrop === 'panel' && o.content ? texture(o.content) : null   // non-null exactly for 'panel'
   const lumaTex = texture(o.luma ?? black!)
   const lumaCount = uniform(1)
+  const ownScreen = o.backdrop === 'screen' && !o.screen ? new ScreenCapture() : null
   // @types/three declares viewportMipTexture as returning a plain Node; it is a ViewportTextureNode (a TextureNode)
-  const screen = o.backdrop === 'screen' ? (o.screen ?? viewportMipTexture()) as TextureNode : null
-  // one base node for every depth sample: its clones share one captured depth texture (one copy per render)
-  const sceneDepth = o.backdrop === 'screen' && o.depthReject ? viewportDepthTexture() : null
+  const screen = o.backdrop === 'screen' ? (o.screen ?? ownScreen) as TextureNode : null
+  // one base node for every depth sample: its clones share one captured depth texture (one copy per target)
+  const sceneDepth = o.backdrop === 'screen' && o.depthReject ? new DepthCapture() : null
 
   const m = new MeshPhysicalNodeMaterial()
   m.transparent = true; m.depthWrite = false; m.depthTest = true
@@ -205,6 +241,6 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     material: m,
     setContent(tex) { if (contentTex) contentTex.value = tex },
     setLuma(tex, count) { lumaTex.value = tex; lumaCount.value = Math.max(1, count) },
-    dispose() { m.dispose(); black?.dispose() },
+    dispose() { m.dispose(); black?.dispose(); ownScreen?.dispose(); sceneDepth?.dispose() },
   }
 }

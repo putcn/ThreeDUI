@@ -3,7 +3,7 @@ import { uniform } from 'three/tsl'
 import { Vector2, Texture, DataTexture, BackSide, FrontSide } from 'three'
 import { Node, IDENTITY, scaleAbout, type GlassInstance, type ResolvedGlass } from '@glassui/core'
 import { GlassBatch, GLASS_ATTRS } from '../src/glass/batch'
-import { createGlassMaterial } from '../src/glass/material'
+import { createGlassMaterial, ScreenCapture } from '../src/glass/material'
 import { evalSlabVertex, type SlabInstanceParams } from '../src/glass/slab9'
 import { evalNode } from './fixtures/tsl-eval'
 import { buildShaders } from './fixtures/build-shaders'
@@ -28,6 +28,8 @@ function nodesOf(root: unknown): GraphNode[] {
   }
   return [...seen]
 }
+/** A viewport capture node (and the clones a material samples, which resolve through their base). */
+interface Capture { getBase(): Capture; getTextureForReference(reference: object | null): Texture }
 /** Math arguments arrive wrapped in `VarNode`s; the node behind them. */
 const unwrap = (n: GraphNode): GraphNode => n.constructor.type === 'VarNode' ? unwrap(n.node!) : n
 
@@ -145,6 +147,41 @@ describe('createGlassMaterial', () => {
     g.setLuma(mine, 4)
     g.dispose()
     expect(disposed).toBe(1); expect(mineDisposed).toBe(0)
+  })
+  it('disposes the depth copies three made per target for the depth reject, never three\'s shared depth template', () => {
+    const b = new GlassBatch(); b.update([inst], s)
+    const g = createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'screen', side: 'front', surface, depthReject: true })
+    const depth = nodesOf(g.material.backdropNode).filter(n => n.constructor.type === 'ViewportDepthTextureNode') as unknown as Capture[]
+    expect(depth.length).toBeGreaterThan(0)
+    const base = depth[0]!.getBase()
+    expect(depth.every(n => n.getBase() === base)).toBe(true)   // one base: one captured depth copy per target
+    const sampled = depth.find(n => n !== base)!
+    const copies = [sampled.getTextureForReference({}), sampled.getTextureForReference({})]   // two targets drawn into
+    const template = base.getTextureForReference(null)
+    expect(copies[0]).not.toBe(template)
+    const freed: Texture[] = []
+    for (const t of [...copies, template]) t.addEventListener('dispose', () => freed.push(t))
+    g.dispose()
+    expect(new Set(freed)).toEqual(new Set(copies))   // the template is three's, shared by every depth node
+  })
+  it('owns and disposes the screen capture it made itself, not one it was given', () => {
+    const b = new GlassBatch(); b.update([inst], s)
+    const captureOf = (g: ReturnType<typeof createGlassMaterial>) =>
+      (nodesOf(g.material.backdropNode).find(n => n.constructor.type === 'ViewportTextureNode') as unknown as Capture).getBase()
+    const own = createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'screen', side: 'front', surface })
+    const copy = captureOf(own).getTextureForReference({})
+    let freed = 0
+    copy.addEventListener('dispose', () => { freed++ })
+    own.dispose()
+    expect(freed).toBe(1)
+    const shared = new ScreenCapture()
+    const given = createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'screen', side: 'front', surface, screen: shared })
+    expect(captureOf(given)).toBe(shared)
+    const sharedCopy = shared.getTextureForReference({} as never)
+    let sharedFreed = 0
+    sharedCopy.addEventListener('dispose', () => { sharedFreed++ })
+    given.dispose()
+    expect(sharedFreed).toBe(0)
   })
 })
 

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { CustomBlending, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, Vector3 } from 'three'
+import { CustomBlending, FrontSide, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3 } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
@@ -348,6 +348,76 @@ describe('Surface', () => {
     const b = s.glassBounds
     expect(b.min.x).toBeCloseTo(-2); expect(b.max.x).toBeCloseTo(2); expect(b.min.y).toBeCloseTo(-1.5); expect(b.max.y).toBeCloseTo(1.5)
     expect(b.min.z).toBe(0); expect(b.max.z).toBeGreaterThanOrEqual(48 * theme.glass.thicknessRatio / 100)
+  })
+  it('setQuality rebuilds the element glass with or without back faces, and marks the content dirty', () => {
+    const c: SurfaceContext = { ...ctx }   // setQuality writes the shared context: keep the suite's own
+    const { s } = signup(c)
+    s.tick(1 / 60); s.prepare(stubRenderer(), { width: 400, height: 300 }, 1)
+    const glassMeshes = () => meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.glassBack || m.renderOrder === SURFACE_ORDER.glassFront)
+    const before = glassMeshes()
+    expect(before).toHaveLength(2)
+    const freed: unknown[] = []
+    for (const m of before) (m.material as MeshPhysicalNodeMaterial).addEventListener('dispose', () => freed.push(m.material))
+    const low = Object.freeze({ ...ctx.quality, backFaces: false })
+    s.setQuality(low)
+    expect(c.quality).toBe(low); expect(ctx.quality).not.toBe(low)   // replaced, never written into
+    expect(s.contentDirty).toBe(true)
+    expect(freed).toHaveLength(2)
+    const after = glassMeshes()
+    expect(after).toHaveLength(1); expect(after[0]!.renderOrder).toBe(SURFACE_ORDER.glassFront)
+    expect(after[0]!.geometry).toBe(s.glass.geometry); expect(after[0]!.castShadow).toBe(true); expect(after[0]!.parent).toBe(s.plane)
+    expect(before.every(m => m.parent === null)).toBe(true)
+    s.setQuality({ ...low, backFaces: true })
+    expect(glassMeshes().map(m => m.renderOrder).sort()).toEqual([SURFACE_ORDER.glassBack, SURFACE_ORDER.glassFront])
+    // the rebuilt front refracts the same content RT
+    const sampled = nodesOf((glassMeshes()[0]!.material as MeshPhysicalNodeMaterial).backdropNode).filter(n => n.isTextureNode).map(n => n.value)
+    expect(sampled).toContain(s.contentPass.texture)
+  })
+  it('setQuality rebuilds the background slab around its one screen capture, with the new depth reject', () => {
+    const c: SurfaceContext = { ...ctx }
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, c)
+    const slab = () => meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab)
+    const graph = () => slab().flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode))
+    const bases = () => new Set(graph().filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!()))
+    const capture = [...bases()][0] as { value: Texture }
+    let captureFreed = 0
+    capture.value.addEventListener('dispose', () => { captureFreed++ })
+    expect(slab()).toHaveLength(2); expect(graph().some(n => n.constructor.type === 'ViewportDepthTextureNode')).toBe(true)
+    s.setQuality({ ...ctx.quality, backFaces: false, depthReject: false })
+    expect(slab()).toHaveLength(1); expect((slab()[0]!.material as MeshPhysicalNodeMaterial).side).toBe(FrontSide)
+    expect(graph().some(n => n.constructor.type === 'ViewportDepthTextureNode')).toBe(false)
+    expect(bases()).toEqual(new Set([capture])); expect(captureFreed).toBe(0)
+    s.setQuality({ ...ctx.quality, backFaces: true, depthReject: true })
+    expect(slab()).toHaveLength(2); expect(bases()).toEqual(new Set([capture]))
+    expect(graph().some(n => n.constructor.type === 'ViewportDepthTextureNode')).toBe(true)
+    expect(slab().every(m => m.parent === s.layer)).toBe(true)
+  })
+  it('setQuality switches the content RT\'s texel type', () => {
+    const c: SurfaceContext = { ...ctx }
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, c)
+    expect(s.contentPass.texture.type).toBe(UnsignedByteType)
+    s.setQuality({ ...ctx.quality, contentType: 'half' })
+    expect(s.contentPass.texture.type).toBe(HalfFloatType)
+  })
+  it('a throwing rebuild fails the Surface instead of propagating', () => {
+    const c: SurfaceContext = { ...ctx }
+    const { s } = signup(c)
+    s.glass.geometry.deleteAttribute('iTouch')   // createGlassMaterial refuses a geometry missing an attribute
+    const onError = vi.fn(); s.addEventListener('error', onError)
+    expect(() => s.setQuality({ ...ctx.quality })).not.toThrow()
+    expect(s.error?.message).toMatch(/iTouch/); expect(onError).toHaveBeenCalledTimes(1)
+  })
+  it('refreshText rebuilds the glyphs when another Surface moved the atlas, and only then', () => {
+    const { s } = signup()
+    s.tick(1 / 60); s.contentDirty = false
+    expect(s.refreshText()).toBe(false); expect(s.contentDirty).toBe(false)
+    ctx.text.atlas.invalidate()                   // another Surface's glyphs evicted this one's
+    expect(s.refreshText()).toBe(true)
+    expect(s.contentDirty).toBe(true); expect(s.foregroundText.glyphCount).toBe(13)
+    s.contentDirty = false
+    expect(s.refreshText()).toBe(false)           // caught up
+    s.tick(1 / 60)
+    expect(s.contentDirty).toBe(false)
   })
   it('dispose drops the animation and layout state and detaches', () => {
     const { s } = signup()

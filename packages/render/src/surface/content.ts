@@ -37,6 +37,18 @@ export class ContentPass {
   }
   get texture(): Texture { return this.target.texture }
 
+  /**
+   * Switches the texel type (a quality change). The texture stays the same object, so materials keep sampling it; the
+   * target is disposed so the backend re-allocates it, in the new type, at its next render. True if it changed.
+   */
+  setType(type: 'byte' | 'half'): boolean {
+    const t = type === 'half' ? HalfFloatType : UnsignedByteType
+    if (this.target.texture.type === t) return false
+    this.target.texture.type = t
+    this.target.dispose()
+    return true
+  }
+
   resize(width: number, height: number): boolean {
     if (this.target.width === width && this.target.height === height) return false
     this.target.setSize(width, height)

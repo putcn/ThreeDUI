@@ -28,6 +28,16 @@ describe('ContentPass', () => {
     expect(p.target.width).toBe(256)
     expect(new ContentPass({ type: 'half' }).target.texture.type).toBe(HalfFloatType)
   })
+  it('switches the texel type in place, re-allocating the target only on a change', () => {
+    const p = new ContentPass()
+    const tex = p.texture
+    let freed = 0
+    p.target.addEventListener('dispose', () => { freed++ })
+    expect(p.setType('byte')).toBe(false); expect(freed).toBe(0)
+    expect(p.setType('half')).toBe(true)
+    expect(p.texture).toBe(tex); expect(tex.type).toBe(HalfFloatType); expect(freed).toBe(1)   // same texture: materials keep sampling it
+    expect(p.setType('byte')).toBe(true); expect(tex.type).toBe(UnsignedByteType); expect(freed).toBe(2)
+  })
   it('sets the ortho view to the surface rect in units', () => {
     const p = new ContentPass()
     p.setView({ width: 400, height: 300, ptPerUnit: 100 })

@@ -1,5 +1,5 @@
 import { AddEquation, Box3, Color, CustomBlending, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Vector2, Vector3, type Material, type Object3DEventMap, type Texture } from 'three'
-import { MeshStandardNodeMaterial, ViewportTextureNode } from 'three/webgpu'
+import { MeshStandardNodeMaterial } from 'three/webgpu'
 import { texture, uniform } from 'three/tsl'
 import {
   apply, buildRenderList, createSurface, EventDispatcher, FocusManager, PointerTracker, resolveColor,
@@ -7,7 +7,7 @@ import {
 } from '@glassui/core'
 import type { TextEngine } from '@glassui/text'
 import { GlassBatch, type TouchState } from '../glass/batch'
-import { createGlassMaterial, type GlassMaterial } from '../glass/material'
+import { createGlassMaterial, ScreenCapture, type GlassMaterial } from '../glass/material'
 import { PanelBatch, cornerExponentFor } from '../panel/batch'
 import { createPanelMaterial } from '../panel/material'
 import { DecorationBatch } from '../decoration/batch'
@@ -32,28 +32,6 @@ export interface SurfaceEventMap extends Object3DEventMap { error: { error: Erro
 export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, images: 3.5, glyphs: 4 } as const
 /** `renderOrder` of each draw inside the content RT's scene. */
 export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as const
-
-/**
- * `viewportMipTexture()` that can be disposed: three copies the framebuffer into a clone of the node's texture per
- * render target or canvas target, cached in a private WeakMap, so disposing the node's own texture would free nothing
- * that was drawn. Every copy is resolved through `getTextureForReference` (a material samples clones of this node that
- * resolve through it as their base), so it records them here.
- */
-class ScreenCapture extends ViewportTextureNode {
-  private readonly copies = new Set<Texture>()
-  constructor(...args: ConstructorParameters<typeof ViewportTextureNode>) { super(...args); this.generateMipmaps = true }
-  override getTextureForReference(reference?: Parameters<ViewportTextureNode['getTextureForReference']>[0]): Texture {
-    const t = super.getTextureForReference(reference)
-    ;((this.referenceNode as ScreenCapture | null) ?? this).copies.add(t)
-    return t
-  }
-  override dispose(): void {
-    this.copies.add(this.value)
-    for (const t of this.copies) t.dispose()
-    this.copies.clear()
-    super.dispose()
-  }
-}
 
 /**
  * The content quad's material: the content RT on the Surface plane, lit (it receives the glass's shadows) but not
@@ -121,6 +99,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private readonly contentScale: number
   private readonly contentClear: { color: Color; alpha: number } = { color: new Color(0, 0, 0), alpha: 0 }
   private readonly glassMaterials: GlassMaterial[] = []
+  /** The meshes `buildGlass` made (slab and element glass), replaced on a quality change. */
+  private readonly glassMeshes: Mesh[] = []
   private readonly materials: Material[] = []
   private readonly foregroundGlyphs = new Map<number, Mesh>()
   private readonly contentGlyphs = new Map<number, Mesh>()
@@ -149,15 +129,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.add(this.layer)
     const bg = this.model.background
     if (bg === 'glass') {
-      const slab = this.backgroundGlass = new GlassBatch()
-      const screen = this.screen = new ScreenCapture()   // one framebuffer capture for both faces
-      for (const [side, on] of [['back', ctx.quality.backFaces], ['front', true]] as const) {
-        if (!on) continue
-        const gm = createGlassMaterial({ geometry: slab.geometry, K: slab.K, backdrop: 'screen', side, surface: this.su, screen, depthReject: ctx.quality.depthReject })
-        const mesh = new Mesh(slab.geometry, gm.material)
-        mesh.renderOrder = SURFACE_ORDER.slab; mesh.frustumCulled = false   // at z = 0: its top face is the content plane
-        this.layer.add(mesh); this.glassMaterials.push(gm)
-      }
+      this.backgroundGlass = new GlassBatch()
+      this.screen = new ScreenCapture()   // one framebuffer capture for both faces, kept across quality rebuilds
     } else if (bg !== 'none') {
       // opaque: a clear must be (0,0,0)@0 or opaque to stay premultiplied on both backends (WebGL premultiplies it)
       toColor(resolveColor(bg, ctx.theme, ctx.scheme), this.contentClear.color); this.contentClear.alpha = 1
@@ -170,13 +143,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     Object.defineProperty(this.contentMesh.userData, 'surface', { value: this, enumerable: false })
     this.plane.add(this.contentMesh)
 
-    for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, ctx.quality.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
-      if (!on) continue
-      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture })
-      const mesh = new Mesh(this.glass.geometry, gm.material)
-      mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = false
-      this.plane.add(mesh); this.glassMaterials.push(gm)
-    }
+    this.buildGlass(ctx.quality)
     const rimMesh = new Mesh(this.rims.geometry, this.own(createRimMaterial(this.rims.geometry, this.su)))
     rimMesh.renderOrder = SURFACE_ORDER.rims; rimMesh.frustumCulled = false
     this.plane.add(rimMesh)
@@ -193,6 +160,49 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.contentPass.scene.add(panelMesh, poolMesh, this.contentImages.container)
 
     this.applySize()
+  }
+
+  /**
+   * (Re)creates the glass draws for quality `q`, disposing the ones it replaces: the background slab's faces (its back
+   * with `q.backFaces`, refracting the one screen capture, `q.depthReject`) and the element glass's (its back with
+   * `q.backFaces`, refracting the content RT).
+   */
+  private buildGlass(q: QualitySettings): void {
+    for (const m of this.glassMeshes) m.removeFromParent()
+    for (const gm of this.glassMaterials) gm.dispose()
+    this.glassMeshes.length = 0; this.glassMaterials.length = 0
+    const slab = this.backgroundGlass, screen = this.screen
+    if (slab && screen) {
+      for (const [side, on] of [['back', q.backFaces], ['front', true]] as const) {
+        if (!on) continue
+        const gm = createGlassMaterial({ geometry: slab.geometry, K: slab.K, backdrop: 'screen', side, surface: this.su, screen, depthReject: q.depthReject })
+        const mesh = new Mesh(slab.geometry, gm.material)
+        mesh.renderOrder = SURFACE_ORDER.slab; mesh.frustumCulled = false   // at z = 0: its top face is the content plane
+        this.layer.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
+      }
+    }
+    for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
+      if (!on) continue
+      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture })
+      const mesh = new Mesh(this.glass.geometry, gm.material)
+      mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = false
+      this.plane.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
+    }
+  }
+
+  /**
+   * A quality change (the root calls it on every Surface): replaces the shared `ctx.quality` with `q` (profile rows are
+   * frozen, never written into), rebuilds the glass draws, switches the content RT's texel type and marks the content
+   * dirty (the RT's size follows `q.contentScale` at the next `prepare`). A throw fails the Surface instead of propagating.
+   */
+  setQuality(q: QualitySettings): void {
+    this.ctx.quality = q
+    if (this.error) return
+    try {
+      this.buildGlass(q)
+      this.contentPass.setType(q.contentType)
+      this.contentDirty = true
+    } catch (e) { this.fail(e) }
   }
 
   get root(): Node { return this.model.root }
@@ -276,6 +286,20 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.foregroundImages.update(p.foreground.images, s, i => liftFor(p, i.node), SURFACE_ORDER.images)
     this.contentImages.update(p.content.images, s, undefined, CONTENT_ORDER.images)
     this.fillText(p)
+  }
+
+  /**
+   * Rebuilds the glyph quads from the last partition when the atlas epoch moved since they were built — the pages are
+   * shared, so another Surface's glyphs may have evicted this one's after it ticked — and marks the content dirty. The
+   * root calls it on every Surface when the epoch moved during its tick. True if it rebuilt.
+   */
+  refreshText(): boolean {
+    if (this.error || !this.parts || this.ctx.text.atlas.epoch === this.seenEpoch) return false
+    try {
+      this.fillText(this.parts)
+      this.contentDirty = true
+      return true
+    } catch (e) { this.fail(e); return false }
   }
 
   /** The glyph quads, laid out once more if the atlas evicted while they were built (their slots moved under them). */
