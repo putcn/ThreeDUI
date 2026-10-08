@@ -27,8 +27,23 @@ function inset(layout: Rect, w: number, h: number): number {
 const unit = (x: number): number => Math.max(0, Math.min(1, x))
 
 /**
+ * Keys a transition is configured for in the base style or in any state branch. Their targets are tracked even while
+ * the branch is off, so switching it on has a recorded value to animate from.
+ */
+function transitionKeys(style: Style): Set<TransitionKey> {
+  const keys = new Set<TransitionKey>()
+  for (const t of [style.transition, style.hover?.transition, style.pressed?.transition, style.focused?.transition, style.disabled?.transition]) {
+    if (t) for (const k of Object.keys(t) as TransitionKey[]) if (t[k] !== undefined) keys.add(k)
+  }
+  return keys
+}
+
+/**
  * Drives spec §4.4 transitions. Each tick it reads every transitioning node's *targets* (layout, style, state
  * branches, elevation/tilt), starts a channel per changed scalar and writes the blended values into `node.visual`.
+ * A key is tracked when the base style or any state branch configures a transition for it. A change animates only
+ * when the transition in effect now (the effective style's) has the key; otherwise it jumps. So a transition set only
+ * in `pressed` animates the press, and the release (branch off) jumps.
  * Nodes are keyed by identity. One runtime can serve several surfaces (tick each root); a node that leaves its tree
  * loses its state on the next tick of the root it was last seen under.
  */
@@ -49,13 +64,13 @@ export class AnimationRuntime {
     const visit = (n: Node, parentRadius: number, parentW: number, parentH: number): void => {
       const s = effectiveStyle(n)
       if (s.display === 'none') return
-      const tr = s.transition
       const rect = n.layout
       const resolved = resolveRadius(s.radius, this.theme, rect.width, rect.height, parentRadius, inset(rect, parentW, parentH))
       const radius = Math.max(0, Math.min(resolved, rect.width / 2, rect.height / 2))   // clamped as buildRenderList draws it
-      if (tr && Object.keys(tr).length > 0) {
+      const keys = transitionKeys(n.style)
+      if (keys.size > 0) {
         seen.add(n)
-        moving = this.step(root, n, s, tr, radius, dt) || moving
+        moving = this.step(root, n, s, keys, radius, dt) || moving
       }
       for (const c of n.children) visit(c, radius, rect.width, rect.height)
     }
@@ -64,11 +79,11 @@ export class AnimationRuntime {
     return moving
   }
 
-  /** The scalar targets of `n` for the configured keys, flattened to channel ids. */
-  private targets(n: Node, s: Style, tr: Transition, radius: number): Map<string, number> {
+  /** The scalar targets of `n` for the tracked keys, flattened to channel ids. */
+  private targets(n: Node, s: Style, keys: Set<TransitionKey>, radius: number): Map<string, number> {
     const t = new Map<string, number>()
     const rgba = (id: string, c: RGBA) => { t.set(`${id}.0`, c[0]); t.set(`${id}.1`, c[1]); t.set(`${id}.2`, c[2]); t.set(`${id}.3`, c[3]) }
-    for (const k of Object.keys(tr) as TransitionKey[]) {
+    for (const k of keys) {
       switch (k) {
         case 'x': t.set('x', n.layout.x); break
         case 'y': t.set('y', n.layout.y); break
@@ -99,16 +114,18 @@ export class AnimationRuntime {
     return t
   }
 
-  private step(root: Node, n: Node, s: Style, tr: Transition, radius: number, dt: number): boolean {
-    const targets = this.targets(n, s, tr, radius)
+  private step(root: Node, n: Node, s: Style, keys: Set<TransitionKey>, radius: number, dt: number): boolean {
+    const targets = this.targets(n, s, keys, radius)
     let anim = this.state.get(n)
     if (!anim) { this.state.set(n, { root, targets, channels: new Map() }); return false }   // first sight: record, no animation
     anim.root = root
     for (const [id, to] of targets) {
       const prev = anim.targets.get(id)
       anim.targets.set(id, to)
-      if (prev === undefined || prev === to || this.reducedMotion) continue
-      const spec = resolveSpring(tr[id.split('.')[0] as TransitionKey]!, this.theme)
+      if (prev === undefined || prev === to) continue
+      const cfg = s.transition?.[id.split('.')[0] as TransitionKey]
+      if (!cfg || this.reducedMotion) { anim.channels.delete(id); continue }   // no transition in effect for this key now: jump
+      const spec = resolveSpring(cfg, this.theme)
       const ch = anim.channels.get(id)
       const from = ch ? ch.value : prev
       if ('stiffness' in spec) {

@@ -113,6 +113,27 @@ describe('AnimationRuntime', () => {
     for (let i = 0; i < 6; i++) rt.tick(s.root, 1 / 60)
     expect(btn.visual!.scale!).toBeLessThan(0.975)   // the soft base spring barely pulls back; staying snappy would be past 0.99
   })
+  it('a transition only a state branch configures animates into that branch and jumps out of it', () => {
+    const { s, btn } = button()
+    btn.setStyle({ transition: undefined, pressed: { scale: 0.96, transition: { scale: 'snappy' } } })   // no base transition
+    const rt = new AnimationRuntime(theme, 'light')
+    rt.tick(s.root, 1 / 60)
+    btn.setState({ pressed: true })
+    expect(rt.tick(s.root, 1 / 60)).toBe(true)
+    expect(btn.visual!.scale!).toBeLessThan(1); expect(btn.visual!.scale!).toBeGreaterThan(0.96)
+    btn.setState({ pressed: false })              // the branch (and its transition) is off now: the change jumps
+    expect(rt.tick(s.root, 1 / 60)).toBe(false)
+    expect(btn.visual).toBeNull(); expect(rt.active).toBe(0)
+  })
+  it('a branch adds a transition key next to the base ones', () => {
+    const { s, btn } = button()
+    btn.setStyle({ transition: { opacity: 'smooth' }, pressed: { scale: 0.9, transition: { scale: 'snappy' } } })
+    const rt = new AnimationRuntime(theme, 'light')
+    rt.tick(s.root, 1 / 60)
+    btn.setState({ pressed: true })
+    expect(rt.tick(s.root, 1 / 60)).toBe(true)
+    expect(btn.visual!.scale!).toBeLessThan(1); expect(btn.visual!.scale!).toBeGreaterThan(0.9)
+  })
   it('clamps an overshooting opacity spring to [0, 1]', () => {
     const { s, btn } = button()
     btn.setStyle({ transition: { opacity: 'bouncy' } })
