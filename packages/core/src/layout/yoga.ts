@@ -5,6 +5,7 @@ import {
 } from 'yoga-layout/load'
 import type { Node } from '../node'
 import type { Length, Style } from '../style/schema'
+import { effectiveStyle } from '../style/effective'
 import type { LayoutEngine, MeasureFn } from './engine'
 export type { LayoutEngine, MeasureFn } from './engine'
 
@@ -96,7 +97,7 @@ class YogaLayout implements LayoutEngine {
   private sync(n: Node): YNode {
     const e = this.entries.get(n) ?? this.create(n)
     const { y } = e
-    applyStyle(y, n.style)
+    applyStyle(y, effectiveStyle(n))   // state branches included: Node.setState marks layout when one sets a layout key
     const wantsMeasure = n.type === 'text' && n.children.length === 0 && this.measure !== undefined
     // Yoga forbids children under a measured node, so drop the callback before any can be attached.
     if (e.measured && !wantsMeasure) { y.markDirty(); y.unsetMeasureFunc(); e.measured = false }
@@ -114,7 +115,7 @@ class YogaLayout implements LayoutEngine {
 
     if (wantsMeasure) {
       if (!e.measured) { y.setMeasureFunc((w, mode) => this.measureText(n, w, mode)); e.measured = true; y.markDirty() }
-      // setStyle (font, size…) marks only `layout`, setProp marks `text`; either can change the measured size.
+      // setStyle/setState (font, size…) mark only `layout`, setProp marks `text`; either can change the measured size.
       else if (n.dirty.layout || n.dirty.text) y.markDirty()
     }
     return y

@@ -40,7 +40,7 @@ describe('buildRenderList', () => {
   })
   it('applies state branches before resolving', () => {
     const { s, card } = form()
-    card.setStyle({ hover: { opacity: 0.5 } }); card.state.hover = true
+    card.setStyle({ hover: { opacity: 0.5 } }); card.setState({ hover: true })
     expect(buildRenderList(s, theme, 'light').panels[0]!.opacity).toBe(0.5)
   })
 })
@@ -194,15 +194,17 @@ describe('buildRenderList rules', () => {
   it('gives text its content box: the effective padding, specific edges over X/Y over all', () => {
     const t = box('text', 't', { left: 10, top: 20, width: 100, height: 40, padding: 8 })
     const mixed = box('text', 'mixed', { left: 0, top: 100, width: 100, height: 40, padding: 2, paddingX: 4, paddingTop: 6, paddingRight: 1 })
-    // Layout reads the base style, so branch padding can exceed the box: the content box clamps at 0.
-    const over = box('text', 'over', { left: 0, top: 200, width: 100, height: 40, focused: { paddingY: 30 } }); over.state.focused = true
-    const s = layout(surface(t, mixed, over))
+    // Layout reads the effective style too: the focused padding grows the auto-height box around the 22 pt measure.
+    const grown = box('text', 'grown', { left: 0, top: 200, width: 100, focused: { paddingY: 10 } }); grown.setState({ focused: true })
+    const s = layout(surface(t, mixed, grown))
+    expect(grown.layout.height).toBe(42)
     expect(buildRenderList(s, theme, 'light').text.map(x => x.rect)).toEqual([
       { x: 18, y: 28, width: 84, height: 24 },
       { x: 4, y: 106, width: 95, height: 32 },
-      { x: 0, y: 230, width: 100, height: 0 },
+      { x: 0, y: 210, width: 100, height: 22 },
     ])
-    t.setStyle({ hover: { padding: 10 } }); t.state.hover = true
+    t.setStyle({ hover: { padding: 10 } }); t.setState({ hover: true })
+    layout(s)
     expect(buildRenderList(s, theme, 'light').text[0]!.rect).toEqual({ x: 20, y: 30, width: 80, height: 20 })
   })
 
@@ -230,11 +232,11 @@ describe('effectiveStyle', () => {
   it('merges hover, focused, pressed, then disabled', () => {
     const n = new Node('box')
     n.setStyle({ bg: 'fill', opacity: 1, hover: { bg: 'accent', opacity: 0.9 }, focused: { opacity: 0.8 }, pressed: { opacity: 0.7, color: 'label' }, disabled: { opacity: 0.3 } })
-    n.state.hover = true; n.state.focused = true
+    n.setState({ hover: true, focused: true })
     expect(effectiveStyle(n)).toEqual({ bg: 'accent', opacity: 0.8 })
-    n.state.pressed = true
+    n.setState({ pressed: true })
     expect(effectiveStyle(n)).toEqual({ bg: 'accent', opacity: 0.7, color: 'label' })
-    n.state.disabled = true
+    n.setState({ disabled: true })
     expect(effectiveStyle(n)).toEqual({ bg: 'accent', opacity: 0.3, color: 'label' })
   })
 
@@ -245,14 +247,14 @@ describe('effectiveStyle', () => {
       hover: { opacity: undefined, glass: { lift: 0.3, thickness: undefined }, transition: { scale: 'bouncy' } },
       pressed: { glass: { glow: null } },
     })
-    n.state.hover = true
+    n.setState({ hover: true })
     expect(effectiveStyle(n)).toEqual({
       opacity: 0.9, glass: { thickness: 20, glow: { color: 'accent', strength: 1.1 }, lift: 0.3 }, transition: { opacity: 'snappy', scale: 'bouncy' },
     })
-    n.state.pressed = true
+    n.setState({ pressed: true })
     expect(effectiveStyle(n).glass).toEqual({ thickness: 20, glow: null, lift: 0.3 })
     expect(n.style.glass).toEqual({ thickness: 20, glow: { color: 'accent', strength: 1.1 } })
-    const bare = new Node('glass'); bare.setStyle({ focused: { glass: { lift: 0.2, thickness: undefined } } }); bare.state.focused = true
+    const bare = new Node('glass'); bare.setStyle({ focused: { glass: { lift: 0.2, thickness: undefined } } }); bare.setState({ focused: true })
     expect(effectiveStyle(bare).glass).not.toHaveProperty('thickness')
   })
 })

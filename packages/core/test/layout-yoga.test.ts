@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { Node } from '../src/node'
 import { createYogaLayout, type LayoutEngine, type MeasureFn } from '../src/layout/yoga'
+import { effectiveStyle } from '../src/style/effective'
 
 let engine: LayoutEngine
 beforeAll(async () => { engine = await createYogaLayout() })
@@ -114,6 +115,34 @@ describe('YogaLayout', () => {
     expect(root.layout).toEqual({ x: 0, y: 0, width: 40, height: 15 })
     engine.compute(root, -10, -10)
     expect(root.layout).toEqual({ x: 0, y: 0, width: 0, height: 0 })
+  })
+  it('lays out the effective style: a state branch switched by setState applies on the next compute', () => {
+    const root = box({ flexDirection: 'row', width: 200, height: 10 }, 'root')
+    const a = box({ width: 50, hover: { width: 100 } }, 'a'), b = box({ width: 10 }, 'b')
+    root.appendChild(a); root.appendChild(b)
+    engine.compute(root, 200, 10)
+    expect(b.layout.x).toBe(50)
+    a.setState({ hover: true })
+    expect(root.dirty.layout).toBe(true)
+    engine.compute(root, 200, 10)
+    expect(a.layout.width).toBe(100)
+    expect(b.layout.x).toBe(100)
+    a.setState({ hover: false })
+    engine.compute(root, 200, 10)
+    expect(b.layout.x).toBe(50)
+    engine.dispose(root)
+  })
+  it('re-measures text when a state branch changes its typography', () => {
+    const root = box({ width: 120 }, 'root')
+    const t = new Node('text', 't'); t.setProp('value', 'hi'); t.setStyle({ fontSize: 10, pressed: { fontSize: 15 } })
+    root.appendChild(t)
+    const measure: MeasureFn = (n) => ({ width: 30, height: Number(effectiveStyle(n).fontSize) * 2 })
+    engine.compute(root, 120, 100, measure)
+    expect(t.layout.height).toBe(20)
+    t.setState({ pressed: true })
+    engine.compute(root, 120, 100, measure)
+    expect(t.layout.height).toBe(30)
+    engine.dispose(root)
   })
   it('lays a tree out again after dispose', () => {
     const root = box({ flexDirection: 'row', width: 100, height: 10 }, 'root')

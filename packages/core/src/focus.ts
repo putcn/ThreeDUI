@@ -1,5 +1,6 @@
 import type { Node } from './node'
 import type { EventDispatcher } from './events/dispatch'
+import { effectiveStyle } from './style/effective'
 
 /** `props.tabIndex` as a number (numeric strings allowed); NaN when absent, `null`, boolean or blank. */
 function tabIndexOf(n: Node): number {
@@ -10,10 +11,10 @@ function tabIndexOf(n: Node): number {
 /**
  * Keyboard focus for the tree under `root`.
  * Tab order: nodes with `props.tabIndex >= 0`, ascending, ties in tree order (so 0 comes first, unlike the DOM);
- * disabled nodes and `display: 'none'` subtrees are skipped. `focus()` also takes nodes without a tabIndex
- * (like the DOM's `tabIndex = -1`), but never one that is detached, disabled or hidden.
- * `state.focused` is updated before `blur`/`focus` (which do not bubble) are dispatched; a `blur` listener that
- * moves focus elsewhere wins over the focus change that blurred it.
+ * disabled nodes and `display: 'none'` subtrees (read from the effective style, so state branches count) are skipped.
+ * `focus()` also takes nodes without a tabIndex (like the DOM's `tabIndex = -1`), but never one that is detached,
+ * disabled or hidden. `state.focused` is updated (through `Node.setState`) before `blur`/`focus` (which do not
+ * bubble) are dispatched; a `blur` listener that moves focus elsewhere wins over the focus change that blurred it.
  */
 export class FocusManager {
   private cur: Node | null = null
@@ -25,7 +26,7 @@ export class FocusManager {
   focusables(): Node[] {
     const out: { n: Node; tab: number }[] = []
     const visit = (n: Node): void => {
-      if (n.style.display === 'none') return   // hides the whole subtree
+      if (effectiveStyle(n).display === 'none') return   // hides the whole subtree
       const tab = tabIndexOf(n)
       if (Number.isFinite(tab) && tab >= 0 && !n.state.disabled) out.push({ n, tab })
       for (const c of n.children) visit(c)
@@ -39,12 +40,12 @@ export class FocusManager {
     if (node === this.cur || (node && !this.canFocus(node))) return
     const old = this.cur
     if (old) {
-      this.cur = null; old.state.focused = false
+      this.cur = null; old.setState({ focused: false })
       this.d.dispatch(old, 'blur')
     }
     // A blur listener may have focused another node, or made `node` unfocusable.
     if (!node || this.cur || !this.canFocus(node)) return
-    this.cur = node; node.state.focused = true
+    this.cur = node; node.setState({ focused: true })
     this.d.dispatch(node, 'focus')
   }
 
@@ -79,7 +80,7 @@ export class FocusManager {
   private canFocus(n: Node): boolean {
     if (n.state.disabled) return false
     for (let p: Node | null = n; p; p = p.parent) {
-      if (p.style.display === 'none') return false
+      if (effectiveStyle(p).display === 'none') return false
       if (p === this.root) return true
     }
     return false

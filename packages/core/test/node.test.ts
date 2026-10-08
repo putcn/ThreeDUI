@@ -28,7 +28,37 @@ describe('Node tree', () => {
     child.setStyle({ width: 10 })
     expect(child.dirty.layout).toBe(true)
     expect(root.dirty.layout).toBe(true)
-    expect(root.dirty.paint).toBe(false)
+    expect(root.dirty.paint).toBe(true)   // paint propagates too: a repaint signal for the frame loop
+    expect(root.dirty.text).toBe(false)
+    for (const n of [root, child]) n.dirty = { layout: false, paint: false, text: false, tree: false }
+    child.setProp('label', 'x')   // not a text node: repaints, never re-lays out
+    expect([child.dirty.paint, root.dirty.paint]).toEqual([true, true])
+    expect([child.dirty.layout, root.dirty.layout]).toEqual([false, false])
+  })
+  it('setState marks paint up the tree, and layout only when a toggled branch sets a layout key', () => {
+    const root = new Node('box', 'root'), child = new Node('box', 'child'), label = new Node('text', 'label')
+    root.appendChild(child); child.appendChild(label)
+    const clean = () => { for (const n of [root, child, label]) n.dirty = { layout: false, paint: false, text: false, tree: false } }
+    child.setStyle({ hover: { opacity: 0.5, width: undefined }, pressed: { width: 100 }, focused: { fontSize: 20 } })
+    label.setStyle({ hover: { fontSize: 20 } })
+    clean()
+    child.setState({ hover: true })
+    expect(child.state).toEqual({ hover: true, pressed: false, focused: false, disabled: false })
+    expect([child.dirty.paint, root.dirty.paint, label.dirty.paint]).toEqual([true, true, false])
+    expect([child.dirty.layout, root.dirty.layout]).toEqual([false, false])   // an undefined value is not a layout key
+    clean()
+    child.setState({ pressed: true })
+    expect([child.dirty.layout, root.dirty.layout]).toEqual([true, true])
+    clean()
+    child.setState({ pressed: false })   // switching a branch off re-lays out too
+    expect([child.dirty.layout, root.dirty.layout]).toEqual([true, true])
+    clean()
+    child.setState({ hover: true, pressed: false })   // no actual change: nothing is dirty
+    expect([child.dirty, root.dirty]).toEqual([{ layout: false, paint: false, text: false, tree: false }, { layout: false, paint: false, text: false, tree: false }])
+    child.setState({ focused: true })   // typography on a box does not change its layout…
+    expect(child.dirty.layout).toBe(false)
+    label.setState({ hover: true })     // …but on a text node it changes the measured size
+    expect([label.dirty.layout, root.dirty.layout]).toEqual([true, true])
   })
   it('setProp on a text node marks text dirty; walk visits pre-order', () => {
     const root = new Node('box', 'r'), t = new Node('text', 't'), b = new Node('box', 'b')

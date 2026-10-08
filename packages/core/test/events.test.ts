@@ -106,7 +106,42 @@ describe('hitTest edge cases', () => {
   })
 })
 
+describe('hitTest reads the effective style', () => {
+  it('applies state branches for display, overflow, radius and pointerEvents', () => {
+    const s = scene()
+    s.btn.setStyle({ hover: { display: 'none' } })
+    s.panel.setStyle({ pressed: { overflow: 'visible' } })
+    s.ghost.setStyle({ focused: { pointerEvents: 'auto' } })
+    expect(hitTest(s.root, 100, 80)?.id).toBe('btn')
+    s.btn.setState({ hover: true })
+    expect(hitTest(s.root, 100, 80)?.id).toBe('panel')   // hidden by its hover branch
+    s.btn.setStyle({ hover: { radius: 0 } })
+    expect(hitTest(s.root, 61, 61)?.id).toBe('btn')     // square corners while hovered
+    expect(hitTest(s.root, 155, 155)?.id).toBe('root')
+    s.panel.setState({ pressed: true })
+    expect(hitTest(s.root, 155, 155)?.id).toBe('overflowing')   // no longer clipped
+    s.ghost.setState({ focused: true })
+    expect(hitTest(s.root, 10, 10)?.id).toBe('ghost')
+  })
+})
+
 describe('EventDispatcher + PointerTracker', () => {
+  it('changes hover and press through setState, so the nodes are marked dirty', () => {
+    const s = scene()
+    s.btn.setStyle({ hover: { opacity: 0.9 }, pressed: { width: 90 } })
+    engine.compute(s.root, 200, 200)
+    s.root.walk(n => { n.dirty = { layout: false, paint: false, text: false, tree: false } })
+    const p = new PointerTracker(s.root, new EventDispatcher())
+    p.move(100, 80)
+    expect([s.btn.dirty.paint, s.panel.dirty.paint, s.root.dirty.paint]).toEqual([true, true, true])
+    expect(s.root.dirty.layout).toBe(false)
+    p.down(100, 80)
+    expect([s.btn.dirty.layout, s.root.dirty.layout]).toEqual([true, true])
+    engine.compute(s.root, 200, 200)
+    expect(s.btn.layout.width).toBe(90)
+    p.up(100, 80)
+    expect(s.root.dirty.layout).toBe(true)
+  })
   it('bubbles with stopPropagation and tracks hover/press/click', () => {
     const s = scene()
     const d = new EventDispatcher()

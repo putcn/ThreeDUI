@@ -80,6 +80,19 @@ export interface Style extends BaseStyle {
   hover?: BaseStyle | undefined; pressed?: BaseStyle | undefined; focused?: BaseStyle | undefined; disabled?: BaseStyle | undefined
 }
 export type Length = z.infer<typeof Length>
+
+/** Style keys the layout engine reads: switching a state branch that sets one needs a new layout. */
+export const LAYOUT_KEYS: ReadonlySet<string> = new Set([
+  'display', 'position', 'flexDirection', 'justifyContent', 'alignItems', 'alignSelf', 'flexWrap', 'flex', 'flexGrow', 'flexShrink', 'flexBasis',
+  'width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight', 'aspectRatio',
+  'padding', 'paddingX', 'paddingY', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+  'margin', 'marginX', 'marginY', 'marginTop', 'marginRight', 'marginBottom', 'marginLeft',
+  'gap', 'rowGap', 'columnGap', 'top', 'right', 'bottom', 'left', 'inset', 'overflow',
+] satisfies (keyof BaseStyle)[])
+/** Typography keys: on a `text` node they change the measured size, so they need a new layout as well. */
+export const TEXT_LAYOUT_KEYS: ReadonlySet<string> = new Set([
+  'font', 'fontSize', 'fontWeight', 'lineHeight', 'letterSpacing', 'maxLines', 'wrap',
+] satisfies (keyof BaseStyle)[])
 const STATE_KEYS: readonly string[] = ['hover', 'pressed', 'focused', 'disabled']
 export const STYLE_KEYS: readonly string[] = [...Object.keys(Base.shape), ...STATE_KEYS]
 

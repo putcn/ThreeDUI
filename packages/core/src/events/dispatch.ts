@@ -69,8 +69,9 @@ export class EventDispatcher {
  * Like CSS `:hover`/`:active`, hover and press cover the hit node and all its ancestors up to `root`;
  * `pointerenter`/`pointerleave` go to each node entered (outermost first) or left (innermost first).
  * As in the DOM, `click` fires on up at the nearest common ancestor of the down and up targets (none when the up
- * misses the tree, or the pressed node has since left it). State is updated before events are dispatched,
- * so listeners see it. Call `cancel()` when the pointer is lost or leaves the Surface.
+ * misses the tree, or the pressed node has since left it). State is updated through `Node.setState` (which marks
+ * the nodes dirty) before events are dispatched, so listeners see it.
+ * Call `cancel()` when the pointer is lost or leaves the Surface.
  */
 export class PointerTracker {
   /** Hit node first, then its ancestors up to `root`, as of the last hover / press. */
@@ -95,7 +96,7 @@ export class PointerTracker {
     this.release()   // a press whose up was lost
     if (!hit) return
     this.pressPath = this.pathTo(hit)
-    for (const n of this.pressPath) n.state.pressed = true
+    for (const n of this.pressPath) n.setState({ pressed: true })
     this.d.dispatch(hit, 'pointerdown', this.last)
   }
 
@@ -140,14 +141,14 @@ export class PointerTracker {
     const left = prev.filter(n => !next.includes(n))                // innermost first
     const entered = next.filter(n => !prev.includes(n)).reverse()   // outermost first
     this.hoverPath = next
-    for (const n of left) n.state.hover = false
-    for (const n of entered) n.state.hover = true
+    for (const n of left) n.setState({ hover: false })
+    for (const n of entered) n.setState({ hover: true })
     for (const n of left) this.d.dispatch(n, 'pointerleave', this.last)
     for (const n of entered) this.d.dispatch(n, 'pointerenter', this.last)
   }
 
   private release(): void {
-    for (const n of this.pressPath) n.state.pressed = false
+    for (const n of this.pressPath) n.setState({ pressed: false })
     this.pressPath = []
   }
 }

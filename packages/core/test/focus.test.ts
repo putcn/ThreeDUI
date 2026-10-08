@@ -6,7 +6,7 @@ import { FocusManager } from '../src/focus'
 function tree() {
   const root = new Node('box', 'root'), d = new EventDispatcher()
   const a = new Node('box', 'a'), b = new Node('box', 'b'), c = new Node('box', 'c'), dis = new Node('box', 'dis')
-  a.setProp('tabIndex', 0); b.setProp('tabIndex', 2); c.setProp('tabIndex', 1); dis.setProp('tabIndex', 0); dis.state.disabled = true
+  a.setProp('tabIndex', 0); b.setProp('tabIndex', 2); c.setProp('tabIndex', 1); dis.setProp('tabIndex', 0); dis.setState({ disabled: true })
   root.appendChild(a); root.appendChild(b); root.appendChild(c); root.appendChild(dis)
   return { root, d, a, b, c, dis, fm: new FocusManager(root, d) }
 }
@@ -54,7 +54,7 @@ describe('FocusManager edge cases', () => {
     const t = tree()
     t.fm.key('Shift+Tab')
     expect(t.fm.current?.id).toBe('b')
-    for (const n of [t.a, t.b, t.c]) n.state.disabled = true
+    for (const n of [t.a, t.b, t.c]) n.setState({ disabled: true })
     expect(() => t.fm.key('Tab')).not.toThrow()
     expect(t.fm.current).toBeNull(); expect(t.b.state.focused).toBe(false)
   })
@@ -63,7 +63,7 @@ describe('FocusManager edge cases', () => {
     t.fm.focus(stray); t.fm.focus(t.dis)
     expect(t.fm.current).toBeNull(); expect([stray.state.focused, t.dis.state.focused]).toEqual([false, false])
 
-    t.fm.focus(t.a); t.a.state.disabled = true; t.fm.reconcile()
+    t.fm.focus(t.a); t.a.setState({ disabled: true }); t.fm.reconcile()
     expect(t.fm.current).toBeNull(); expect(t.a.state.focused).toBe(false)
 
     let target = ''
@@ -71,6 +71,30 @@ describe('FocusManager edge cases', () => {
     t.fm.focus(t.c); t.root.setStyle({ display: 'none' })
     t.fm.key('Enter')   // reconciles first, so the key reaches the root, not the hidden node
     expect(target).toBe('root'); expect(t.fm.current).toBeNull(); expect(t.c.state.focused).toBe(false)
+  })
+  it('reads the effective style: a state branch with display none hides a node and its subtree', () => {
+    const t = tree()
+    const group = new Node('box', 'group'), inner = new Node('box', 'inner'); inner.setProp('tabIndex', 0)
+    group.appendChild(inner); t.root.appendChild(group)
+    group.setStyle({ hover: { display: 'none' } }); t.a.setStyle({ hover: { display: 'none' } })
+    expect(t.fm.focusables()).toContain(inner)
+    t.fm.focus(inner)
+    group.setState({ hover: true })
+    expect(t.fm.focusables()).not.toContain(inner)
+    t.fm.reconcile()
+    expect(t.fm.current).toBeNull()
+    t.fm.focus(inner)
+    expect(t.fm.current).toBeNull()
+    t.a.setState({ hover: true })
+    expect(t.fm.focusables()).not.toContain(t.a)
+  })
+  it('changes focused through setState, so focus and blur mark the nodes dirty', () => {
+    const t = tree()
+    t.root.walk(n => { n.dirty = { layout: false, paint: false, text: false, tree: false } })
+    t.fm.focus(t.a)
+    expect([t.a.state.focused, t.a.dirty.paint, t.root.dirty.paint]).toEqual([true, true, true])
+    t.fm.focus(t.b)
+    expect([t.a.state.focused, t.b.state.focused, t.b.dirty.paint]).toEqual([false, true, true])
   })
   it('lets a blur listener move focus elsewhere and keeps state consistent', () => {
     const t = tree(); const log: string[] = []

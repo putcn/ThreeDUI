@@ -1,5 +1,6 @@
 import type { Node, Rect } from '../node'
 import type { Style } from '../style/schema'
+import { effectiveStyle } from '../style/effective'
 import { defaultTheme, resolveRadius, type Theme } from '../style/theme'
 
 const finiteOr0 = (v: unknown): number => { const n = Number(v ?? 0); return Number.isFinite(n) ? n : 0 }
@@ -32,7 +33,7 @@ function insideRounded(r: Rect, radius: number, x: number, y: number): boolean {
   return (x - cx) ** 2 + (y - cy) ** 2 <= rad * rad
 }
 
-function clips(n: Node): boolean { return n.style.overflow === 'hidden' || n.style.overflow === 'scroll' || n.type === 'scroll' }
+function clips(n: Node, s: Style): boolean { return s.overflow === 'hidden' || s.overflow === 'scroll' || n.type === 'scroll' }
 
 /**
  * Topmost node under (x, y) in Surface pt within `root`'s subtree, or null.
@@ -40,16 +41,17 @@ function clips(n: Node): boolean { return n.style.overflow === 'hidden' || n.sty
  * `overflow: hidden|scroll` and `scroll` nodes clip their descendants to their own rounded shape.
  * `pointerEvents` inherits as in CSS: `'none'` makes a node and its descendants transparent to the pointer,
  * and a descendant that sets `'auto'` becomes hittable again. Radius tokens resolve against `theme`, and an
- * unknown token throws a GlassUIError like every theme lookup. Only the base style is read (not state branches),
- * and `root`'s own ancestors are not consulted.
+ * unknown token throws a GlassUIError like every theme lookup. Each node's effective style is read (its active state
+ * branches applied, e.g. `hover: { display: 'none' }`), and `root`'s own ancestors are not consulted.
  */
 export function hitTest(root: Node, x: number, y: number, theme: Theme = defaultTheme): Node | null {
   const visit = (n: Node, originX: number, originY: number, inherited: Style['pointerEvents']): Node | null => {
-    if (n.style.display === 'none') return null
+    const s = effectiveStyle(n)
+    if (s.display === 'none') return null
     const r: Rect = { x: originX + n.layout.x, y: originY + n.layout.y, width: n.layout.width, height: n.layout.height }
-    const inside = insideRounded(r, resolveRadius(n.style.radius, theme, r.width, r.height), x, y)
-    if (clips(n) && !inside) return null
-    const pointerEvents = n.style.pointerEvents ?? inherited
+    const inside = insideRounded(r, resolveRadius(s.radius, theme, r.width, r.height), x, y)
+    if (clips(n, s) && !inside) return null
+    const pointerEvents = s.pointerEvents ?? inherited
     const o = scrollOffset(n)
     for (let i = n.children.length - 1; i >= 0; i--) {
       const hit = visit(n.children[i]!, r.x - o.x, r.y - o.y, pointerEvents)
