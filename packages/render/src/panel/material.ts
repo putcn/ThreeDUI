@@ -77,7 +77,8 @@ export function flatVertex(g: InstancedBufferGeometry, su: SurfaceUniforms): Fla
 /**
  * Solid panels (`bg` colour and/or border): unlit (the Surface's content quad is the lit, shadow-receiving surface,
  * Task 15), alpha-blended, antialiased against the superellipse SDF over about a pixel (`fwidth`). The border is an
- * inset band of its width at the edge; opacity is coverage × colour alpha × instance opacity.
+ * inset band of its width at the edge, blended into the fill premultiplied; opacity is coverage × colour alpha ×
+ * instance opacity.
  *
  * Varyings: `flatVertex`'s three + `iShape`, `iColor`, `iBorder` = 6.
  */
@@ -99,8 +100,10 @@ export function createPanelMaterial(geometry: InstancedBufferGeometry, surface: 
   const aa = max(fwidth(d), 1e-6).mul(0.75)
   const cover = float(1).sub(smoothstep(aa.negate(), aa, d))
   const borderMix = smoothstep(aa.negate(), aa, d.add(borderWidth)).mul(select(borderWidth.greaterThan(0), float(1), float(0)))
-  const col = mix(fill, border, borderMix)
-  m.colorNode = col.rgb
+  // premultiplied: across the border's inner edge a transparent fill (a border-only panel's) only fades the border out
+  // instead of pulling its colour toward the fill's invisible rgb
+  const col = mix(vec4(fill.rgb.mul(fill.a), fill.a), vec4(border.rgb.mul(border.a), border.a), borderMix)
+  m.colorNode = col.rgb.div(max(col.a, 1e-6))
   m.opacityNode = cover.mul(col.a).mul(opacity)
   return m
 }

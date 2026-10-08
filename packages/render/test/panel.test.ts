@@ -131,6 +131,24 @@ describe('PanelBatch and material', () => {
     const collapsed: ClipRect = { x: 50, y: 0, width: 0, height: 100, radius: 12, transform: IDENTITY }
     expect([at(-0.3, 0, collapsed), at(0.3, 0, collapsed)]).toEqual([0, 0])
   })
+  it('covers by the SDF and blends fill and border premultiplied', () => {
+    // fragment output at quad position (u, v) for a footprint of 1 pt (0.01 units) per pixel: [r, g, b, opacity]
+    const frag = (inst: PanelInstance, u: number, v: number) => {
+      const b = new PanelBatch(); b.update([inst], s)
+      const m = createPanelMaterial(b.geometry, su())
+      const at = { ...packed(b), position: [u, v, 0] }
+      return [...evalNode(m.colorNode, at, undefined, 0.01), ...evalNode(m.opacityNode, at, undefined, 0.01)]
+    }
+    const close = (got: number[], want: number[]) => got.forEach((x, k) => expect(x).toBeCloseTo(want[k]!, 6))
+    // p: fill (1, 0.5, 0, 0.8) sRGB, black 2 pt border, opacity 0.5, 100 × 40 pt
+    close(frag(p, 0, 0), [1, srgbToLinear(0.5), 0, 0.8 * 0.5])   // centre: the fill
+    close(frag(p, 0.5, 0), [0, 0, 0, 0.5 * 1 * 0.5])            // on the edge: the border, half covered
+    // a border over a transparent fill (core packs a border-only panel's fill as (0, 0, 0, 0)): halfway across the
+    // border's inner edge the colour is still the border's, at half its alpha (a straight mix would be grey)
+    const ring: PanelInstance = { ...p, color: [0, 0, 0, 0], border: { width: 2, color: [1, 1, 1, 1] }, opacity: 1 }
+    close(frag(ring, 0.48, 0), [1, 1, 1, 0.5])
+    close(frag(ring, 0, 0), [0, 0, 0, 0])
+  })
   it('flatVertex hands the fragment one varying per packed attribute and the quad-local position and size', () => {
     const b = new PanelBatch(); b.update([p], s)
     const fv = flatVertex(b.geometry, su())

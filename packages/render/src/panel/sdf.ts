@@ -17,7 +17,8 @@ export function superellipseSDF(x: number, y: number, hw: number, hh: number, r:
  * The corner's Lⁿ norm is taken as `m · ‖o / m‖ₙ` with `m = max(o.x, o.y)`, as `hypot` does: the ratios are in [0, 1]
  * with one of them 1, so no power overflows or underflows, and the floors only keep `pow` off a 0 base (WGSL `pow` is
  * `exp2(y·log2 x)`): a ratio of 0 becomes 1e-20 (its nth power is 0 in float32 either way), the sum is ≥ 1 already
- * (the floor absorbs a GPU division a ulp short of 1), and inside the corner (o = 0) the result is 1e-20 instead of 0.
+ * (the floor absorbs a GPU division a ulp short of 1), and where o = 0 (not past either corner centre line) the norm is
+ * 1e-20 instead of 0.
  */
 export function sdfNode(p: Node<'vec2'>, half: Node<'vec2'>, r: Node<'float'>, n: Node<'float'>): Node<'float'> {
   const rr = max(min(r, min(half.x, half.y)), 0)
