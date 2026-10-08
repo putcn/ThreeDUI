@@ -7,7 +7,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc -b packages/core packages/text && tsc -p packages/core/tsconfig.test.json && tsc -p packages/text/tsconfig.test.json",
     "spike:glass": "vite spikes/glass",
-    "spike:glass3d": "vite spikes/glass3d --port 5174"
+    "spike:glass3d": "vite spikes/glass3d --port 5174",
+    "spike:glyph": "vite spikes/glyph-cjk --port 5175"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
