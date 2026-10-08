@@ -145,35 +145,44 @@ Apple 规则"玻璃不采样玻璃"按默认遵守：类 2 玻璃只看内容层
 
 ### 5.2 玻璃几何：`GlassSlab`
 
-每个玻璃元素是一块有厚度、带倒角的实体：平面轮廓为超椭圆圆角矩形（胶囊/圆形用指数 2，固定半径用指数 ≈4.5），边缘为凸起 bezel 剖面（`squircle` / `circle` / `lip`），剖面 8–12 段、圆角 8–12 段，有正面、倒角面、侧面与背面。
+每个玻璃元素是一块有厚度的实体：平面轮廓为超椭圆圆角矩形（胶囊/圆形用指数 2，固定半径用指数 ≈4.5）。剖面（spike 验证后的结论）：
 
-网格参数化为 9-slice 形式：顶点携带 `anchor(±1,±1)`、`cornerOffset`（单位圆角上的位置）、`profileT`（剖面参数）属性，实际顶点位置在顶点着色器里由实例参数 `size / radius / bezel / thickness` 计算。因此**一个 Surface 内所有玻璃共用一份几何，用 instancing 一次绘制**；尺寸、圆角、厚度、按压缩放都是逐实例数据。GlassContainer 的形状融合在几何层做：相邻 slab 之间生成过渡几何（Phase 2 后半）。
+- **`fillet`（默认）**：竖直侧壁 + 顶面小半径圆角 + 平顶，底边也有更小的圆角。按钮默认 厚度 = 高度 × 0.2，顶圆角 = 高度 × 0.06，底圆角 = 高度 × 0.04（参考 80pt 高按钮：16 / 5 / 3 pt）。这是"直角的干练 + 圆润精致"的来源；更大的圆角或枕形剖面会显得像塑料糖。
+- **`lens`**（`squircle` / `circle` 凸起剖面）：只用于圆环、装饰性元素。
+
+网格参数化为 9-slice 形式：顶点携带 `anchor(±1,±1)`、`cornerOffset`、`profileT` 属性，实际位置在顶点着色器里由实例参数 `size / radius / thickness / fillet / filletBottom` 计算。因此**一个 Surface 内所有玻璃共用一份几何，用 instancing 一次绘制**；尺寸、圆角、厚度、按压缩放都是逐实例数据。玻璃元素按**背面→正面**两遍绘制（背面先画，正面采样含背面的画面），让底边亮带与内部反光出现。GlassContainer 的形状融合在几何层做（Phase 2 后半）。
 
 ### 5.3 玻璃材质（TSL，基于 PBR 节点材质）
 
-以 `MeshPhysicalNodeMaterial` 的节点图为基础，替换其 transmission 分支：
+以 `MeshPhysicalNodeMaterial` 为基础，用其内置的 `backdropNode / backdropAlphaNode` 钩子替换 diffuse 项（spike 验证：specular、Fresnel、环境反射、iridescence 仍由引擎提供，不需要改 three 内部）。一个玻璃元素由三层组成——这是 spike 中确认的"下面色块 + 上面一层超薄透明玻璃"结构：
 
-- **光照与反射**：高光、Fresnel、环境反射来自宿主场景的灯与 PMREM 环境贴图。无宿主灯时 `UIRoot` 提供一盏默认 UI key light（方向光）和一张内置的小尺寸程序化棚拍环境图。Apple 的"沿光轴两侧细高光"由倒角面的真实法线自然产生，随相机/灯光/元素旋转而移动。
-- **折射**：用真实法线做 Snell 折射，沿折射方向穿过 `thickness` 到达背面，再按 §5.1 投影到 backdrop 采样。
-- **色散**：三通道不同 IOR（`ior ± (ior-1)·k·dispersion`），位移 < 0.25px 时自动退化为单次采样。
-- **磨砂**：`roughness` → backdrop mip lod（与 three transmission 一致）；高质量档用 dual-Kawase 金字塔替代 mip 三线性。
-- **Tint**：按路径长度做 Beer-Lambert 吸收 `exp(-σ·d)`，厚的玻璃颜色更深，大元素"更厚、更深"自动成立。
+1. **玻璃壳**：透明（散射 ≈5%），真实法线做 Snell 折射、穿过真实厚度投影到 backdrop 采样；三通道不同 IOR 做色散；`roughness` → 模糊等级；边缘按 Fresnel 加内发光（`edgeGlow`）。
+2. **发光层**（有色元素）：不用实心吸收色，而是材质内的发光项 `emissive = color × (0.55 + 1.2·Fresnel) × strength`，可按 uv 做软分割（开关的左半亮、右半不亮）。颜色属于材质本身，任何角度都没有覆盖错误。主按钮、开关、强调卡片都用这一层。
+3. **装饰层**（平面贴片，§5.5）：轮廓细亮线 + 底边亮带、元素下方的透射光晕。
+
+其它：
+- **光照与反射**：来自宿主场景的灯与 PMREM 环境贴图。无宿主灯时 `UIRoot` 提供默认 UI key light 和一张内置的**程序化棚拍环境图**（左上大柔光箱 + 底部细光带 + 一个小热点）；均匀的环境图（如 RoomEnvironment）出不来顶边那条亮线。
 - **自适应亮度**：每个玻璃元素在金字塔最小层采样平均亮度，写入"每元素一个 texel"的 ping-pong 纹理并做时间平滑（τ≈0.2s）；前景文字材质读同一 texel 决定明/暗，无 CPU 回读。
-- **按压内发光**：以指尖点为中心的发射项（`emissive`），随 `press` 弹簧变化。
+- **按压内发光**：以指尖点为中心的发射项，随 `press` 弹簧变化。
 - 深度测试开、写入关；类 3 玻璃拒绝"捕获深度 < 玻璃深度"的样本。
+- 灯光预算：不做 tone mapping，hemi + key + env 总量控制在 ≈1，否则白玻璃过曝。
 
 参数（`GlassParams`，全部有默认值，`theme.glass` 可覆盖，节点 `style.glass` 可覆盖）：
 
 ```ts
 interface GlassParams {
   variant: 'regular' | 'clear'    // clear：低 roughness、低吸收，backdrop 亮时自动加 35% 暗化层
-  thickness: number               // pt；默认随尺寸 clamp(minSide*0.08, 2, 10)
-  bezel: number                   // 倒角宽 pt；默认 clamp(minSide*0.18, 6, 28)
-  profile: 'squircle' | 'circle' | 'lip'
+  thickness: number               // pt；默认 minSide*0.2
+  fillet: number; filletBottom: number   // 顶/底圆角 pt；默认 minSide*0.06 / *0.04
+  profile: 'fillet' | 'lens'
+  scatter: number                 // 0–1 磨砂散射比例（透明玻璃 ≈0.05，磨砂面板 ≈0.12–0.5）
+  lift: number                    // 透射项向白混合（磨砂层对天光的反射）
+  edgeGlow: number                // Fresnel 边缘内发光
+  glow: { color: ColorToken; strength: number; split?: number } | null   // 发光层
   ior: number                     // 1.5
   dispersion: number              // 0–1
   roughness: number               // 0–1 → 磨砂
-  tint: ColorToken | null; absorption: number
+  tint: ColorToken | null; absorption: number   // 吸收仅用于淡淡的染色；饱和色用 glow
   envIntensity: number; specularIntensity: number
   innerGlow: number
   adaptive: boolean
@@ -181,15 +190,20 @@ interface GlassParams {
 }
 ```
 
-### 5.4 阴影
+### 5.4 阴影与反射
 
-`UIRoot` 的 UI key light 渲染一张 **VSM**（方差阴影贴图，模糊半径可调，软阴影便宜）；所有 UI 几何（玻璃 slab、填充面板）既投射也接收：按钮投到面板上、面板投到世界几何上、Dialog 投到其下内容上。接触感来自真实的 `elevation` 距离。阴影贴图覆盖范围按可见 UI 包围盒自动拟合。低/minimal 质量档回落到解析高斯阴影贴片（Evan Wallace erf 法）。
+- `UIRoot` 的 UI key light 渲染一张 **VSM**；`renderer.shadowMap.transmitted = true` + `material.castShadowNode = vec4(透过色, alpha)` 得到**彩色透射阴影**（three 原生，spike 验证），彩色玻璃下方自然有同色阴影。
+- **默认只在 Surface 内部投影**：元素投到自己的 Surface 上；Surface 本身不投到世界几何上（`castToWorld: false`），世界几何也不接收 UI 阴影——spike 里投到背景墙的影子透过半透明面板看起来是脏的。需要时可逐 Surface 打开。
+- 注意 VSM 下 `receiveShadow` 的物体也会被画进阴影贴图，布景要同时关掉 cast 与 receive。
+- 阴影贴图覆盖范围按可见 UI 包围盒自动拟合；低/minimal 档回落到解析高斯阴影贴片。
+- **面板反射**：Surface 的内容层 RT 直接作为其上玻璃元素的"倒影源"（按磨砂程度取 mip 模糊，按 alpha 加权混入 ≈20%），不再用 `reflector` 重画场景。
 
 ### 5.5 面板、文字、图片
 
 - **填充面板**（非玻璃 box）：薄平面 + 超椭圆 SDF 做形状与抗锯齿，受光材质（能接收阴影），支持填充/边框/渐变/裁剪；一个 Surface 内同层面板 instancing 一次绘制。
 - **文字**：instanced glyph quad，采样字形 atlas，`fwidth` 抗锯齿；不受光（可读性优先，对应 Apple vibrancy）；颜色可读自适应亮度 texel；带 `elevation` 时沿法线抬升。
 - **图片**：第一期单独 draw。
+- **装饰层**（Canvas2D/SDF 平面贴片，挂在元素顶面上，随元素抬升/倾斜/缩放）：`rim`（轮廓细亮线 + 顶/底边亮带）、`pool`（元素下方叠加混合的透射光晕，颜色取发光色或白）、小部件（checkbox 的勾、开关滑块、输入框图标、角标圆点）。原则：真 3D 负责形体、厚度、投影、反射、透视；"晶莹感"的光学特征作为可配置装饰层叠在几何上。**不是所有东西都该是几何**：开关滑块、角标、分段控件的灰段等用平面贴片更干净。
 
 ### 5.6 每帧流程
 
@@ -282,11 +296,14 @@ app.mount(root.screen.createSurface({ fill: true }))  // 或 mount(someSurface)
 | `Dialog` | 模态，走 Portal 到顶层 Surface，背景暗化 + 玻璃面板缩放入场 | v-model:open, title, closeOnBackdrop；slot default/footer |
 | `GlassContainer` | 对应 Apple `GlassEffectContainer`：子玻璃形状按 `spacing` 融合，支持 `glassId` 形变过渡 | spacing；slot |
 
+**尺寸与间距 token（spike 中确认，80pt 高控件为基准）**：控件内边距 26、前置/后置图标 28、图标与文字间距 14、图标+文字组整体居中（组内间距 12）、checkbox 玻璃钮 44 × 44（圆角 12）、开关 136 × 62（滑块 48，边距 7，滑块中心 = 半宽 − 边距 − 滑块半径）、同一行内的控件右边缘对齐输入框右边缘。
+
 每个组件：`defineComponent` + zod props schema → 自动导出到 `manifest.json`（名称、描述、props 的类型/默认值/取值说明、events 的 payload、slots、2–3 个示例片段、常见错误）。组件内部只用 `Box/Text/Icon/glass` 原语与 Style，不直接碰 render 包。
 
 ### 8.3 Liquid Glass 组件规范（在组件层固定）
 
 - 玻璃只用于控制层（按钮、输入框、开关、对话框面板、工具条）；内容区用填充色与 vibrancy，不叠玻璃。
+- 按钮三层结构：发光层（有色）+ 透明玻璃壳（直壁 + 小圆角）+ 装饰层（轮廓亮线、底边亮带、透射光晕）。主按钮 = 发光层强度 ≈1.1；次按钮 = 无发光层的清玻璃；checkbox = 44pt 方形清玻璃钮 + 勾；开关 = 发光层按滑块位置软分割。
 - 形状：按钮默认 capsule；面板固定半径；嵌套子元素默认 `radius: 'concentric'`。
 - 按压：`scale 0.96 → spring('snappy')`，指尖处内发光；悬停：`glint` 增强 + 轻微 `tilt`（≤3°，仅指针设备）。
 - 出现/消失：折射与模糊强度从 0 调制到目标值，同时 scale 0.9→1。
@@ -310,7 +327,7 @@ app.mount(root.screen.createSurface({ fill: true }))  // 或 mount(someSurface)
 
 ## 11. 实施分期
 
-- **Phase 0 · 风险 spike（可抛弃）**：① TSL `viewportSharedTexture`/mip 节点在 WebGPU 与 WebGL2 后端的行为、一致性与成本；② 单 quad 玻璃 shader 原型（SDF + LUT 折射 + 色散 + glint）贴在一张离屏 RT 上，任意旋转下验证正确；③ `@pmndrs/glyph` 0.1 中文表现 vs Canvas2D atlas。产出：三个结论写进 `docs/superpowers/spikes/`，并回填本 spec 的 §5/§6。
+- **Phase 0 · 风险 spike**：①② 已完成（`spikes/glass3d/`，结论见 `docs/superpowers/spikes/2026-10-07-glass-tsl-spike.md`，已回填 §5）；③ `@pmndrs/glyph` 0.1 中文表现 vs Canvas2D atlas 待做，作为实现计划的第一个任务。
 - **Phase 1 · core + text**：Node/Style/tw/theme、Yoga、事件/焦点/滚动、spring、SystemFontEngine、渲染列表；全部可在 Node 测试。
 - **Phase 2 · render**：Surface RT、面板/文字/阴影材质、玻璃材质与金字塔、屏幕层/世界层、质量分级；playground 可视。
 - **Phase 3 · vue + 组件**：渲染器、11 个组件、Dialog/Portal、IME 桥、manifest、视觉回归、性能基线。
