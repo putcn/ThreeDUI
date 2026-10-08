@@ -188,9 +188,10 @@ put(PANEL.mesh, label('Start your 14-day free trial. No credit card needed.', { 
 // inputs: full width 760 px, centre x = 502
 const input = (cy: number, iconName: IconName, placeholder: string, trailing?: IconName) => {
   const f = pill(760, 84, 502, cy)
-  put(f.mesh, icon(iconName, U(34), HINT, 0.1), 150 - 502, 0, f.thickness)
-  put(f.mesh, label(placeholder, { size: U(24), weight: 500, color: HINT, align: 'left' }), 196 - 502, 0, f.thickness)
-  if (trailing) put(f.mesh, icon(trailing, U(32), HINT, 0.1), 846 - 502, 0, f.thickness)
+  const L = 122, R = 882, PAD = 26, ICON = 28, GAP = 14
+  put(f.mesh, icon(iconName, U(ICON), HINT, 0.1), L + PAD + ICON / 2 - 502, 0, f.thickness)
+  put(f.mesh, label(placeholder, { size: U(23), weight: 500, color: HINT, align: 'left' }), L + PAD + ICON + GAP - 502, 0, f.thickness)
+  if (trailing) put(f.mesh, icon(trailing, U(ICON), HINT, 0.1), R - PAD - ICON / 2 - 502, 0, f.thickness)
   return f
 }
 input(345, 'user', 'Full name')
@@ -202,25 +203,25 @@ input(565, 'lock', 'Password', 'eye')
   checkbox(terms.mesh, 40, 160 - 357, 0, terms.thickness, '#6b63f5')
   put(terms.mesh, label('I agree to the Terms & Privacy', { size: U(21), weight: 500, color: '#3a3a48', align: 'left' }), 196 - 357, 0, terms.thickness)
   put(PANEL.mesh, label('Remember me', { size: U(20), weight: 500, color: '#3a3a48', align: 'left' }), 590 - 512, 680 - 642, TOP)
-  const KNOB_X = 54    // knob offset from the toggle centre, px
+  const KNOB_X = 136 / 2 - 7 - 24    // half width − margin − knob radius
   const tg = pill(136, 62, 838, 680, GLOWING(BLUE, 1.1, 0.5 + KNOB_X / 136, 0.012))
   put(tg.mesh, circle(U(48), '#ffffff', { shadow: 0.014 }), KNOB_X, 0, tg.thickness)
 }
 // primary action
 {
   const go = pill(760, 84, 502, 795, GLOWING(BLUE, 1.15))
-  put(go.mesh, label('Create account', { size: U(25), weight: 700, color: '#ffffff' }), -18, 0, go.thickness)
-  put(go.mesh, icon('arrow-right', U(30), '#ffffff', 0.12), 122, 0, go.thickness)
+  put(go.mesh, label('Create account', { size: U(25), weight: 700, color: '#ffffff' }), -20, 0, go.thickness)
+  put(go.mesh, icon('arrow-right', U(28), '#ffffff', 0.12), 104, 0, go.thickness)
 }
 put(PANEL.mesh, label('or continue with', { size: U(19), weight: 500, color: HINT }), 0, 878 - 642, TOP)
 // social sign-in
 {
   const apple = pill(365, 78, 312, 955)
-  put(apple.mesh, icon('apple', U(30), INK), -92, 0, apple.thickness)
-  put(apple.mesh, label('Apple', { size: U(23), color: INK }), 10, 0, apple.thickness)
+  put(apple.mesh, icon('apple', U(30), INK), -48, 0, apple.thickness)
+  put(apple.mesh, label('Apple', { size: U(23), color: INK }), 16, 0, apple.thickness)
   const google = pill(365, 78, 692, 955)
-  put(google.mesh, icon('google', U(30), INK, 0.12), -96, 0, google.thickness)
-  put(google.mesh, label('Google', { size: U(23), color: INK }), 10, 0, google.thickness)
+  put(google.mesh, icon('google', U(30), INK, 0.12), -56, 0, google.thickness)
+  put(google.mesh, label('Google', { size: U(23), color: INK }), 14, 0, google.thickness)
 }
 put(PANEL.mesh, label('Already have an account?', { size: U(20), weight: 500, color: MUTED }), -60, 1072 - 642, TOP)
 put(PANEL.mesh, label('Sign in', { size: U(20), weight: 700, color: '#5b52f0' }), 112, 1072 - 642, TOP)

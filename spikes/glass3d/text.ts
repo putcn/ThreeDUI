@@ -64,8 +64,31 @@ export function icon(name: IconName, size: number, color = '#1c1c22', stroke = 0
     case 'mail': ctx.beginPath(); ctx.roundRect(0.2 * px, 0.28 * px, 0.6 * px, 0.44 * px, 0.06 * px); ctx.stroke(); line([[0.22, 0.32], [0.5, 0.54], [0.78, 0.32]]); break
     case 'lock': ctx.beginPath(); ctx.roundRect(0.26 * px, 0.46 * px, 0.48 * px, 0.36 * px, 0.06 * px); ctx.stroke(); ctx.beginPath(); ctx.arc(0.5 * px, 0.42 * px, 0.16 * px, Math.PI, 0); ctx.stroke(); break
     case 'eye': ctx.beginPath(); ctx.moveTo(0.2 * px, 0.5 * px); ctx.quadraticCurveTo(0.5 * px, 0.15 * px, 0.8 * px, 0.5 * px); ctx.quadraticCurveTo(0.5 * px, 0.85 * px, 0.2 * px, 0.5 * px); ctx.stroke(); ctx.beginPath(); ctx.arc(0.5 * px, 0.5 * px, 0.1 * px, 0, Math.PI * 2); ctx.stroke(); break
-    case 'apple': ctx.fillStyle = color; ctx.beginPath(); ctx.ellipse(0.5 * px, 0.56 * px, 0.26 * px, 0.3 * px, 0, 0, Math.PI * 2); ctx.fill(); ctx.globalCompositeOperation = 'destination-out'; ctx.beginPath(); ctx.arc(0.74 * px, 0.52 * px, 0.12 * px, 0, Math.PI * 2); ctx.fill(); ctx.globalCompositeOperation = 'source-over'; ctx.beginPath(); ctx.ellipse(0.58 * px, 0.2 * px, 0.07 * px, 0.11 * px, -0.6, 0, Math.PI * 2); ctx.fill(); break
-    case 'google': ctx.lineWidth = stroke * px * 1.4; ctx.beginPath(); ctx.arc(0.5 * px, 0.5 * px, 0.26 * px, Math.PI * 0.12, Math.PI * 1.88); ctx.stroke(); line([[0.5, 0.5], [0.78, 0.5]]); break
+    case 'apple': {
+      ctx.fillStyle = color
+      // body: two lobes + rounded bottom
+      ctx.beginPath(); ctx.arc(0.40 * px, 0.56 * px, 0.235 * px, 0, Math.PI * 2); ctx.fill()
+      ctx.beginPath(); ctx.arc(0.60 * px, 0.56 * px, 0.235 * px, 0, Math.PI * 2); ctx.fill()
+      ctx.beginPath(); ctx.ellipse(0.5 * px, 0.64 * px, 0.30 * px, 0.25 * px, 0, 0, Math.PI * 2); ctx.fill()
+      ctx.beginPath(); ctx.rect(0.165 * px, 0.56 * px, 0.67 * px, 0.14 * px); ctx.fill()
+      ctx.globalCompositeOperation = 'destination-out'
+      ctx.beginPath(); ctx.arc(0.80 * px, 0.47 * px, 0.11 * px, 0, Math.PI * 2); ctx.fill()        // bite
+      ctx.beginPath(); ctx.arc(0.50 * px, 0.305 * px, 0.075 * px, 0, Math.PI * 2); ctx.fill()      // top dip
+      ctx.beginPath(); ctx.ellipse(0.5 * px, 0.93 * px, 0.14 * px, 0.08 * px, 0, 0, Math.PI * 2); ctx.fill() // bottom notch
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.beginPath(); ctx.ellipse(0.565 * px, 0.21 * px, 0.055 * px, 0.11 * px, -0.75, 0, Math.PI * 2); ctx.fill() // leaf
+      break
+    }
+    case 'google': {
+      const cx = 0.5 * px, cy = 0.5 * px, r = 0.3 * px
+      ctx.lineWidth = 0.17 * px
+      ctx.lineCap = 'butt'
+      const seg = (a0: number, a1: number, c: string) => { ctx.strokeStyle = c; ctx.beginPath(); ctx.arc(cx, cy, r, a0 * Math.PI / 180, a1 * Math.PI / 180); ctx.stroke() }
+      seg(0, 52, '#4285F4'); seg(50, 142, '#34A853'); seg(140, 232, '#FBBC05'); seg(230, 318, '#EA4335')
+      ctx.fillStyle = '#4285F4'
+      ctx.fillRect(cx, cy - 0.085 * px, r + 0.085 * px, 0.17 * px)
+      break
+    }
   }
   return quad(cv)
 }
