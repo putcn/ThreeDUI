@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import { uniform } from 'three/tsl'
+import { uniform, vec4 } from 'three/tsl'
 import { Vector2, Texture, DataTexture, BackSide, FrontSide } from 'three'
-import { Node, IDENTITY, scaleAbout, type GlassInstance, type ResolvedGlass } from '@glassui/core'
+import { Node, IDENTITY, scaleAbout, GlassUIError, type GlassInstance, type ResolvedGlass } from '@glassui/core'
 import { GlassBatch, GLASS_ATTRS } from '../src/glass/batch'
-import { createGlassMaterial, DepthCapture, ScreenCapture } from '../src/glass/material'
+import { createGlassMaterial, pyramidMix, DepthCapture, ScreenCapture } from '../src/glass/material'
 import { evalSlabVertex, type SlabInstanceParams } from '../src/glass/slab9'
 import { evalNode } from './fixtures/tsl-eval'
 import { buildShaders } from './fixtures/build-shaders'
@@ -197,6 +197,37 @@ describe('createGlassMaterial', () => {
   })
 })
 
+describe('createGlassMaterial: the blur pyramid (high tier)', () => {
+  it('blends [sharp, …levels] by roughness: level ⌊k⌋ to ⌈k⌉ at k = roughness · levels, so roughness 1 reaches the last', () => {
+    const roughness = uniform(0)
+    const blended = pyramidMix(vec4(0), [vec4(1), vec4(2), vec4(3), vec4(4)], roughness)
+    const at = (r: number) => { roughness.value = r; return evalNode(blended, {})[0]! }
+    for (const [r, k] of [[0, 0], [0.06, 0.24], [0.25, 1], [0.4, 1.6], [0.9, 3.6], [1, 4], [1.5, 4], [-0.2, 0]] as const) expect(at(r)).toBeCloseTo(k, 12)
+  })
+  it('the panel backdrop samples the content and every pyramid level; setPyramid swaps them in place (same count only)', () => {
+    const b = new GlassBatch(); b.update([inst], s)
+    const content = new Texture(), levels = [new Texture(), new Texture(), new Texture(), new Texture()]
+    const g = createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface, content, pyramid: levels })
+    const sampled = () => new Set(nodesOf(g.material.backdropNode).filter(n => n.isTextureNode).map(n => n.value))
+    for (const t of [content, ...levels]) expect(sampled()).toContain(t)
+    const before = g.material.backdropNode, next = levels.map(() => new Texture())
+    g.setPyramid(next)
+    expect(g.material.backdropNode).toBe(before)
+    for (const t of next) expect(sampled()).toContain(t)
+    for (const t of levels) expect(sampled()).not.toContain(t)
+    expect(() => g.setPyramid(next.slice(1))).toThrow(GlassUIError)
+    expect(() => g.setPyramid(next.slice(1))).toThrow(/层数/)
+  })
+  it('a screen backdrop ignores a pyramid, as it does a content texture', () => {
+    const b = new GlassBatch(); b.update([inst], s)
+    const levels = [new Texture(), new Texture()]
+    const g = createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'screen', side: 'front', surface, pyramid: levels })
+    const sampled = nodesOf(g.material.backdropNode).filter(n => n.isTextureNode).map(n => n.value)
+    for (const t of levels) expect(sampled).not.toContain(t)
+    g.setPyramid([])   // it has none: an empty swap is a no-op
+  })
+})
+
 describe('createGlassMaterial: what lies behind the content plane (panel)', () => {
   it('samples a given screen capture under the content, never owns or frees it, and samples none without one', () => {
     const b = new GlassBatch(); b.update([inst], s)
@@ -246,19 +277,21 @@ describe('glass material shaders (generated under Node)', () => {
       try {
         const b = new GlassBatch(); b.update([inst], s)
         // behind: a glass Surface's element glass (the slab's capture under the content), `reject` with its depth too
-        const make = (backdrop: 'panel' | 'screen', side: 'front' | 'back', behind = false, reject = false) =>
+        // `pyramid`: the high tier's blur pyramid (4 levels) in place of the content's mips
+        const make = (backdrop: 'panel' | 'screen', side: 'front' | 'back', behind = false, reject = false, pyramid = false) =>
           createGlassMaterial({
             geometry: b.geometry, K: b.K, backdrop, side, surface,
             ...(backdrop === 'panel'
-              ? { content: new Texture(), ...(behind ? { screen: new ScreenCapture(), screenLevel: 3.2, screenLift: 0.1, ...(reject ? { depthReject: true, depth: new DepthCapture() } : {}) } : {}) }
+              ? { content: new Texture(), ...(pyramid ? { pyramid: [1, 2, 3, 4].map(() => new Texture()) } : {}), ...(behind ? { screen: new ScreenCapture(), screenLevel: 3.2, screenLift: 0.1, ...(reject ? { depthReject: true, depth: new DepthCapture() } : {}) } : {}) }
               : { depthReject: true }),
           }).material
         const variants = [
-          ['panel', 'front', false, false], ['panel', 'back', false, false], ['screen', 'front', false, false],
-          ['panel', 'front', true, false], ['panel', 'back', true, false], ['panel', 'front', true, true], ['panel', 'back', true, true],
+          ['panel', 'front', false, false, false], ['panel', 'back', false, false, false], ['screen', 'front', false, false, false],
+          ['panel', 'front', true, false, false], ['panel', 'back', true, false, false], ['panel', 'front', true, true, false], ['panel', 'back', true, true, false],
+          ['panel', 'front', false, false, true], ['panel', 'back', true, true, true],
         ] as const
-        for (const [backdrop, side, behind, reject] of variants) {
-          const out = buildShaders(make(backdrop, side, behind, reject), b.geometry, forceWebGL)
+        for (const [backdrop, side, behind, reject, pyramid] of variants) {
+          const out = buildShaders(make(backdrop, side, behind, reject, pyramid), b.geometry, forceWebGL)
           // 8 packs, the slab normal, three's view position and direction; WebGPU guarantees 16 inter-stage variables and
           // WebGL2 15 varying vectors, and three's runtime extras (fog, log depth…) need room
           expect(out.varyings.length, out.varyings.join(' ')).toBeLessThanOrEqual(11)

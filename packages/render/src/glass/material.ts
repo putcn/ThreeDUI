@@ -5,6 +5,7 @@ import {
   transformNormalToView, negateOnBackSide, modelViewMatrix, cameraProjectionMatrix, viewportMipTexture,
   linearDepth, screenUV, refract, reflect, normalize, dot, max, min, abs, exp, mix, clamp, pow, smoothstep, step, select, length,
 } from 'three/tsl'
+import { GlassUIError } from '@glassui/core'
 import { GLASS_ATTRS } from './batch'
 import { slabVertex } from './vertex'
 
@@ -20,6 +21,11 @@ export interface GlassMaterialOptions {
   surface: { size: UniformNode<'vec2', Vector2>; ptPerUnit: UniformNode<'float', number> }
   /** The content RT texture (panel only; required there); `setContent` swaps it. */
   content?: Texture | undefined
+  /**
+   * Panel, high tier: the content's blur pyramid (`KawasePyramid.textures`, each level blurrier than the last), sampled
+   * by roughness (`pyramidMix`) instead of the content's mips; `setPyramid` swaps it.
+   */
+  pyramid?: Texture[] | undefined
   /**
    * Screen: the capture to refract, shared per layer and disposed by its owner; default: a new `ScreenCapture` this
    * material owns. Panel (optional): what lies behind the content plane, seen where the content RT is transparent — a
@@ -53,6 +59,8 @@ export interface GlassMaterial {
   setContent(tex: Texture): void
   /** Swaps the luma texture in place: `count` texels in a row, texel `i` = instance `i`'s backdrop luma. */
   setLuma(tex: Texture, count: number): void
+  /** Swaps the pyramid's textures in place; as many as it was made with (none for a screen backdrop). */
+  setPyramid(textures: Texture[]): void
   dispose(): void
 }
 
@@ -93,6 +101,15 @@ export class DepthCapture extends ViewportDepthTextureNode {
 
 /** Shadow colour of untinted glass (spec §5.4): a slightly cool grey. */
 const NEUTRAL_SHADOW = [0.78, 0.78, 0.84] as const
+
+/**
+ * `[sharp, …levels]` (each blurrier than the last) blended by roughness: k = roughness · n over the n + 1 entries,
+ * level ⌊k⌋ to ⌈k⌉ by frac(k), clamped to [0, n] — roughness 1 reaches the last level.
+ */
+export function pyramidMix(sharp: Node<'vec4'>, levels: Node<'vec4'>[], roughness: Node<'float'>): Node<'vec4'> {
+  const k = roughness.mul(levels.length)
+  return levels.reduce((c, level, i) => mix(c, level, clamp(k.sub(i), 0, 1)), sharp)
+}
 
 /** 1×1 black: "the backdrop is dark", so nothing darkens until a real luma pass is attached. */
 function blackTexture(): DataTexture {
@@ -164,6 +181,7 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
 
   const black = o.luma ? null : blackTexture()
   const contentTex = o.backdrop === 'panel' && o.content ? texture(o.content) : null   // non-null exactly for 'panel'
+  const pyramid = contentTex ? (o.pyramid ?? []).map(t => texture(t)) : []
   const lumaTex = texture(o.luma ?? black!)
   const lumaCount = uniform(1)
   const ownScreen = o.backdrop === 'screen' && !o.screen ? new ScreenCapture() : null
@@ -218,6 +236,10 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     return vec2(ndc.x.mul(0.5).add(0.5), float(0.5).sub(ndc.y.mul(0.5)))
   }
   const behindLevel = o.screenLevel !== undefined ? float(o.screenLevel) : lod
+  /** The content at `at`, frosted by roughness: its mips at `lod`, or (high tier) its pyramid. */
+  const frosted = (tex: TextureNode, at: Node<'vec2'>): Node<'vec4'> => pyramid.length
+    ? pyramidMix(tex.sample(at).level(float(0)), pyramid.map(l => l.sample(at).level(float(0))), roughness)
+    : tex.sample(at).level(lod)
   const behindLift = float(o.screenLift ?? 0)
 
   /** One colour channel's refraction: the backdrop colour along the refracted ray and the path length inside (slab units). */
@@ -229,7 +251,7 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
       // then straight on (along the view ray) to the content plane
       const t2 = max(dot(origin.sub(inside), nb).div(min(dot(V.negate(), nb), -0.05)), 0)
       const P = inside.sub(V.mul(t2))
-      const content = contentTex.sample(planeUV(P)).level(lod)
+      const content = frosted(contentTex, planeUV(P))
       if (!behind) return { c: content.rgb, t1 }
       // premultiplied content over what is behind the plane there: a glass Surface's slab capture, taken at the slab
       // (that Surface's first draw), so it predates the content quad and holds no content to count twice
@@ -287,6 +309,10 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     material: m,
     setContent(tex) { if (contentTex) contentTex.value = tex },
     setLuma(tex, count) { lumaTex.value = tex; lumaCount.value = Math.max(1, count) },
+    setPyramid(textures) {
+      if (textures.length !== pyramid.length) throw new GlassUIError('GlassMaterial.setPyramid', `金字塔层数不匹配：材质有 ${pyramid.length} 层，传入 ${textures.length} 层`)
+      textures.forEach((t, i) => { pyramid[i]!.value = t })
+    },
     dispose() { m.dispose(); black?.dispose(); ownScreen?.dispose(); ownDepth?.dispose() },
   }
 }

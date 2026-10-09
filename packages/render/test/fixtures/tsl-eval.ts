@@ -19,6 +19,7 @@ function broadcast3(a: Vec, b: Vec, c: Vec, f: (x: number, y: number, z: number)
 const TERNARY: Record<string, (x: number, y: number, z: number) => number> = {
   mix: (a, b, t) => a * (1 - t) + b * t,
   smoothstep: (lo, hi, x) => { const t = Math.min(1, Math.max(0, (x - lo) / (hi - lo))); return t * t * (3 - 2 * t) },
+  clamp: (x, lo, hi) => Math.min(hi, Math.max(lo, x)),
 }
 
 const OPS: Record<string, (x: number, y: number) => number> = {
@@ -35,10 +36,11 @@ const UNARY: Record<string, (x: number) => number> = {
  * Evaluates `node` for one vertex (or fragment); `attributes` maps attribute names to their (vec4) values. Only taken
  * `select` branches run, as in the if/else three emits; `onPow` sees the base of every `pow` that runs. A fragment
  * graph's `fwidth(x)` evaluates to `fwidth` (the screen footprint of x, which a single point cannot know); without it,
- * `fwidth` throws. A texture sample evaluates to `sample(texture, uv)` (its uv evaluated); without it, a texture throws,
- * as does one with a uv matrix (`texture(t).sample(uv)` keeps the texture's own transform; `texture(t, uv)` does not).
+ * `fwidth` throws. A texture sample evaluates to `sample(texture, uv, level)` (its uv evaluated, and its level when it has
+ * one); without it, a texture throws, as does one with a uv matrix (`texture(t).sample(uv)` keeps the texture's own
+ * transform; `texture(t, uv)` does not) or a bias.
  */
-export function evalNode(node: unknown, attributes: Record<string, readonly number[]>, onPow?: (base: readonly number[]) => void, fwidth?: number, sample?: (texture: unknown, uv: readonly number[]) => Vec): Vec {
+export function evalNode(node: unknown, attributes: Record<string, readonly number[]>, onPow?: (base: readonly number[]) => void, fwidth?: number, sample?: (texture: unknown, uv: readonly number[], level?: readonly number[]) => Vec): Vec {
   const memo = new Map<unknown, Vec>()
   const ev = (n: AnyNode): Vec => {
     let r = memo.get(n)
@@ -95,8 +97,8 @@ export function evalNode(node: unknown, attributes: Record<string, readonly numb
       }
       case 'TextureNode': {
         if (!sample) throw new Error('tsl-eval: a texture needs a sampler')
-        if (n.updateMatrix || n.levelNode || n.biasNode || !n.uvNode) throw new Error('tsl-eval: unsupported texture sample (uv matrix, level, bias or default uv)')
-        return sample(n.value, ev(n.uvNode))
+        if (n.updateMatrix || n.biasNode || !n.uvNode) throw new Error('tsl-eval: unsupported texture sample (uv matrix, bias or default uv)')
+        return n.levelNode ? sample(n.value, ev(n.uvNode), ev(n.levelNode)) : sample(n.value, ev(n.uvNode))
       }
       default: throw new Error(`tsl-eval: unsupported node type ${String(type)}`)
     }

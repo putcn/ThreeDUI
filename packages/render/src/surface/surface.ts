@@ -18,6 +18,7 @@ import type { AtlasPages } from '../text/pages'
 import { ImageSet } from '../image/images'
 import type { SurfaceUniforms } from '../flat'
 import { ContentPass, contentRTSize, type RendererLike } from './content'
+import { KawasePyramid } from '../blur/kawase'
 import { liftFor, partition, type Partition } from './partition'
 import { toColor } from '../color'
 
@@ -64,6 +65,8 @@ export function createContentMaterial(content: Texture): MeshStandardNodeMateria
  * only, refracting the screen), the content quad, the glass back (with `quality.backFaces`) and front refracting the
  * content RT, rims, then the images and glyphs riding on glass. The content RT's scene (`CONTENT_ORDER`), drawn
  * orthographically with the same Surface-local instance matrices: panels, pools, images, glyphs (one mesh per page).
+ * With `quality.blur === 'kawase'` the content RT also feeds a `KawasePyramid`, which the element glass samples by
+ * roughness instead of the RT's mips.
  *
  * Every draw lives under `layer`, a `Group` whose `renderOrder` is `drawOrder`: three sorts by the nearest group's order
  * first, so Surfaces draw one after another (the root sets `drawOrder`, nearer = higher) instead of layer by layer
@@ -117,6 +120,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private readonly screen: ScreenCapture | null = null
   /** A glass Surface's depth capture for `depthReject`, shared by the slab's faces and the element glass (one depth copy per render); made on first use. */
   private depth: DepthCapture | null = null
+  /** The content RT's blur pyramid on the 'kawase' tier (null otherwise), redrawn with it. */
+  private pyramid: KawasePyramid | null = null
   private pointerPt: [number, number] | null = null
   private list: RenderList | null = null
   private parts: Partition | null = null
@@ -159,6 +164,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     Object.defineProperty(this.contentMesh.userData, 'surface', { value: this, enumerable: false })
     this.plane.add(this.contentMesh)
 
+    this.syncPyramid(this.quality)
     this.buildGlass(this.quality)
     const rimMesh = new Mesh(this.rims.geometry, this.own(createRimMaterial(this.rims.geometry, this.su)))
     rimMesh.renderOrder = SURFACE_ORDER.rims; rimMesh.frustumCulled = false
@@ -206,23 +212,31 @@ export class Surface extends Object3D<SurfaceEventMap> {
     const behind = slab && screen ? { screen, screenLevel: SLAB_FROST.roughness * 8, screenLift: SLAB_FROST.roughness * 0.08 + SLAB_FROST.lift, depthReject: q.depthReject, ...(depth ? { depth } : {}) } : {}
     for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
       if (!on) continue
-      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture, ...behind })
+      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture, pyramid: this.pyramid?.textures, ...behind })
       const mesh = new Mesh(this.glass.geometry, gm.material)
       mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = false
       this.plane.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
     }
   }
 
+  /** Makes (on 'kawase', in the content's texel type) or drops the blur pyramid; before `buildGlass`, which hands it to the glass. */
+  private syncPyramid(q: QualitySettings): void {
+    if (q.blur !== 'kawase') { this.pyramid?.dispose(); this.pyramid = null }
+    else if (this.pyramid) this.pyramid.setType(q.contentType)
+    else this.pyramid = new KawasePyramid(4, q.contentType)   // spec §5.6: 4 levels
+  }
+
   /**
-   * A quality change for this Surface: rebuilds the glass draws for `q`, switches the content RT's texel type and marks
-   * the content dirty (the RT's size follows `q.contentScale` at the next `prepare`). A throw fails the Surface instead
-   * of propagating. It leaves the shared `ctx.quality` alone: the root owns that (it is what new Surfaces start from),
-   * replaces it on a tier change and then calls this on every Surface.
+   * A quality change for this Surface: rebuilds the glass draws for `q` (and the blur pyramid for `q.blur`), switches
+   * the content RT's texel type and marks the content dirty (the RT's size follows `q.contentScale` at the next
+   * `prepare`). A throw fails the Surface instead of propagating. It leaves the shared `ctx.quality` alone: the root
+   * owns that (it is what new Surfaces start from), replaces it on a tier change and then calls this on every Surface.
    */
   setQuality(q: QualitySettings): void {
     this.quality = q
     if (this.error) return
     try {
+      this.syncPyramid(q)
       this.buildGlass(q)
       this.contentPass.setType(q.contentType)
       this.contentDirty = true
@@ -374,15 +388,20 @@ export class Surface extends Object3D<SurfaceEventMap> {
     return before?.[0] !== after?.[0] || before?.[1].u !== after?.[1].u || before?.[1].v !== after?.[1].v
   }
 
-  /** Sizes the content RT for the Surface's projected size and redraws it when dirty (a resize makes it dirty). */
+  /**
+   * Sizes the content RT (and the pyramid) for the Surface's projected size and redraws it when dirty (a resize makes it
+   * dirty), then the pyramid: the content RT is its only input, so a clean RT means a current pyramid.
+   */
   prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number): void {
     if (this.error) return
     try {
       const size = contentRTSize(projectedPx, dpr, { scale: this.quality.contentScale * this.contentScale })
       if (this.contentPass.resize(size.width, size.height)) this.contentDirty = true
+      this.pyramid?.resize(size.width, size.height)
       if (!this.contentDirty) return
       this.contentPass.setView(this.model)
       this.contentPass.render(renderer, this.contentClear)
+      this.pyramid?.render(renderer, this.contentPass.texture)
       this.contentDirty = false
     } catch (e) { this.fail(e) }
   }
@@ -405,7 +424,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   dispose(): void {
     this.ctx.anim.forget(this.root)
     this.ctx.layout.dispose(this.root)
-    this.contentPass.dispose()
+    this.contentPass.dispose(); this.pyramid?.dispose()
     for (const b of [this.glass, this.panels, this.rims, this.pools, this.backgroundGlass]) b?.dispose()
     this.foregroundText.dispose(); this.contentText.dispose(); this.foregroundImages.dispose(); this.contentImages.dispose()
     for (const gm of this.glassMaterials) gm.dispose()

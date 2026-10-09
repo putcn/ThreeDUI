@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { CustomBlending, FrontSide, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material } from 'three'
+import { CustomBlending, FrontSide, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material, type RenderTarget } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
@@ -501,6 +501,79 @@ describe('Surface', () => {
     expect(forget).toHaveBeenCalledWith(s.root); expect(release).toHaveBeenCalledWith(s.root)
     expect(s.parent).toBeNull()
     forget.mockRestore(); release.mockRestore()
+  })
+})
+
+describe('Surface: the dual-Kawase pyramid (quality.blur = \'kawase\')', () => {
+  const kawase = (q: Partial<SurfaceContext['quality']> = {}): SurfaceContext => ({ ...ctx, quality: { ...ctx.quality, blur: 'kawase', ...q } })
+  /** A stub renderer recording the target of every draw. */
+  const recording = () => {
+    let bound: RenderTarget | null = null
+    const drawn: (RenderTarget | null)[] = []
+    return { ...stubRenderer(), drawn, setRenderTarget: vi.fn((t: RenderTarget | null) => { bound = t }), render: vi.fn(() => { drawn.push(bound) }) }
+  }
+  /** The pyramid's levels among `drawn`: each drawn twice (its down- and up-sample), finest first. */
+  const levelsOf = (drawn: (RenderTarget | null)[]) => [...new Set(drawn)].filter(t => drawn.filter(d => d === t).length === 2) as RenderTarget[]
+  const sampledBy = (ms: Mesh[]) => new Set(ms.flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode)).filter(n => n.isTextureNode).map(n => n.value))
+
+  it('prepare redraws the pyramid after the content RT, at its size, only when the content is redrawn; the element glass samples it', () => {
+    const { s } = signup(kawase()); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(r.render).toHaveBeenCalledTimes(1 + 9)                  // the content, then 4 + 1 downs and 4 ups
+    expect(r.drawn[0]).toBe(s.contentPass.target)
+    const levels = levelsOf(r.drawn)
+    expect(levels.map(l => [l.width, l.height])).toEqual([[224, 160], [112, 80], [56, 40], [28, 20]])   // the RT is 448 × 320
+    for (const l of levels) expect(sampledBy(elementGlass(s))).toContain(l.texture)
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(r.render).toHaveBeenCalledTimes(10)                      // a clean content RT: the pyramid is current
+    s.prepare(r, { width: 800, height: 300 }, 1)                     // a resize redraws both
+    expect(r.render).toHaveBeenCalledTimes(20)
+    expect(levels.map(l => l.width)).toEqual([416, 208, 104, 52])   // 800 → 832
+  })
+  it('a background slab never samples the pyramid; a \'mip\' Surface has none', () => {
+    const glass = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, kawase()), r = recording()
+    glass.tick(1 / 60); glass.prepare(r, { width: 400, height: 300 }, 1)
+    const levels = levelsOf(r.drawn)
+    expect(levels).toHaveLength(4)
+    for (const l of levels) expect(sampledBy(meshes(glass).filter(m => m.renderOrder === SURFACE_ORDER.slab))).not.toContain(l.texture)
+    for (const l of levels) expect(sampledBy(elementGlass(glass))).toContain(l.texture)
+    const { s } = signup(), r2 = recording()
+    s.tick(1 / 60); s.prepare(r2, { width: 400, height: 300 }, 1)
+    expect(r2.render).toHaveBeenCalledTimes(1)
+  })
+  it('setQuality keeps the pyramid in the content\'s texel type, drops it on \'mip\' and makes a new one on \'kawase\'', () => {
+    const { s } = signup(kawase({ contentType: 'half' })); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    const levels = levelsOf(r.drawn)
+    expect(levels.every(l => l.texture.type === HalfFloatType)).toBe(true)
+    s.setQuality(kawase({ contentType: 'byte' }).quality)
+    expect(levels.every(l => l.texture.type === UnsignedByteType)).toBe(true)   // the same targets, re-typed
+    for (const l of levels) expect(sampledBy(elementGlass(s))).toContain(l.texture)
+    const freed = new Set<unknown>()
+    for (const l of levels) l.addEventListener('dispose', () => freed.add(l))
+    s.setQuality({ ...ctx.quality, blur: 'mip' })
+    expect(freed).toEqual(new Set(levels))
+    for (const l of levels) expect(sampledBy(elementGlass(s))).not.toContain(l.texture)
+    r.drawn.length = 0; s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(r.drawn).toEqual([s.contentPass.target])
+    s.setQuality(kawase().quality)
+    r.drawn.length = 0; s.prepare(r, { width: 400, height: 300 }, 1)
+    const fresh = levelsOf(r.drawn)
+    expect(fresh).toHaveLength(4); for (const l of fresh) expect(levels).not.toContain(l)
+    for (const l of fresh) expect(sampledBy(elementGlass(s))).toContain(l.texture)
+  })
+  it('dispose frees the pyramid', () => {
+    const { s } = signup(kawase()); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    const targets = [...new Set(r.drawn)].filter(t => t !== s.contentPass.target) as RenderTarget[]
+    expect(targets).toHaveLength(5)
+    const freed = new Set<unknown>()
+    for (const t of targets) t.addEventListener('dispose', () => freed.add(t))
+    s.dispose()
+    expect(freed).toEqual(new Set(targets))
   })
 })
 
