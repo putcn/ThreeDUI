@@ -5,10 +5,13 @@ import { defineConfig } from '@playwright/test'
 // machine-specific: see README.md.
 export default defineConfig({
   testDir: './tests',
-  timeout: 60_000,
+  // SwiftShader (webgl2) needs up to ~55 s per test when workers run in parallel
+  timeout: 120_000,
   // `<scene>-<project>.png` on every platform (the default template adds a platform suffix)
   snapshotPathTemplate: '{testDir}/{testFileName}-snapshots/{arg}-{projectName}{ext}',
-  expect: { toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled' } },
+  // SwiftShader draws the high tier at ~2 fps here and one capture takes ~2.5 s; the stable-screenshot check needs at
+  // least two identical captures, so the 5 s default times out although the frames match pixel for pixel
+  expect: { toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled', timeout: 30_000 } },
   use: { viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, baseURL: 'http://127.0.0.1:5177' },
   webServer: { command: 'pnpm --filter playground exec vite build && pnpm --filter playground exec vite preview --port 5177 --strictPort --host 127.0.0.1', url: 'http://127.0.0.1:5177', reuseExistingServer: true, timeout: 120_000 },
   projects: [
