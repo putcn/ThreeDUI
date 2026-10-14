@@ -30,6 +30,8 @@ export interface SurfaceOptions {
   castToWorld?: boolean
   /** Default 1: multiplies the content RT's texels per CSS px after the quality's floor (below 1 it may go under one texel per CSS px). */
   contentScale?: number
+  /** Default false. A world Surface that turns to face the camera every tick (`Surface.billboard`); no effect on the screen layer. */
+  billboard?: boolean
 }
 /** The quality knobs a Surface reads (`QualityProfile` in `quality.ts` extends it into a full tier). */
 export interface QualitySettings {
@@ -49,8 +51,12 @@ export interface QualitySettings {
   /** `'refract'` only: `'never'` refracts once instead of per colour channel; `'auto'` (medium: disperse only above 0.25 px) is not implemented yet and disperses as `'always'`. */
   dispersion: 'always' | 'auto' | 'never'
 }
-/** What every Surface of one root shares; `quality` is the root's current tier, the one new Surfaces start from. */
-export interface SurfaceContext { theme: Theme; scheme: ColorScheme; layout: LayoutEngine; measure: MeasureFn; anim: AnimationRuntime; text: TextEngine; pages: AtlasPages; quality: QualitySettings }
+/**
+ * What every Surface of one root shares; `quality` is the root's current tier, the one new Surfaces start from. The root
+ * replaces `theme`, `scheme`, `measure` and `contrast` (increased contrast: the 'fill' glass mode's black/white fills,
+ * `fillColors`) in place and then calls `restyle` on every Surface.
+ */
+export interface SurfaceContext { theme: Theme; scheme: ColorScheme; layout: LayoutEngine; measure: MeasureFn; anim: AnimationRuntime; text: TextEngine; pages: AtlasPages; quality: QualitySettings; contrast: boolean }
 export interface SurfaceEventMap extends Object3DEventMap { error: { error: Error } }
 
 /** `renderOrder` of each draw inside a Surface's `layer`; images take [images, images + ½) in z order (`ImageSet`). */
@@ -90,11 +96,19 @@ export interface FillColors { slab: Color; glass: Color; border: Color }
  * fills with `fill` (the card is distinct from the host scene); element glass with `fill` moved `FILL.labelMix` toward
  * `label` in sRGB (a shade darker on a light card, lighter on a dark one) and a `tertiaryLabel` border. A theme missing
  * one of the tokens gets the default light theme's value for it instead of failing every Surface.
+ *
+ * `opts.contrast` (increased contrast, spec §8.3: black/white solid + border): the slab and the element glass fill pure
+ * white (light) or black (dark), and the border is the `label` token.
  */
-export function fillColors(theme: Theme, scheme: ColorScheme): FillColors {
+export function fillColors(theme: Theme, scheme: ColorScheme, opts: { contrast?: boolean } = {}): FillColors {
   const table = theme.colors[scheme]
   const token = (name: string, fallback: RGBA): RGBA => Object.hasOwn(table, name) ? resolveColor(name, theme, scheme) : fallback
-  const fill = token('fill', [1, 1, 1, 1]), label = token('label', [28 / 255, 28 / 255, 34 / 255, 1]), border = token('tertiaryLabel', [138 / 255, 138 / 255, 152 / 255, 1])
+  const label = token('label', [28 / 255, 28 / 255, 34 / 255, 1])
+  if (opts.contrast) {
+    const solid: RGBA = scheme === 'light' ? [1, 1, 1, 1] : [0, 0, 0, 1]
+    return { slab: toColor(solid), glass: toColor(solid), border: toColor(label) }
+  }
+  const fill = token('fill', [1, 1, 1, 1]), border = token('tertiaryLabel', [138 / 255, 138 / 255, 152 / 255, 1])
   const k = FILL.labelMix
   const shade: RGBA = [fill[0] + (label[0] - fill[0]) * k, fill[1] + (label[1] - fill[1]) * k, fill[2] + (label[2] - fill[2]) * k, 1]
   return { slab: toColor(fill), glass: toColor(shade), border: toColor(border) }
@@ -182,6 +196,16 @@ export class Surface extends Object3D<SurfaceEventMap> {
   interactive: boolean
   /** `SurfaceOptions.castToWorld`: no effect yet (planned). */
   castToWorld: boolean
+  /**
+   * A world Surface that faces the camera: each root `tick` sets its world rotation to the camera's before reading its
+   * matrices (`SurfaceOptions.billboard`). Ignored on the screen layer, which faces the camera already.
+   */
+  billboard: boolean
+  /**
+   * Keyboard focus stays in this Surface (a modal dialog): Tab past the last focusable wraps to the first (Shift+Tab
+   * before the first: to the last) instead of leaving the canvas (`PointerBridge`). Default false.
+   */
+  trapFocus = false
   /** Set when a frame threw: the Surface stops drawing (`visible = false`) and has emitted `{ type: 'error', error }`. */
   error: Error | null = null
   /** True while animating. */
@@ -194,8 +218,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The quality this Surface's draws were built for: `ctx.quality` at construction, then the last `setQuality`. */
   private quality: QualitySettings
   private readonly contentClear: { color: Color; alpha: number } = { color: new Color(0, 0, 0), alpha: 0 }
-  /** The `'fill'` glass mode's colours (`fillColors`). */
-  private readonly fills: FillColors
+  /** The `'fill'` glass mode's colours (`fillColors`), re-read by `restyle`. */
+  private fills: FillColors
   private readonly glassMaterials: GlassMaterial[] = []
   /** The meshes `buildGlass` made (slab and element glass), replaced on a quality change. */
   private readonly glassMeshes: Mesh[] = []
@@ -234,12 +258,13 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.name = this.model.id
     this.interactive = opts.interactive ?? true
     this.castToWorld = opts.castToWorld ?? false
+    this.billboard = opts.billboard ?? false
     this.contentScale = opts.contentScale ?? 1
     this.pointer = new PointerTracker(this.model.root, this.events, ctx.theme)
     this.focus = new FocusManager(this.model.root, this.events)
     this.su = { size: uniform(new Vector2()), ptPerUnit: uniform(this.model.ptPerUnit) }
     this.quality = ctx.quality
-    this.fills = fillColors(ctx.theme, ctx.scheme)
+    this.fills = fillColors(ctx.theme, ctx.scheme, { contrast: ctx.contrast })
     this.contentPass = new ContentPass({ type: this.quality.contentType })
     this.seenEpoch = ctx.text.atlas.epoch
 
@@ -388,6 +413,29 @@ export class Surface extends Object3D<SurfaceEventMap> {
     } catch (e) { this.fail(e) }
   }
 
+  /**
+   * Re-reads the theme, the scheme and increased contrast from the shared context (the root changed them): the pointer
+   * tracker's theme, the 'fill' glass mode's colours, an opaque background's clear colour, the background slab (its
+   * optics come from `theme.glass`), the glass draws (rebuilt through `buildGlass`, so a 'none' Surface keeps its
+   * behind-capture and a glass one its screen capture), and every node marked for layout, paint and text (a text
+   * style's size and colour may come from the theme) with the content redrawn. A throw fails the Surface instead of
+   * propagating; a failed Surface ignores it.
+   */
+  restyle(): void {
+    if (this.error) return
+    try {
+      const { theme, scheme, contrast } = this.ctx
+      this.pointer.theme = theme
+      this.fills = fillColors(theme, scheme, { contrast })
+      const bg = this.model.background
+      if (bg !== 'glass' && bg !== 'none') { toColor(resolveColor(bg, theme, scheme), this.contentClear.color); this.contentClear.alpha = 1 }
+      this.applySize()
+      this.buildGlass(this.quality)
+      this.root.walk(n => { n.markDirty('layout'); n.markDirty('paint'); n.markDirty('text') })
+      this.contentDirty = true
+    } catch (e) { this.fail(e) }
+  }
+
   get root(): Node { return this.model.root }
   /** Units: 0, or the background slab's thickness (it follows the Surface size). */
   get contentPlaneZ(): number { return this.plane.position.z }
@@ -431,6 +479,16 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /** Surface pt from the content quad's hit uv (PlaneGeometry: v = 1 at the top). */
   pointFromUV(u: number, v: number): [number, number] { return [u * this.model.width, (1 - v) * this.model.height] }
+
+  /**
+   * The world position of Surface pt (x, y) on its content plane (the content quad: a unit plane scaled to the Surface,
+   * at z = `contentPlaneZ`), written into `target`. Brings the quad's world matrix up to date first (three's
+   * `localToWorld` does).
+   */
+  worldFromPoint(x: number, y: number, target: Vector3): Vector3 {
+    const { width: w, height: h } = this.model
+    return this.contentMesh.localToWorld(target.set(x / w - 0.5, 0.5 - y / h, 0))
+  }
 
   /** The node under (x, y) Surface pt in this Surface's tree, or null (core `hitTest` with the Surface's theme). */
   hitNode(x: number, y: number): Node | null { return hitTest(this.model.root, x, y, this.ctx.theme) }

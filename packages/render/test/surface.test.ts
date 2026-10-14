@@ -21,7 +21,7 @@ import { evalNode } from './fixtures/tsl-eval'
 let ctx: SurfaceContext
 beforeAll(async () => {
   const text = new SystemFontEngine({ createCanvas: ((w: number, h: number) => createCanvas(w, h)) as never, pageSize: 512, maxPages: 2 })
-  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), quality: { contentType: 'byte', contentScale: 1, backFaces: true, depthReject: true, blur: 'mip', glassMode: 'refract', dispersion: 'always' } }
+  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), contrast: false, quality: { contentType: 'byte', contentScale: 1, backFaces: true, depthReject: true, blur: 'mip', glassMode: 'refract', dispersion: 'always' } }
 })
 
 function signup(c: SurfaceContext = ctx) {
@@ -139,6 +139,76 @@ describe('Surface', () => {
   it('maps content-quad uv to surface pt', () => {
     const { s } = signup()
     expect(s.pointFromUV(0, 1)).toEqual([0, 0]); expect(s.pointFromUV(1, 0)).toEqual([400, 300]); expect(s.pointFromUV(0.5, 0.5)).toEqual([200, 150])
+  })
+  it('worldFromPoint maps Surface pt onto the content quad, in world space (the glass slab\'s lift included)', () => {
+    for (const background of ['none', 'glass'] as const) {
+      const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background }, ctx)
+      const parent = new Group(); parent.position.set(1, -2, 3); parent.rotation.set(0.2, 0.4, -0.1); parent.add(s)
+      s.position.set(0.5, 0.25, -1); s.rotation.y = 0.6; s.scale.setScalar(1.5)
+      parent.updateMatrixWorld(true)
+      const at = (x: number, y: number) => s.worldFromPoint(x, y, new Vector3())
+      const corner = (x: number, y: number) => s.contentMesh.localToWorld(new Vector3(x, y, 0))
+      expect(at(0, 0).distanceTo(corner(-0.5, 0.5))).toBeLessThan(1e-9)
+      expect(at(400, 300).distanceTo(corner(0.5, -0.5))).toBeLessThan(1e-9)
+      expect(at(200, 150).distanceTo(corner(0, 0))).toBeLessThan(1e-9)
+      const target = new Vector3(); expect(s.worldFromPoint(1, 2, target)).toBe(target)
+    }
+  })
+  it('restyle re-reads the scheme: an opaque token background clears to its new colour, every node is marked, the content redraws', () => {
+    const c: SurfaceContext = { ...ctx }
+    const s = new Surface({ width: 40, height: 30, background: 'fill' }, c)
+    const label = new Node('text', 'l'); label.setProp('value', 'a'); s.root.appendChild(label)
+    s.tick(1 / 60); s.prepare(stubRenderer(), { width: 40, height: 30 }, 1)
+    expect(s.contentDirty).toBe(false); expect(label.dirty.paint || label.dirty.layout || label.dirty.text).toBe(false)
+    c.scheme = 'dark'
+    s.restyle()
+    expect(s.contentDirty).toBe(true)
+    expect([label.dirty.layout, label.dirty.paint, label.dirty.text, s.root.dirty.layout, s.root.dirty.paint]).toEqual([true, true, true, true, true])
+    s.tick(1 / 60)
+    const r = stubRenderer(); s.prepare(r, { width: 40, height: 30 }, 1)
+    const [color, alpha] = r.setClearColor.mock.calls[0]!, dark = toColor(resolveColor('fill', theme, 'dark'))
+    expect(color.getHexString()).toBe(dark.getHexString()); expect(alpha).toBe(1)
+    expect(s.error).toBeNull()
+  })
+  it("restyle rebuilds the glass through the same path: a 'none' Surface keeps its behind-capture, a glass one its screen capture", () => {
+    const base = (ms: Mesh[]) => new Set(ms.flatMap(m => materialGraph(m.material as Material)).filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!()))
+    for (const background of ['none', 'glass'] as const) {
+      const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background }, { ...ctx })
+      const g = new Node('glass', 'g'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60, radius: 'capsule' })
+      s.root.appendChild(g); s.tick(0)
+      const before = elementGlass(s), captures = base(before), probe = probeOf(s)
+      expect(captures.size).toBe(1)
+      s.restyle()
+      const after = elementGlass(s)
+      expect(after).toHaveLength(before.length)
+      for (const m of before) expect(after).not.toContain(m)        // rebuilt, the old draws gone
+      expect(base(after)).toEqual(captures)
+      // 'none': the same probe; glass: new slab faces around the same screen capture
+      if (background === 'none') expect(probeOf(s)).toEqual(probe)
+      else expect(base(probeOf(s))).toEqual(captures)
+      expect(s.error).toBeNull()
+    }
+  })
+  it('restyle re-reads a swapped theme: the background slab, the pointer tracker\'s radius tokens', () => {
+    const c: SurfaceContext = { ...ctx }
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, c)
+    const ior = () => s.backgroundGlass!.geometry.getAttribute('iOptics').getX(0)
+    expect(ior()).toBeCloseTo(theme.glass.ior)
+    const other = { ...theme, glass: { ...theme.glass, ior: 1.2 } }
+    c.theme = other
+    s.restyle()
+    expect(s.pointer.theme).toBe(other); expect(ior()).toBeCloseTo(1.2)
+    expect(s.error).toBeNull()
+  })
+  it('a restyle that throws fails the Surface; a failed Surface ignores it', () => {
+    const brand = { ...theme, colors: { light: { ...theme.colors.light, brand: '#ff0000' }, dark: theme.colors.dark } }
+    const c: SurfaceContext = { ...ctx, theme: brand }
+    const s = new Surface({ width: 40, height: 30, background: 'brand' }, c)
+    const onError = vi.fn(); s.addEventListener('error', onError)
+    c.scheme = 'dark'                                              // 'brand' has no dark value
+    expect(() => s.restyle()).not.toThrow()
+    expect(s.error?.message).toMatch(/brand/); expect(onError).toHaveBeenCalledTimes(1)
+    s.restyle(); expect(onError).toHaveBeenCalledTimes(1)
   })
   it('the content quad leads a raycast hit back to its Surface, and still serialises', () => {
     const { s } = signup()
@@ -990,6 +1060,24 @@ describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
       for (let i = 0; i < 3; i++) { s.tick(1 / 60); s.prepare(r, { width: 400, height: 300 }, 1, camera) }
       expect(r.render).toHaveBeenCalledTimes(1)                       // the content once: no luma pass, no pyramid
     }
+  })
+  it('fill with increased contrast: black/white solid fills and a label border; a restyle switches them per scheme', () => {
+    const pinned = (u: number) => ({ vGlassMisc: [1, -1, -1, 1], vGlassTint: [1, 1, 1, 0], vGlassGlow: [0, 0, 0, 0], vGlassGeom: [0.1, 0.1, u, 0.5], vGlassOutline: [0.6, 0.3, 0.12, 2] })
+    const rgb = (m: Mesh, u: number) => evalNode((m.material as MeshPhysicalNodeMaterial).backdropNode, pinned(u), undefined, 0.2).map(v => +v.toFixed(9))
+    const round = (k: Color) => [k.r, k.g, k.b].map(v => +v.toFixed(9))
+    const c: SurfaceContext = { ...ctx, quality: QUALITY.minimal, contrast: true }
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, c)
+    const el = new Node('glass', 'el'); el.setStyle({ position: 'absolute', left: 40, top: 30, width: 120, height: 60 })
+    s.root.appendChild(el); s.updateMatrixWorld(true); s.tick(1 / 60)
+    for (const scheme of ['light', 'dark'] as const) {
+      if (scheme !== c.scheme) { c.scheme = scheme; s.restyle() }
+      const solid = scheme === 'light' ? [1, 1, 1] : [0, 0, 0], label = round(toColor(resolveColor('label', theme, scheme)))
+      expect(rgb(slabOf(s)[0]!, 0.5)).toEqual(solid)
+      expect(rgb(elementGlass(s)[0]!, 0.5)).toEqual(solid)
+      expect(rgb(elementGlass(s)[0]!, 1 - 0.5 / 120)).toEqual(label)
+    }
+    c.contrast = false; s.restyle()                                 // contrast off: the theme's fill colours again
+    expect(rgb(elementGlass(s)[0]!, 1 - 0.5 / 120)).toEqual(round(fillColors(theme, 'dark').border))
   })
   it('fill: no rim decorations over the glass (its border replaces them), pools kept; back on a refracting tier the rims return', () => {
     const { s } = signup({ ...ctx })

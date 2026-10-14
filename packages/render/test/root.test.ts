@@ -1,10 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { Box3, PerspectiveCamera, Scene, Texture, Vector2, Vector3, VSMShadowMap, type DirectionalLight } from 'three'
+import { Box3, PerspectiveCamera, Quaternion, Scene, Texture, Vector2, Vector3, VSMShadowMap, type DirectionalLight } from 'three'
 import type { WebGPURenderer } from 'three/webgpu'
-import { GlassUIError, Node } from '@glassui/core'
+import { defaultTheme, GlassUIError, Node, resolveColor, type Theme } from '@glassui/core'
 import { createUIRoot, type UIRenderer, type UIRootOptions } from '../src/root'
-import type { Surface } from '../src/surface/surface'
+import { fillColors, type Surface } from '../src/surface/surface'
+import { toColor } from '../src/color'
 import type { QualityTier } from '../src/quality'
 
 // Type-level guard (checked by `pnpm typecheck`): the real renderer satisfies the stub-able subset.
@@ -42,7 +43,7 @@ async function timedRoot(cpuMs: number) {
   return { root, restore: () => now.mockRestore() }
 }
 
-const MOTION = '(prefers-reduced-motion: reduce)', TRANSPARENCY = '(prefers-reduced-transparency: reduce)'
+const MOTION = '(prefers-reduced-motion: reduce)', TRANSPARENCY = '(prefers-reduced-transparency: reduce)', CONTRAST = '(prefers-contrast: more)'
 /** A `matchMedia` stub: one list per query, whose `change` the test fires. */
 function fakeMedia() {
   const lists = new Map<string, { matches: boolean; listeners: Set<(e: { matches: boolean }) => void> }>()
@@ -461,5 +462,142 @@ describe('createUIRoot', () => {
     const looped = base(); const r2 = await createUIRoot(looped)
     r2.autoTick(true); r2.dispose()
     expect(looped.renderer.setAnimationLoop).toHaveBeenLastCalledWith(null)
+  })
+})
+
+describe('the root API for the Vue layer', () => {
+  /** A root over the stub renderer, with `extra` options on top of `base()`. */
+  async function createRoot(extra: Omit<Partial<UIRootOptions>, 'renderer' | 'camera'> = {}) {
+    const o = { ...base(), ...extra }
+    return { root: await createUIRoot(o), camera: o.camera, renderer: o.renderer }
+  }
+  it('setScheme restyles every Surface and fires a theme event', async () => {
+    const { root } = await createRoot()
+    const s = root.createSurface({ width: 100, height: 100, background: '#ffffff' })
+    const n = new Node('text'); n.setProp('value', 'a'); s.root.appendChild(n); root.tick(0)
+    const seen: string[] = []; root.on('theme', e => seen.push(e.scheme))
+    const restyle = vi.spyOn(s, 'restyle')
+    root.setScheme('dark')
+    expect(root.scheme).toBe('dark'); expect(seen).toEqual(['dark']); expect(restyle).toHaveBeenCalledTimes(1)
+    expect(n.dirty.paint && n.dirty.text).toBe(true)
+    root.tick(0)                                             // no throw: the dark tokens resolve
+    expect(s.error).toBeNull()
+    root.setScheme('dark')                                   // already dark: nothing to do
+    expect(seen).toEqual(['dark']); expect(restyle).toHaveBeenCalledTimes(1)
+  })
+  it('setTheme swaps the theme for every Surface, the animation runtime and new Surfaces', async () => {
+    const { root } = await createRoot()
+    const s = root.createSurface({ width: 100, height: 100 })
+    const theme: Theme = { ...defaultTheme, colors: { light: { ...defaultTheme.colors.light, label: '#102030' }, dark: defaultTheme.colors.dark } }
+    const seen: { theme: Theme; scheme: string }[] = []; root.on('theme', e => seen.push(e))
+    const restyle = vi.spyOn(s, 'restyle'), anim = vi.spyOn(root.anim, 'setTheme')
+    root.setTheme(theme)
+    expect(root.theme).toBe(theme); expect(seen).toEqual([{ theme, scheme: 'light' }])
+    expect(restyle).toHaveBeenCalledTimes(1); expect(anim).toHaveBeenCalledWith(theme, 'light')
+    expect(s.pointer.theme).toBe(theme)                      // the tracker's hit test resolves radius tokens against it
+    const later = root.createSurface({ width: 100, height: 100 })
+    expect(later.pointer.theme).toBe(theme)
+    root.tick(0); expect(s.error).toBeNull(); expect(later.error).toBeNull()
+  })
+  it('increased contrast pins minimal and uses label borders', async () => {
+    const { root } = await createRoot({ increasedContrast: true, quality: 'high' })
+    expect(root.quality.tier).toBe('minimal'); expect(root.contrast).toBe(true)
+    expect(fillColors(root.theme, 'light', { contrast: true }).border.getHexString()).toBe(toColor(resolveColor('label', root.theme, 'light')).getHexString())
+    const auto = (await createRoot({ increasedContrast: true, quality: 'auto' })).root
+    expect(auto.quality.tier).toBe('minimal')
+    expect((await createRoot()).root.contrast).toBe(false)   // no matchMedia under Node
+  })
+  it('fillColors with contrast: black/white solid fills and a label border, per scheme', () => {
+    const light = fillColors(defaultTheme, 'light', { contrast: true }), dark = fillColors(defaultTheme, 'dark', { contrast: true })
+    expect([light.slab, light.glass].map(c => c.getHexString())).toEqual(['ffffff', 'ffffff'])
+    expect([dark.slab, dark.glass].map(c => c.getHexString())).toEqual(['000000', '000000'])
+    expect(dark.border.getHexString()).toBe(toColor(resolveColor('label', defaultTheme, 'dark')).getHexString())
+    expect(fillColors(defaultTheme, 'light', { contrast: false })).toEqual(fillColors(defaultTheme, 'light'))
+  })
+  it('follows prefers-contrast live: pins minimal with the contrast fills; the pin holds while either query matches', async () => {
+    const media = fakeMedia()
+    vi.stubGlobal('matchMedia', media.matchMedia)
+    try {
+      const { root } = await createRoot({ quality: 'auto' })
+      const s = root.createSurface({ width: 10, height: 10, fill: true })
+      const restyle = vi.spyOn(s, 'restyle')
+      expect(root.contrast).toBe(false); expect(media.listening(CONTRAST)).toBe(1)
+      media.change(CONTRAST, true)
+      expect(root.contrast).toBe(true); expect(root.quality.tier).toBe('minimal'); expect(restyle).toHaveBeenCalledTimes(1)
+      media.change(TRANSPARENCY, true); media.change(CONTRAST, false)
+      expect(root.contrast).toBe(false); expect(root.quality.tier).toBe('minimal')   // reduced transparency still pins
+      media.change(TRANSPARENCY, false)
+      expect(root.quality.tier).toBe('high')
+      root.dispose()
+      expect(media.listening(CONTRAST)).toBe(0)
+      media.change(CONTRAST, true)
+      const later = (await createRoot({ quality: 'auto' })).root
+      expect(later.contrast).toBe(true); expect(later.quality.tier).toBe('minimal')
+      later.dispose()
+      const fixed = (await createRoot({ quality: 'auto', increasedContrast: false })).root
+      expect(fixed.contrast).toBe(false); expect(fixed.quality.tier).toBe('high'); expect(media.listening(CONTRAST)).toBe(0)
+      fixed.dispose()
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('afterTick resolves after the next tick', async () => {
+    const { root } = await createRoot(); let done = false
+    void root.afterTick().then(() => { done = true })
+    await Promise.resolve(); expect(done).toBe(false)
+    root.tick(0); await Promise.resolve(); expect(done).toBe(true)
+  })
+  it('afterTick resolves after the content passes and the shadow fit; a dispose settles a pending one', async () => {
+    const { root, renderer } = await createRoot()
+    root.createSurface({ width: 100, height: 100 })
+    let at = -1
+    void root.afterTick().then(() => { at = renderer.render.mock.calls.length })
+    root.tick(0); await Promise.resolve()
+    expect(at).toBe(1); expect(root.lights.key.shadow.needsUpdate).toBe(true)
+    let settled = false
+    void root.afterTick().then(() => { settled = true })
+    root.dispose(); await Promise.resolve()
+    expect(settled).toBe(true)                               // no tick will ever come: an await must not hang
+  })
+  it('a billboard world Surface faces the camera after a tick', async () => {
+    const { root, camera } = await createRoot()
+    const s = root.createSurface({ layer: 'world', width: 100, height: 100, billboard: true })
+    const plain = root.createSurface({ layer: 'world', width: 100, height: 100 })
+    expect(s.billboard).toBe(true); expect(plain.billboard).toBe(false)
+    camera.position.set(3, 1, 5); camera.lookAt(0, 0, 0); camera.updateMatrixWorld()
+    root.tick(0)
+    expect(s.getWorldQuaternion(new Quaternion()).angleTo(camera.getWorldQuaternion(new Quaternion()))).toBeLessThan(1e-6)
+    expect(plain.quaternion.equals(new Quaternion())).toBe(true)
+    root.world.rotation.set(0.3, -0.8, 0.2)                 // a rotated parent: the Surface still faces the camera
+    root.tick(0)
+    expect(s.getWorldQuaternion(new Quaternion()).angleTo(camera.getWorldQuaternion(new Quaternion()))).toBeLessThan(1e-6)
+  })
+  it('screenFromPoint projects a Surface pt to canvas px', async () => {
+    const { root } = await createRoot()                     // the stub's size is 800 × 600
+    const s = root.createSurface({ width: 200, height: 100, left: 300, top: 250 }); root.tick(0)
+    const p = root.screenFromPoint(s, 100, 50)!
+    expect(p.x).toBeCloseTo(400, 3); expect(p.y).toBeCloseTo(300, 3)
+    const tl = root.screenFromPoint(s, 0, 0)!
+    expect(tl.x).toBeCloseTo(300, 3); expect(tl.y).toBeCloseTo(250, 3)
+  })
+  it('screenFromPoint: a world Surface through the camera, null behind it', async () => {
+    const { root, camera } = await createRoot()
+    const w = root.createSurface({ layer: 'world', width: 488, height: 244 }); w.position.set(0, 0, -5)
+    root.tick(0)
+    const c = root.screenFromPoint(w, 244, 122)!
+    expect(c.x).toBeCloseTo(400, 3); expect(c.y).toBeCloseTo(300, 3)
+    const v = new Vector3(-1, 0.5, -5).project(camera)       // the top-left corner: 2 × 1 units about (0, 0, −5)
+    const tl = root.screenFromPoint(w, 0, 0)!
+    expect(tl.x).toBeCloseTo((v.x + 1) / 2 * 800, 3); expect(tl.y).toBeCloseTo((1 - v.y) / 2 * 600, 3)
+    w.position.set(0, 0, 5); root.tick(0)
+    expect(root.screenFromPoint(w, 244, 122)).toBeNull()
+  })
+  it('createSurface centres a { center: true } screen Surface; fill wins over center, center over left/top', async () => {
+    const { root } = await createRoot()
+    const c = root.createSurface({ width: 200, height: 100, center: true, left: 10, top: 10 })
+    const f = root.createSurface({ width: 200, height: 100, center: true, fill: true })
+    root.tick(0)
+    expect(c.position.x).toBeCloseTo(0); expect(c.position.y).toBeCloseTo(0)
+    const p = root.screenFromPoint(c, 0, 0)!
+    expect(p.x).toBeCloseTo(300, 3); expect(p.y).toBeCloseTo(250, 3)
+    expect(f.model.width).toBe(800); expect(f.model.height).toBe(600)
   })
 })

@@ -2,8 +2,8 @@ import { Group, Quaternion, Vector3, type OrthographicCamera, type PerspectiveCa
 import { GlassUIError } from '@glassui/core'
 import type { Surface } from './surface'
 
-/** Where a screen Surface sits: filling the viewport, or with its (scaled) top-left at CSS px `left, top`. */
-export type ScreenPlacement = { fill: true } | { left: number; top: number }
+/** Where a screen Surface sits: filling the viewport, its (scaled) rect centred in it, or its (scaled) top-left at CSS px `left, top`. */
+export type ScreenPlacement = { fill: true } | { center: true } | { left: number; top: number }
 
 /**
  * World units per CSS px on a plane `distance` in front of `camera` (spec §3.1: the screen layer is pt = px).
@@ -58,8 +58,9 @@ export class ScreenLayer extends Group {
   unplace(surface: Surface): void { this.surfaces.delete(surface); this.placements.delete(surface) }
 
   /**
-   * `fill` sizes the Surface to the viewport (expects scale 1); `{left, top}` uses its scaled size. Both sink the Surface
-   * by its scaled `contentPlaneZ` so its content plane sits on the layer plane (after `setSize`: the slab follows size).
+   * `fill` sizes the Surface to the viewport (expects scale 1); `center` puts its centre (so its scaled rect's) on the
+   * viewport's; `{left, top}` uses its scaled size. All sink the Surface by its scaled `contentPlaneZ` so its content
+   * plane sits on the layer plane (after `setSize`: the slab follows size).
    */
   private apply(s: Surface, at: ScreenPlacement): void {
     const { width: vw, height: vh } = this.viewport
@@ -68,6 +69,7 @@ export class ScreenLayer extends Group {
       s.position.set(0, 0, 0 - s.contentPlaneZ * s.scale.z)   // `0 −`: +0, not −0, without a glass background
       return
     }
+    if ('center' in at) { s.position.set(0, 0, 0 - s.contentPlaneZ * s.scale.z); return }
     const w = s.model.width * s.scale.x, h = s.model.height * s.scale.y
     s.position.set(at.left + w / 2 - vw / 2, vh / 2 - (at.top + h / 2), 0 - s.contentPlaneZ * s.scale.z)
   }

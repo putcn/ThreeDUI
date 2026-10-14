@@ -12,7 +12,7 @@ import { PointerBridge, hitSurfaces, applyWheel, pointOnSurfacePlane } from '../
 let ctx: SurfaceContext
 beforeAll(async () => {
   const text = new SystemFontEngine({ createCanvas: ((w: number, h: number) => createCanvas(w, h)) as never, pageSize: 256 })
-  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), quality: { contentType: 'byte', contentScale: 1, backFaces: false, depthReject: false, blur: 'mip', glassMode: 'refract', dispersion: 'always' } }
+  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), contrast: false, quality: { contentType: 'byte', contentScale: 1, backFaces: false, depthReject: false, blur: 'mip', glassMode: 'refract', dispersion: 'always' } }
 })
 
 function fakeCanvas() {
@@ -431,6 +431,45 @@ describe('PointerBridge.handle', () => {
     expect(tab(true)).not.toHaveBeenCalled(); expect(s.focus.current).toBeNull(); expect(btn.state.focused).toBe(false)
     expect(tab(true)).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn2)     // Shift+Tab back in: the last
     expect(tab(true)).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn)
+  })
+  it('trapFocus: Tab past the last focusable wraps to the first (Shift+Tab: the reverse), prevented, never blurring out', () => {
+    const { s, btn, bridge } = scene()
+    const btn2 = new Node('glass', 'btn2'); btn2.setStyle({ position: 'absolute', left: 400, top: 100, width: 100, height: 80 }); btn2.setProp('tabIndex', 0)
+    s.root.appendChild(btn2); s.tick(0)
+    s.trapFocus = true
+    const tab = (shiftKey = false) => { const preventDefault = vi.fn(); bridge.handle('keydown', { key: 'Tab', shiftKey, preventDefault }); return preventDefault }
+    expect(tab()).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn)
+    expect(tab()).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn2)
+    expect(tab()).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn)            // wrapped
+    expect(btn.state.focusVisible).toBe(true)
+    expect(tab(true)).toHaveBeenCalledTimes(1); expect(s.focus.current).toBe(btn2)       // Shift+Tab before the first: the last
+    btn.setProp('tabIndex', undefined); btn2.setProp('tabIndex', undefined); s.focus.focus(null)
+    expect(tab()).toHaveBeenCalledTimes(1); expect(s.focus.current).toBeNull()           // nothing to focus: Tab still stays in
+  })
+  it('setActive makes a Surface the key target, blurring the one it replaces', () => {
+    const { a, b, ab, bb, bridge } = two()
+    ab.setProp('tabIndex', 0); bb.setProp('tabIndex', 0)
+    bridge.setActive(a)
+    bridge.handle('keydown', { key: 'Tab' })
+    expect(a.focus.current).toBe(ab)
+    bridge.setActive(b)
+    expect(bridge.active).toBe(b); expect(a.focus.current).toBeNull(); expect(ab.state.focused).toBe(false)
+    bridge.handle('keydown', { key: 'Tab' })
+    expect(b.focus.current).toBe(bb)
+    bridge.setActive(b)                                                              // the same Surface: its focus stays
+    expect(b.focus.current).toBe(bb)
+    bridge.setActive(null)
+    expect(bridge.active).toBeNull(); expect(b.focus.current).toBeNull()
+  })
+  it('setActive away from a Surface holding a press cancels that press: the capture cannot stay on it', () => {
+    const { a, b, ab, bridge } = two()
+    bridge.handle('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 })
+    expect(ab.state.pressed).toBe(true)
+    const cancel = vi.fn(); a.events.on(ab, 'pointercancel', cancel)
+    bridge.setActive(b)
+    expect(cancel).toHaveBeenCalledTimes(1); expect(ab.state.pressed).toBe(false)
+    bridge.handle('pointermove', { clientX: 120, clientY: 100, pointerId: 1 })        // no capture held: moves hover again
+    expect(bridge.hovered).toBe(a)
   })
   it('attach wires the DOM events and sets tabIndex', () => {
     const { bridge, canvas } = scene()

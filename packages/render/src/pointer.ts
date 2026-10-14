@@ -116,9 +116,10 @@ const FAR = -1e6
  * its quad or over another Surface, and no other Surface is hovered. Otherwise moves hover the Surface under the
  * pointer (`hovered`; `hitSurfaces`: an empty area of a bare 'none' Surface lets the pointer through), and the one left
  * behind gets its hover cleared. Keys go to `active`, the Surface last pressed (pressing another Surface, or nothing,
- * blurs its focus); before any press, the topmost interactive Surface is adopted. Tab steps through its focusables and
- * is prevented, except past the last (Shift+Tab: before the first), which blurs and lets the browser move focus out of
- * the canvas.
+ * blurs its focus), or the one `setActive` named (a dialog); before any press, the topmost interactive Surface is
+ * adopted. Tab steps through its focusables and is prevented, except past the last (Shift+Tab: before the first), which
+ * blurs and lets the browser move focus out of the canvas — unless the Surface traps focus (`Surface.trapFocus`, a modal
+ * dialog): then Tab wraps to the first (Shift+Tab to the last), is always prevented and never leaves.
  * `handle` is the testable core; `attach` wires the canvas events to it.
  */
 export class PointerBridge {
@@ -178,9 +179,14 @@ export class PointerBridge {
     this.hovered = s
   }
 
-  /** Pressing another Surface (or nothing) blurs the old one's focus: one focused node per canvas. */
-  private activate(s: Surface | null): void {
+  /**
+   * Makes `s` the Surface that receives the keys (a dialog that opens takes them), as a press on it would. Moving to
+   * another Surface (or none) blurs the old one's focus: one focused node per canvas. A press the old one holds is
+   * cancelled (`pointercancel`), since the capture is `active`'s and the rest of that press would reach `s`.
+   */
+  setActive(s: Surface | null): void {
     if (this.active === s) return
+    if (this.pressing) { this.active?.pointer.cancel(); this.pressing = false }
     this.active?.focus.focus(null)
     this.active = s
   }
@@ -220,7 +226,7 @@ export class PointerBridge {
         // a held press whose up was lost: its tracker releases it on a down of its own, another Surface's cannot
         if (this.pressing && this.active !== hit?.surface) this.active?.pointer.cancel()
         this.pressing = false
-        this.activate(hit?.surface ?? null)
+        this.setActive(hit?.surface ?? null)
         this.hover(hit?.surface ?? null, ptype)
         if (!hit) break
         hit.surface.setPointer([hit.x, hit.y]); hit.surface.pointer.down(hit.x, hit.y, ptype)
@@ -271,11 +277,12 @@ export class PointerBridge {
         this.active = s
         const tab = e.key === 'Tab', down = type === 'keydown'
         if (tab && down) {
-          // the way out: Tab past the last focusable (Shift+Tab before the first) blurs, and the browser moves focus on
+          // the way out: Tab past the last focusable (Shift+Tab before the first) blurs, and the browser moves focus on;
+          // a Surface that traps focus has none: the focus manager's step wraps around instead
           const list = s.focus.focusables(), cur = s.focus.current
-          if (cur && cur === (e.shiftKey ? list[0] : list[list.length - 1])) { s.focus.focus(null); break }
+          if (!s.trapFocus && cur && cur === (e.shiftKey ? list[0] : list[list.length - 1])) { s.focus.focus(null); break }
           s.focus.key(e.shiftKey ? 'Shift+Tab' : 'Tab', true)
-          if (s.focus.current) e.preventDefault?.()   // nothing to focus: Tab leaves the canvas too
+          if (s.focus.current || s.trapFocus) e.preventDefault?.()   // nothing to focus: Tab leaves the canvas too, unless trapped
           break
         }
         s.focus.key(tab && e.shiftKey ? 'Shift+Tab' : e.key, down)

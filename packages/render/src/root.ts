@@ -1,4 +1,4 @@
-import { Box3, Group, Matrix4, Scene, Vector2, Vector3, VSMShadowMap, type OrthographicCamera, type PerspectiveCamera, type Texture } from 'three'
+import { Box3, Group, Matrix4, Quaternion, Scene, Vector2, Vector3, VSMShadowMap, type OrthographicCamera, type PerspectiveCamera, type Texture } from 'three'
 import { AnimationRuntime, createYogaLayout, defaultTheme, GlassUIError, type ColorScheme, type Theme } from '@glassui/core'
 import { SystemFontEngine, type CanvasFactory, type TextEngine } from '@glassui/text'
 import { Surface, type SurfaceContext, type SurfaceOptions } from './surface/surface'
@@ -44,32 +44,69 @@ export interface UIRootOptions {
   /** Default true: DOM pointer/wheel (and, with `keyboard`, key) events on the canvas. */
   pointer?: boolean; keyboard?: boolean
   /**
-   * Default: the `prefers-reduced-motion` / `prefers-reduced-transparency` media queries, where available, followed
-   * live (their `change` events, until `dispose`): reduced transparency pins `minimal` (`quality.setReducedTransparency`),
-   * reduced motion sets `anim.reducedMotion`. An explicit value is fixed: its query is not read or followed.
+   * Default: the `prefers-reduced-motion` / `prefers-reduced-transparency` / `prefers-contrast: more` media queries,
+   * where available, followed live (their `change` events, until `dispose`): reduced transparency pins `minimal`
+   * (`quality.setReducedTransparency`), reduced motion sets `anim.reducedMotion`, increased contrast (spec §8.3:
+   * black/white solid + border) pins `minimal` too and switches its fills to `fillColors(theme, scheme, { contrast: true })`
+   * (white or black, a `label` border). The pin holds while either reduced transparency or increased contrast is on.
+   * An explicit value is fixed: its query is not read or followed.
    */
-  reducedMotion?: boolean; reducedTransparency?: boolean
+  reducedMotion?: boolean; reducedTransparency?: boolean; increasedContrast?: boolean
 }
 
-export type CreateSurfaceOptions = SurfaceOptions & { layer?: 'screen' | 'world'; fill?: boolean; left?: number; top?: number }
+/**
+ * A Surface and where it goes. Screen layer: `fill` (sized to the viewport) wins over `center` (its scaled rect
+ * centred), which wins over `left/top` (its scaled top-left, CSS px; default 0, 0).
+ */
+export type CreateSurfaceOptions = SurfaceOptions & { layer?: 'screen' | 'world'; fill?: boolean; center?: boolean; left?: number; top?: number }
 
 export interface UIRootEventMap {
   quality: { tier: QualityTier; prev: QualityTier; profile: Readonly<QualityProfile> }
   /** A Surface failed a frame (it stopped drawing). */
   error: { surface: Surface; error: Error }
+  /** `setTheme` / `setScheme` swapped the theme or scheme; every Surface has been restyled. */
+  theme: { theme: Theme; scheme: ColorScheme }
 }
 
 export interface UIRoot {
   readonly screen: ScreenLayer; readonly world: Group; readonly uiScene: Scene
-  readonly lights: ReturnType<typeof createUILights>; readonly theme: Theme; readonly scheme: ColorScheme
+  readonly lights: ReturnType<typeof createUILights>
+  /** The current theme and scheme (`setTheme`, `setScheme`). */
+  readonly theme: Theme; readonly scheme: ColorScheme
+  /** Increased contrast is on (`UIRootOptions.increasedContrast`, or the media query's current value). */
+  readonly contrast: boolean
   readonly text: TextEngine; readonly quality: QualityController; readonly anim: AnimationRuntime
   readonly surfaces: readonly Surface[]; readonly pointer: PointerBridge | null
   readonly backend: 'webgpu' | 'webgl2' | 'unknown'
-  /** `layer: 'screen'` (default): pt = CSS px, `fill` or at `left/top`; `'world'`: a child of `world` (`ptPerUnit` default 244). */
+  /**
+   * `layer: 'screen'` (default): pt = CSS px, `fill`, `center` or at `left/top` (`CreateSurfaceOptions`); `'world'`: a
+   * child of `world` (`ptPerUnit` default 244; `billboard` faces the camera).
+   */
   createSurface(opts: CreateSurfaceOptions): Surface
   removeSurface(surface: Surface): void
-  /** Layout, animation, content passes, draw order and the shadow fit; `dt` in seconds. */
+  /**
+   * Swaps the theme: the shared context's theme and text measure, the animation runtime's theme, then every Surface
+   * restyled (`Surface.restyle`: fills, an opaque background, the glass, every node marked); emits `'theme'`.
+   */
+  setTheme(theme: Theme): void
+  /** Swaps the colour scheme (dark mode) as `setTheme` swaps the theme; a no-op for the current scheme. */
+  setScheme(scheme: ColorScheme): void
+  /**
+   * Layout, animation, content passes, draw order and the shadow fit; `dt` in seconds. Billboard world Surfaces turn to
+   * face the camera before their matrices are read. Ends by resolving the `afterTick` promises.
+   */
   tick(dt: number): void
+  /**
+   * Resolves at the end of the next `tick` (after the content passes and the shadow fit): layout and the render list
+   * are current then (e.g. to place an IME proxy at a caret). `dispose` resolves any still pending.
+   */
+  afterTick(): Promise<void>
+  /**
+   * Surface pt (x, y) on its content plane (`Surface.worldFromPoint`), projected through the camera to CSS px from the
+   * canvas's top-left; null when the point is behind the camera (or outside its near/far range). Reads the matrices
+   * as the last `tick` left them.
+   */
+  screenFromPoint(surface: Surface, x: number, y: number): { x: number; y: number } | null
   /**
    * Overlay: the host scene (cleared: `autoClear` true for that draw), then the UI scene over it without clearing
    * (shared depth); `renderer.autoClear` is put back to the host's value afterwards, also when a draw throws. Shared:
@@ -100,7 +137,7 @@ const SCREEN_ORDER = 1000
 /** The content quad's corners (a unit `PlaneGeometry`, scaled to the Surface), in polygon order. */
 const CORNERS = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const
 
-const REDUCED_MOTION = '(prefers-reduced-motion: reduce)', REDUCED_TRANSPARENCY = '(prefers-reduced-transparency: reduce)'
+const REDUCED_MOTION = '(prefers-reduced-motion: reduce)', REDUCED_TRANSPARENCY = '(prefers-reduced-transparency: reduce)', INCREASED_CONTRAST = '(prefers-contrast: more)'
 /** The media query's list where the environment has `matchMedia` (not under Node). */
 const media = (q: string): MediaQueryList | null => typeof matchMedia === 'function' ? matchMedia(q) : null
 const domCanvas: CanvasFactory = (width, height) => Object.assign(document.createElement('canvas'), { width, height }) as unknown as ReturnType<CanvasFactory>
@@ -118,10 +155,10 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  * scene, so the host's own shadows are affected too (they become VSM, transmitted). Saving and restoring the host's
  * settings is planned; `dispose` leaves them as the root set them.
  *
- * Each `tick`: the screen layer and the lights follow the camera; every Surface ticks; glyphs evicted by a later
- * Surface's are re-laid out; draw orders are assigned (screen Surfaces above world ones, nearer above farther); the
- * content passes draw; the key light's shadow camera is re-fitted to every Surface when the camera, a Surface's pose or
- * its glass changed (the map redraws only then).
+ * Each `tick`: the screen layer and the lights follow the camera; billboard world Surfaces turn to face it; every
+ * Surface ticks; glyphs evicted by a later Surface's are re-laid out; draw orders are assigned (screen Surfaces above
+ * world ones, nearer above farther); the content passes draw; the key light's shadow camera is re-fitted to every
+ * Surface when the camera, a Surface's pose or its glass changed (the map redraws only then); `afterTick` waiters resolve.
  */
 export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const { renderer, scene, camera } = opts
@@ -132,23 +169,27 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const backend: UIRoot['backend'] = renderer.backend ? (renderer.backend.isWebGPUBackend ? 'webgpu' : 'webgl2') : 'unknown'
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = VSMShadowMap; renderer.shadowMap.transmitted = true
 
-  const theme = opts.theme ?? defaultTheme, scheme = opts.scheme ?? 'light'
+  let theme = opts.theme ?? defaultTheme, scheme = opts.scheme ?? 'light'
   // an explicit option is fixed; without one the media query decides, and keeps deciding (subscribed below)
   const transparencyQuery = opts.reducedTransparency === undefined ? media(REDUCED_TRANSPARENCY) : null
   const motionQuery = opts.reducedMotion === undefined ? media(REDUCED_MOTION) : null
-  const reducedTransparency = opts.reducedTransparency ?? transparencyQuery?.matches ?? false
+  const contrastQuery = opts.increasedContrast === undefined ? media(INCREASED_CONTRAST) : null
+  // the live values: reduced transparency and increased contrast both pin minimal (spec §8.3)
+  let transparency = opts.reducedTransparency ?? transparencyQuery?.matches ?? false
+  let contrast = opts.increasedContrast ?? contrastQuery?.matches ?? false
+  const pinned = transparency || contrast
   const touch = typeof navigator !== 'undefined' && (navigator.maxTouchPoints ?? 0) > 0
   const tier = opts.quality ?? 'auto', adaptive = tier === 'auto'
-  // auto: the cap ignores the pin, so clearing reduced transparency can raise quality again; a fixed tier is its own cap
+  // auto: the cap ignores the pin, so clearing the pin can raise quality again; a fixed tier is its own cap
   const quality = tier === 'auto'
-    ? new QualityController({ initial: defaultTier({ touch, reducedTransparency }), cap: defaultTier({ touch, reducedTransparency: false }), reducedTransparency })
-    : new QualityController({ initial: tier, reducedTransparency })
+    ? new QualityController({ initial: defaultTier({ touch, reducedTransparency: pinned }), cap: defaultTier({ touch, reducedTransparency: false }), reducedTransparency: pinned })
+    : new QualityController({ initial: tier, reducedTransparency: pinned })
 
   const text = opts.text ?? new SystemFontEngine({ createCanvas: opts.createCanvas ?? domCanvas })
   const anim = new AnimationRuntime(theme, scheme)
   anim.reducedMotion = opts.reducedMotion ?? motionQuery?.matches ?? false
   const pages = new AtlasPages(text.atlas)
-  const ctx: SurfaceContext = { theme, scheme, layout: await createYogaLayout(), measure: createMeasureFn(text, theme, scheme), anim, text, pages, quality: quality.profile }
+  const ctx: SurfaceContext = { theme, scheme, layout: await createYogaLayout(), measure: createMeasureFn(text, theme, scheme), anim, text, pages, quality: quality.profile, contrast }
 
   const mode = opts.mode ?? 'overlay'
   const uiScene = new Scene(); uiScene.name = 'glassui'
@@ -181,7 +222,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
    */
   function each(fn: (s: Surface) => void): void { for (const s of [...surfaces]) if (surfaces.includes(s)) fn(s) }
 
-  const listeners: { [K in keyof UIRootEventMap]: Set<(e: UIRootEventMap[K]) => void> } = { quality: new Set(), error: new Set() }
+  const listeners: { [K in keyof UIRootEventMap]: Set<(e: UIRootEventMap[K]) => void> } = { quality: new Set(), error: new Set(), theme: new Set() }
   function emit<K extends keyof UIRootEventMap>(type: K, e: UIRootEventMap[K]): void {
     for (const fn of [...listeners[type]]) try { fn(e) } catch (err) { console.error(`[glassui] a "${type}" listener threw:`, err) }
   }
@@ -203,10 +244,25 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     list.addEventListener('change', onChange)
     stopMedia.push(() => list.removeEventListener('change', onChange))
   }
-  follow(transparencyQuery, on => quality.setReducedTransparency(on))
+  const pin = (): void => quality.setReducedTransparency(transparency || contrast)
+  follow(transparencyQuery, on => { transparency = on; pin() })
   follow(motionQuery, on => { anim.reducedMotion = on })
+  follow(contrastQuery, on => { contrast = on; ctx.contrast = on; each(s => s.restyle()); pin() })
 
-  const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3()
+  /** The shared context and the animation runtime take the current theme and scheme; every Surface restyles; `'theme'`. */
+  function restyleAll(): void {
+    ctx.theme = theme; ctx.scheme = scheme; ctx.measure = createMeasureFn(text, theme, scheme)
+    anim.setTheme(theme, scheme)
+    each(s => s.restyle())
+    emit('theme', { theme, scheme })
+  }
+
+  /** Resolved (and dropped) at the end of every `tick`, and by `dispose`. */
+  const afterTickWaiters: (() => void)[] = []
+  function settleAfterTick(): void { for (const resolve of afterTickWaiters.splice(0)) resolve() }
+
+  const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3(), point = new Vector3()
+  const qCam = new Quaternion(), qParent = new Quaternion()
   const lastCamera = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
   let lastFitted = -1, looping = false, disposed = false
   const scheduler = new FrameScheduler(), frames = new FrameSampler()
@@ -253,12 +309,15 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   }
 
   const root: UIRoot = {
-    screen, world, uiScene, lights, theme, scheme, text, quality, anim, surfaces, pointer, backend,
+    screen, world, uiScene, lights, text, quality, anim, surfaces, pointer, backend,
+    get theme() { return theme },
+    get scheme() { return scheme },
+    get contrast() { return contrast },
     createSurface(o) {
-      const { layer = 'screen', fill, left, top, ...rest } = o
+      const { layer = 'screen', fill, center, left, top, ...rest } = o
       const s = new Surface(layer === 'screen' ? { ...rest, ptPerUnit: 1, placement: 'screen' } : { ...rest, placement: 'world' }, ctx)
       s.addEventListener('error', e => emit('error', { surface: s, error: e.error }))
-      if (layer === 'screen') screen.place(s, fill ? { fill: true } : { left: left ?? 0, top: top ?? 0 })
+      if (layer === 'screen') screen.place(s, fill ? { fill: true } : center ? { center: true } : { left: left ?? 0, top: top ?? 0 })
       else world.add(s)
       surfaces.push(s)
       return s
@@ -277,7 +336,13 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       lights.group.updateMatrixWorld(true)                         // the key light stays top-left-front of the view
       let changed = !lastCamera.equals(camera.matrixWorld)
       lastCamera.copy(camera.matrixWorld)
-      for (const s of surfaces) if (s.model.placement === 'world') s.updateWorldMatrix(true, true)
+      camera.getWorldQuaternion(qCam)
+      for (const s of surfaces) {
+        if (s.model.placement !== 'world') continue
+        // a billboard's world rotation is the camera's: its local one undoes its parent's
+        if (s.billboard) s.quaternion.copy(s.parent ? s.parent.getWorldQuaternion(qParent).invert() : qParent.identity()).multiply(qCam)
+        s.updateWorldMatrix(true, true)
+      }
       const epoch = text.atlas.epoch
       each(s => s.tick(dt))
       // the pages are shared: a later Surface's glyphs may have evicted an earlier one's this tick
@@ -287,6 +352,16 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       const dpr = renderer.getPixelRatio()
       each(s => s.prepare(renderer, projectedPx(s), dpr, camera))   // a glass Surface's luma projects its glass with it
       fitShadows(changed)
+      settleAfterTick()
+    },
+    setTheme(t) { theme = t; restyleAll() },
+    setScheme(sc) { if (sc !== scheme) { scheme = sc; restyleAll() } },
+    afterTick() { return new Promise<void>(resolve => { afterTickWaiters.push(resolve) }) },
+    screenFromPoint(s, x, y) {
+      const p = s.worldFromPoint(x, y, point).project(camera)
+      if (!(p.z >= -1 && p.z <= 1)) return null   // behind the camera (or past its near/far); NaN too
+      const r = canvas.getBoundingClientRect()
+      return { x: (p.x + 1) / 2 * r.width, y: (1 - p.y) / 2 * r.height }
     },
     render() {
       if (mode === 'shared') { renderer.render(scene, camera); return }
@@ -331,7 +406,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       if (pointer && canvas.style && touchAction !== undefined) canvas.style.touchAction = touchAction
       for (const s of [...surfaces]) root.removeSurface(s)
       offQuality()
-      listeners.quality.clear(); listeners.error.clear()
+      settleAfterTick()   // no tick will come: an `await root.afterTick()` must not hang
+      listeners.quality.clear(); listeners.error.clear(); listeners.theme.clear()
       pages.dispose()
       lights.key.dispose(); lights.hemi.dispose()
       screen.removeFromParent(); world.removeFromParent(); lights.group.removeFromParent()

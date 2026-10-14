@@ -11,7 +11,7 @@ import { ScreenLayer, screenUnitsPerPx } from '../src/surface/screen'
 let ctx: SurfaceContext
 beforeAll(async () => {
   const text = new SystemFontEngine({ createCanvas: ((w: number, h: number) => createCanvas(w, h)) as never, pageSize: 256 })
-  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), quality: { contentType: 'byte', contentScale: 1, backFaces: false, depthReject: false, blur: 'mip', glassMode: 'refract', dispersion: 'always' } }
+  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), contrast: false, quality: { contentType: 'byte', contentScale: 1, backFaces: false, depthReject: false, blur: 'mip', glassMode: 'refract', dispersion: 'always' } }
 })
 
 /** CSS px (from the viewport's top-left) of `s`'s local point (x, y, z) seen through `cam`. */
@@ -119,6 +119,26 @@ describe('ScreenLayer', () => {
     const [l, t] = px(s, cam, -100, 50, 800, 600, z), [r, b] = px(s, cam, 100, -50, 800, 600, z)
     expect(l).toBeCloseTo(20, 4); expect(t).toBeCloseTo(30, 4)
     expect(r).toBeCloseTo(120, 4); expect(b).toBeCloseTo(80, 4)
+  })
+  it('centres a { center: true } Surface', () => {
+    const camera = new PerspectiveCamera(50, 800 / 600, 0.1, 100); camera.updateMatrixWorld(true)
+    const layer = new ScreenLayer(), s = new Surface({ width: 200, height: 100, ptPerUnit: 1 }, ctx)
+    layer.place(s, { center: true }); layer.update(camera, { width: 800, height: 600 })
+    expect(s.position.x).toBeCloseTo(0); expect(s.position.y).toBeCloseTo(0)
+    const [l, t] = px(s, camera, -100, 50, 800, 600)
+    expect(l).toBeCloseTo(300, 4); expect(t).toBeCloseTo(250, 4)
+  })
+  it('a centred glass-background Surface, scaled, has its content plane centred on the layer plane', () => {
+    const cam = new PerspectiveCamera(50, 1000 / 600, 0.1, 100); cam.position.set(-2, 1, 4); cam.lookAt(0, 0, 0); cam.updateMatrixWorld(true)
+    const layer = new ScreenLayer()
+    const s = new Surface({ width: 200, height: 100, ptPerUnit: 1, placement: 'screen', background: 'glass' }, ctx)
+    s.scale.setScalar(0.5)
+    layer.place(s, { center: true }); layer.update(cam, { width: 1000, height: 600 })
+    const z = s.contentPlaneZ
+    expect(s.position.z).toBe(-z * 0.5)
+    const [l, t] = px(s, cam, -100, 50, 1000, 600, z), [r, b] = px(s, cam, 100, -50, 1000, 600, z)
+    expect(l).toBeCloseTo(450, 4); expect(t).toBeCloseTo(275, 4)
+    expect(r).toBeCloseTo(550, 4); expect(b).toBeCloseTo(325, 4)
   })
   it('rejects a surface whose ptPerUnit is not 1', () => {
     const layer = new ScreenLayer()
