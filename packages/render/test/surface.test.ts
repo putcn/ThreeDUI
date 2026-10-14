@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { CustomBlending, FrontSide, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material, type RenderTarget } from 'three'
-import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
+import { CustomBlending, DataTexture, FrontSide, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material, type RenderTarget } from 'three'
+import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial, type MeshBasicNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
 import { Surface, createContentMaterial, CONTENT_ORDER, SLAB_FROST, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
@@ -9,6 +9,7 @@ import { AtlasPages } from '../src/text/pages'
 import { createMeasureFn } from '../src/text/measure'
 import { REFLECTION_STRENGTH } from '../src/glass/batch'
 import { srgbToLinear } from '../src/color'
+import { surfaceToLocal } from '../src/units'
 import { buildShaders } from './fixtures/build-shaders'
 import { evalNode } from './fixtures/tsl-eval'
 
@@ -570,6 +571,109 @@ describe('Surface: the dual-Kawase pyramid (quality.blur = \'kawase\')', () => {
     s.prepare(r, { width: 400, height: 300 }, 1)
     const targets = [...new Set(r.drawn)].filter(t => t !== s.contentPass.target) as RenderTarget[]
     expect(targets).toHaveLength(5)
+    const freed = new Set<unknown>()
+    for (const t of targets) t.addEventListener('dispose', () => freed.add(t))
+    s.dispose()
+    expect(freed).toEqual(new Set(targets))
+  })
+})
+
+describe('Surface: adaptive luma (clear + adaptive glass, spec §5.3)', () => {
+  /** A 400 × 300 Surface: a card panel and one glass element at (40, 30), 120 × 60 pt, with glass style `g`. */
+  function clearGlass(c: SurfaceContext = ctx, g: Record<string, unknown> = { variant: 'clear', adaptive: true }, background: 'none' | 'glass' = 'none') {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background }, c)
+    const card = new Node('box', 'card'); card.setStyle({ position: 'absolute', left: 0, top: 0, width: 400, height: 300, bg: 'fill' })
+    const el = new Node('glass', 'el'); el.setStyle({ position: 'absolute', left: 40, top: 30, width: 120, height: 60, glass: g })
+    s.root.appendChild(card); card.appendChild(el)
+    return s
+  }
+  /** A stub renderer recording the target and the scene of every draw. */
+  const recording = () => {
+    let bound: RenderTarget | null = null
+    const drawn: (RenderTarget | null)[] = [], scenes: Object3D[] = []
+    return { ...stubRenderer(), drawn, scenes, setRenderTarget: vi.fn((t: RenderTarget | null) => { bound = t }), render: vi.fn((scene: Object3D) => { drawn.push(bound); scenes.push(scene) }) }
+  }
+  const sampledBy = (ms: Mesh[]) => new Set(ms.flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode)).filter(n => n.isTextureNode).map(n => n.value))
+
+  it('a redraw draws the content, then the luma pass into a 256 × 1 target the element glass samples', () => {
+    const s = clearGlass(); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(r.render).toHaveBeenCalledTimes(2)
+    expect(r.drawn[0]).toBe(s.contentPass.target)
+    const luma = r.drawn[1]!
+    expect([luma.width, luma.height]).toEqual([256, 1])
+    for (const m of elementGlass(s)) expect(sampledBy([m])).toContain(luma.texture)
+  })
+  it('packs the glass rect in content uv, v = 0 at the top: (x/W, y/H, w/W, h/H), where the content camera draws it', () => {
+    const s = clearGlass(); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    const kernel = ((r.scenes[1] as Mesh).material as MeshBasicNodeMaterial).colorNode
+    const rects = nodesOf(kernel).map(n => n.value).find((v): v is DataTexture => v instanceof DataTexture)!
+    const [u, v, w, h] = Array.from((rects.image.data as Float32Array).slice(0, 4))
+    expect([u, v, w, h]).toEqual([40 / 400, 30 / 300, 120 / 400, 60 / 300].map(Math.fround))
+    // the glass's corners through the content pass's camera: NDC y = +1 is the RT's top row (v = 0) on both backends
+    const rtUV = (x: number, y: number) => { const p = new Vector3(...surfaceToLocal(x, y, s.model), 0).project(s.contentPass.camera); return [(p.x + 1) / 2, (1 - p.y) / 2] }
+    const [[u0, v0], [u1, v1]] = [rtUV(40, 30), rtUV(160, 90)]
+    expect(u0).toBeCloseTo(u!, 6); expect(v0).toBeCloseTo(v!, 6); expect(u1).toBeCloseTo(u! + w!, 6); expect(v1).toBeCloseTo(v! + h!, 6)
+  })
+  it('on the kawase tier a redraw is content 1 + pyramid 9 + luma 1, the luma last (it reads the content RT, not the pyramid)', () => {
+    const q = { ...ctx.quality, blur: 'kawase' as const }
+    const s = clearGlass({ ...ctx, quality: q }); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    const pyramidPasses = 2 * 4 + 1                                   // 4 levels: 5 downs and 4 ups
+    expect(r.render).toHaveBeenCalledTimes(1 + pyramidPasses + 1)
+    expect(r.drawn[0]).toBe(s.contentPass.target)
+    expect(r.drawn[r.drawn.length - 1]!.width).toBe(256)
+    const read = new Set(nodesOf(((r.scenes[r.scenes.length - 1] as Mesh).material as MeshBasicNodeMaterial).colorNode).filter(n => n.isTextureNode).map(n => n.value))
+    expect(read).toContain(s.contentPass.texture)
+    for (const t of r.drawn.slice(1, -1)) expect(read).not.toContain(t!.texture)
+  })
+  it('without clear + adaptive glass a redraw draws the content only', () => {
+    for (const g of [{ variant: 'clear', adaptive: false }, { variant: 'regular', adaptive: true }]) {
+      const s = clearGlass(ctx, g); s.tick(1 / 60)
+      const r = recording()
+      s.prepare(r, { width: 400, height: 300 }, 1)
+      expect(r.drawn).toEqual([s.contentPass.target])
+    }
+  })
+  it('after a redraw the pass runs on while its smoothing settles, then a quiet prepare runs nothing', () => {
+    const s = clearGlass(); s.tick(0.25)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(r.render).toHaveBeenCalledTimes(2)
+    for (let i = 0; i < 3; i++) { s.tick(0.25); expect(s.contentDirty || s.needsFrame).toBe(false); s.prepare(r, { width: 400, height: 300 }, 1) }
+    expect(r.render).toHaveBeenCalledTimes(5)                         // luma only: 0.25, 0.5 and 0.75 s after the redraw
+    expect(r.drawn.slice(2).every(t => t !== s.contentPass.target)).toBe(true)
+    s.tick(0.25); s.prepare(r, { width: 400, height: 300 }, 1)        // 1 s (5τ): settled
+    s.tick(0.25); s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(r.render).toHaveBeenCalledTimes(5)
+  })
+  it('a quality rebuild points the new element glass at the current luma result at once', () => {
+    const s = clearGlass(); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    const luma = r.drawn[1]!.texture
+    s.setQuality({ ...ctx.quality, backFaces: false })
+    expect(elementGlass(s)).toHaveLength(1)
+    expect(sampledBy(elementGlass(s))).toContain(luma)
+  })
+  it('a glass background slab never samples the luma; the element glass on it does', () => {
+    const s = clearGlass(ctx, { variant: 'clear', adaptive: true }, 'glass'); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    const luma = r.drawn[1]!.texture
+    expect(sampledBy(meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab))).not.toContain(luma)
+    expect(sampledBy(elementGlass(s))).toContain(luma)
+  })
+  it('dispose frees the luma pass', () => {
+    const s = clearGlass(); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1); s.tick(1 / 60); s.prepare(r, { width: 400, height: 300 }, 1)
+    const targets = [...new Set(r.drawn)].filter(t => t !== s.contentPass.target) as RenderTarget[]
+    expect(targets).toHaveLength(2)                                   // both ping-pong targets
     const freed = new Set<unknown>()
     for (const t of targets) t.addEventListener('dispose', () => freed.add(t))
     s.dispose()

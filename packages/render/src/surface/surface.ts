@@ -19,6 +19,7 @@ import { ImageSet } from '../image/images'
 import type { SurfaceUniforms } from '../flat'
 import { ContentPass, contentRTSize, type RendererLike } from './content'
 import { KawasePyramid } from '../blur/kawase'
+import { SurfaceLuma } from '../luma'
 import { liftFor, partition, type Partition } from './partition'
 import { toColor } from '../color'
 
@@ -66,7 +67,7 @@ export function createContentMaterial(content: Texture): MeshStandardNodeMateria
  * content RT, rims, then the images and glyphs riding on glass. The content RT's scene (`CONTENT_ORDER`), drawn
  * orthographically with the same Surface-local instance matrices: panels, pools, images, glyphs (one mesh per page).
  * With `quality.blur === 'kawase'` the content RT also feeds a `KawasePyramid`, which the element glass samples by
- * roughness instead of the RT's mips.
+ * roughness instead of the RT's mips; with clear + adaptive glass, a luma pass (`SurfaceLuma`) for its darkening.
  *
  * Every draw lives under `layer`, a `Group` whose `renderOrder` is `drawOrder`: three sorts by the nearest group's order
  * first, so Surfaces draw one after another (the root sets `drawOrder`, nearer = higher) instead of layer by layer
@@ -122,6 +123,10 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private depth: DepthCapture | null = null
   /** The content RT's blur pyramid on the 'kawase' tier (null otherwise), redrawn with it. */
   private pyramid: KawasePyramid | null = null
+  /** Clear + adaptive glass's backdrop luma (spec §5.3), measured from the content RT after it in `prepare`. */
+  private readonly luma = new SurfaceLuma()
+  /** The last `tick`'s dt (s): the luma's smoothing step. */
+  private lastDt = 1 / 60
   private pointerPt: [number, number] | null = null
   private list: RenderList | null = null
   private parts: Partition | null = null
@@ -210,13 +215,15 @@ export class Surface extends Object3D<SurfaceEventMap> {
     }
     // the slab's captures, which predate this Surface's draws: the slab is its first draw
     const behind = slab && screen ? { screen, screenLevel: SLAB_FROST.roughness * 8, screenLift: SLAB_FROST.roughness * 0.08 + SLAB_FROST.lift, depthReject: q.depthReject, ...(depth ? { depth } : {}) } : {}
+    const element: GlassMaterial[] = []
     for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
       if (!on) continue
       const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture, pyramid: this.pyramid?.textures, ...behind })
       const mesh = new Mesh(this.glass.geometry, gm.material)
       mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = false
-      this.plane.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
+      this.plane.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm); element.push(gm)
     }
+    this.luma.attach(element)   // the slab's luma index is −1: only the element glass reads it
   }
 
   /** Makes (on 'kawase', in the content's texel type) or drops the blur pyramid; before `buildGlass`, which hands it to the glass. */
@@ -293,6 +300,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** Layout → animation → render list → batches (sets `contentDirty`). A throw fails the Surface instead of propagating. */
   tick(dt: number): void {
     if (this.error) return
+    this.lastDt = dt
     try {
       const root = this.root, ctx = this.ctx
       if (root.dirty.layout || root.dirty.tree) ctx.layout.compute(root, this.model.width, this.model.height, ctx.measure)
@@ -390,7 +398,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /**
    * Sizes the content RT (and the pyramid) for the Surface's projected size and redraws it when dirty (a resize makes it
-   * dirty), then the pyramid: the content RT is its only input, so a clean RT means a current pyramid.
+   * dirty), then the pyramid: the content RT is its only input, so a clean RT means a current pyramid. Then the luma
+   * (`SurfaceLuma.update`): on a redraw and while its smoothing settles after one, from the content RT's own mips.
    */
   prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number): void {
     if (this.error) return
@@ -398,11 +407,14 @@ export class Surface extends Object3D<SurfaceEventMap> {
       const size = contentRTSize(projectedPx, dpr, { scale: this.quality.contentScale * this.contentScale })
       if (this.contentPass.resize(size.width, size.height)) this.contentDirty = true
       this.pyramid?.resize(size.width, size.height)
-      if (!this.contentDirty) return
-      this.contentPass.setView(this.model)
-      this.contentPass.render(renderer, this.contentClear)
-      this.pyramid?.render(renderer, this.contentPass.texture)
-      this.contentDirty = false
+      const redrawn = this.contentDirty
+      if (redrawn) {
+        this.contentPass.setView(this.model)
+        this.contentPass.render(renderer, this.contentClear)
+        this.pyramid?.render(renderer, this.contentPass.texture)
+        this.contentDirty = false
+      }
+      this.luma.update(renderer, this.list?.glass ?? [], this.model, this.contentPass.texture, this.lastDt, redrawn)
     } catch (e) { this.fail(e) }
   }
 
@@ -424,7 +436,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   dispose(): void {
     this.ctx.anim.forget(this.root)
     this.ctx.layout.dispose(this.root)
-    this.contentPass.dispose(); this.pyramid?.dispose()
+    this.contentPass.dispose(); this.pyramid?.dispose(); this.luma.dispose()
     for (const b of [this.glass, this.panels, this.rims, this.pools, this.backgroundGlass]) b?.dispose()
     this.foregroundText.dispose(); this.contentText.dispose(); this.foregroundImages.dispose(); this.contentImages.dispose()
     for (const gm of this.glassMaterials) gm.dispose()
