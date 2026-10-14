@@ -841,6 +841,13 @@ describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
       expect(r.render).toHaveBeenCalledTimes(1)                       // the content once: no luma pass, no pyramid
     }
   })
+  it('fill: a theme without the fill token fills white instead of failing the Surface', () => {
+    const { fill: _, ...light } = theme.colors.light
+    const bare = { ...theme, colors: { ...theme.colors, light } }
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx, theme: bare, quality: QUALITY.minimal })
+    const pinned = { vGlassMisc: [1, -1, -1, 1], vGlassTint: [1, 1, 1, 0], vGlassOptics: [1.5, 0, 0, 0], vGlassGlow2: [-1, 0.04, 0, 0], vGlassGeom: [0.1, 0.1, 0.5, 0.5] }
+    expect(evalNode((elementGlass(s)[0]!.material as MeshPhysicalNodeMaterial).backdropNode, pinned)).toEqual([1, 1, 1])
+  })
   it('low (straight): the element glass sees the content RT and the slab capture unrefracted, with no depth copy even when asked', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
     s.setQuality({ ...QUALITY.low, depthReject: true })

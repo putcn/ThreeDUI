@@ -135,7 +135,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The quality this Surface's draws were built for: `ctx.quality` at construction, then the last `setQuality`. */
   private quality: QualitySettings
   private readonly contentClear: { color: Color; alpha: number } = { color: new Color(0, 0, 0), alpha: 0 }
-  /** The `'fill'` glass mode's colour: the theme's `fill` (panel) token, linear. */
+  /** The `'fill'` glass mode's colour: the theme's `fill` (panel) token, linear; white without one. */
   private readonly glassFill: Color
   private readonly glassMaterials: GlassMaterial[] = []
   /** The meshes `buildGlass` made (slab and element glass), replaced on a quality change. */
@@ -174,7 +174,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.focus = new FocusManager(this.model.root, this.events)
     this.su = { size: uniform(new Vector2()), ptPerUnit: uniform(this.model.ptPerUnit) }
     this.quality = ctx.quality
-    this.glassFill = toColor(resolveColor('fill', ctx.theme, ctx.scheme))
+    // a theme without the `fill` token (the default theme has it) fills its glass white
+    this.glassFill = Object.hasOwn(ctx.theme.colors[ctx.scheme], 'fill') ? toColor(resolveColor('fill', ctx.theme, ctx.scheme)) : new Color(1, 1, 1)
     this.contentPass = new ContentPass({ type: this.quality.contentType })
     this.seenEpoch = ctx.text.atlas.epoch
 
