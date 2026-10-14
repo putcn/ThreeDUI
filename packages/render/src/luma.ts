@@ -1,6 +1,6 @@
 import { DataTexture, FloatType, HalfFloatType, LinearFilter, LinearSRGBColorSpace, NearestFilter, NoBlending, RenderTarget, RGBAFormat, Texture, UnsignedByteType, Vector2, Vector3, type Camera, type Object3D } from 'three'
 import { MeshBasicNodeMaterial, QuadMesh, type Node, type Renderer, type TextureNode, type UniformNode } from 'three/webgpu'
-import { dot, float, log2, max, mix, texture, uniform, uv, vec2, vec3, vec4 } from 'three/tsl'
+import { dot, float, log2, max, min, mix, texture, uniform, uv, vec2, vec3, vec4 } from 'three/tsl'
 import { GlassUIError, type GlassInstance } from '@glassui/core'
 import { SLAB_BEHIND } from './glass/frost'
 import type { GlassMaterial, ScreenCapture } from './glass/material'
@@ -19,18 +19,23 @@ export const LUMA_SETTLE = 5 * LUMA_TAU
 /** A glass element's footprint in content-RT uv (v = 0 at the top row), or in screen uv (v = 0 at the top). */
 export interface LumaRect { u: number; v: number; w: number; h: number }
 
-/** The coarse level a 3 × 3 tap grid over `rect` reads in a `size` texture: about 2 texels across (≥ 0). */
+/**
+ * The level a 3 × 3 tap grid over `rect` reads in a `size` texture, from the rect's SHORT side `s` (texels): a texel of
+ * `s/6`, so each tap's trilinear footprint (about ±1 texel) spans its own third of the short side and stays inside the
+ * rect. (A texel of `s/3` reaches half a third past the edge from the outer taps; one sized by the long side, far past
+ * it: an elongated rect's taps would average what surrounds it.) The long side is under-sampled instead.
+ */
 function gridLevel(rect: Node<'vec4'>, size: UniformNode<'vec2', Vector2>): Node<'float'> {
-  // the floor of 1 keeps log2 off 0 (an unused texel's empty rect) and changes no level ≥ 0
-  return max(log2(max(rect.z.mul(size.x), rect.w.mul(size.y), 1)).sub(1), 0)
+  // log2(max(x, 1)) = max(log2 x, 0); it also keeps log2 off 0 (an unused texel's empty rect)
+  return log2(max(min(rect.z.mul(size.x), rect.w.mul(size.y)).div(6), 1))
 }
 
 /**
  * Spec §5.3 adaptive darkening's input: one texel per glass element holding the time-smoothed mean Rec. 709 luminance
  * of what the glass shows behind it. Texel `i` of a `maxCount × 1` half-float target averages 9 taps (a 3 × 3 grid of
- * cell centres) over content rect `i` at the content's mip level `log2(max(w·W, h·H)) − 1` (≥ 0; the rect is about 2
- * texels across there), then blends it with the previous result by `1 − e^(−dt/τ)`. Two targets ping-pong (no
- * compute); the first render after a `setRects` that changed the data writes through.
+ * cell centres) over content rect `i` at the content's mip level `max(log2(min(w·W, h·H) / 6), 0)` (`gridLevel`),
+ * then blends it with the previous result by `1 − e^(−dt/τ)`. Two targets ping-pong (no compute); the first render
+ * after a `setRects` that changed the data writes through.
  *
  * A glass Surface's element glass shows what is behind its content plane where the content is transparent: the
  * premultiplied content plus `(1 − a)` × the slab capture, frosted as the slab frosts it (`SLAB_BEHIND`). Given that

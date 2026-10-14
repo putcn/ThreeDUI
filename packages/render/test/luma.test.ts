@@ -83,8 +83,8 @@ describe('LumaPass', () => {
 })
 
 interface Image { w: number; h: number; d: Float64Array }   // RGBA texels, row 0 first
-/** RGB (opaque) or premultiplied RGBA at (u, v). */
-type Colour = (u: number, v: number) => readonly number[]
+/** RGB (opaque) or premultiplied RGBA at (u, v), read at mip `level`. */
+type Colour = (u: number, v: number, level: number) => readonly number[]
 const REC709 = [0.2126, 0.7152, 0.0722] as const
 const luma709 = (c: readonly number[]) => c[0]! * REC709[0] + c[1]! * REC709[1] + c[2]! * REC709[2]
 interface GraphNode { value?: unknown; getChildren(): Iterable<GraphNode> }
@@ -96,8 +96,8 @@ function nodesOf(root: unknown): GraphNode[] {
 }
 /**
  * A CPU stand-in for the GPU: runs the pass's kernel per target texel with tsl-eval. The rect texture and the targets
- * read nearest (as their samplers do); the source is `colour.fn(u, v)`, a given `screen` texture `screen.fn(u, v)`, and
- * the pass's own screen placeholder black. Every source and screen tap is recorded with its level.
+ * read nearest (as their samplers do); the source is `colour.fn(u, v, level)`, a given `screen` texture
+ * `screen.fn(u, v, level)`, and the pass's own screen placeholder black. Every source and screen tap is recorded with its level.
  */
 function cpuRenderer(rects: DataTexture, source: Texture, colour: { fn: Colour }, screen?: { texture: Texture; fn: Colour }) {
   let target: RenderTarget | null = null
@@ -118,8 +118,8 @@ function cpuRenderer(rects: DataTexture, source: Texture, colour: { fn: Colour }
       const m = (scene as Mesh).material as MeshBasicNodeMaterial, rt = target!, out: Image = { w: rt.width, h: 1, d: new Float64Array(rt.width * 4) }
       const sample = (tex: unknown, uv: readonly number[], level?: readonly number[]) => {
         if (tex === rects) return nearest({ w: rects.image.width, h: rects.image.height, d: Float64Array.from(rects.image.data as Float32Array) }, uv[0]!, uv[1]!)
-        if (tex === source) return tap('source', uv, level, colour.fn(uv[0]!, uv[1]!))
-        if (screen && tex === screen.texture) return tap('screen', uv, level, screen.fn(uv[0]!, uv[1]!))
+        if (tex === source) return tap('source', uv, level, colour.fn(uv[0]!, uv[1]!, level![0]!))
+        if (screen && tex === screen.texture) return tap('screen', uv, level, screen.fn(uv[0]!, uv[1]!, level![0]!))
         if ((tex as Texture).isRenderTargetTexture) return nearest(images.get(tex as Texture) ?? { w: 1, h: 1, d: new Float64Array(4) }, uv[0]!, uv[1]!)   // not drawn yet: zeros
         return tap('screen', uv, level, [0, 0, 0, 1])                    // the placeholder: no capture
       }
@@ -128,29 +128,56 @@ function cpuRenderer(rects: DataTexture, source: Texture, colour: { fn: Colour }
     },
   }
 }
-/** The 3 × 3 tap grid over `r` (cell centres) and the coarse level a `W × H` texture is read at there (floored at `floor`). */
+/**
+ * The 3 × 3 tap grid over `r` (cell centres) and the level a `W × H` texture is read at there: a texel of a sixth of the
+ * short side, `max(log2(min(w·W, h·H) / 6), 0)` (floored at `floor`).
+ */
 function grid(r: LumaRect, W: number, H: number, floor = 0) {
   const uvs: number[][] = []
   for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) uvs.push([r.u + r.w * (i + 0.5) / 3, r.v + r.h * (j + 0.5) / 3])
-  return { uvs, level: Math.max(Math.log2(Math.max(r.w * W, r.h * H, 1)) - 1, 0, floor) }
+  return { uvs, level: Math.max(Math.log2(Math.min(r.w * W, r.h * H) / 6), 0, floor) }
+}
+interface Level { w: number; h: number; d: Float32Array }
+/** A coverage image (1 inside `[x0, x0 + w) × [y0, y0 + h)` px, row 0 at the top) and its 2 × 2 box-filtered mip chain, as a GPU builds it. */
+function coverageMips(W: number, H: number, x0: number, y0: number, w: number, h: number): Level[] {
+  const base = new Float32Array(W * H)
+  for (let y = y0; y < y0 + h; y++) base.fill(1, y * W + x0, y * W + x0 + w)
+  const levels: Level[] = [{ w: W, h: H, d: base }]
+  for (let p = levels[0]!; p.w > 1 || p.h > 1; p = levels[levels.length - 1]!) {
+    const w2 = Math.max(1, p.w >> 1), h2 = Math.max(1, p.h >> 1), d = new Float32Array(w2 * h2)
+    const at = (x: number, y: number) => p.d[Math.min(p.h - 1, y) * p.w + Math.min(p.w - 1, x)]!
+    for (let y = 0; y < h2; y++) for (let x = 0; x < w2; x++) d[y * w2 + x] = (at(2 * x, 2 * y) + at(2 * x + 1, 2 * y) + at(2 * x, 2 * y + 1) + at(2 * x + 1, 2 * y + 1)) / 4
+    levels.push({ w: w2, h: h2, d })
+  }
+  return levels
+}
+/** A trilinear (linear-mipmap-linear, clamp-to-edge) read of `levels` at (u, v), level `lod`: what the GPU's sampler returns. */
+function trilinear(levels: Level[], u: number, v: number, lod: number): number {
+  const bilinear = (l: Level) => {
+    const x = u * l.w - 0.5, y = v * l.h - 0.5, x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0
+    const at = (i: number, j: number) => l.d[Math.min(l.h - 1, Math.max(0, j)) * l.w + Math.min(l.w - 1, Math.max(0, i))]!
+    return (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy
+  }
+  const l0 = Math.min(levels.length - 1, Math.floor(lod)), l1 = Math.min(levels.length - 1, l0 + 1), f = lod - Math.floor(lod)
+  return bilinear(levels[l0]!) * (1 - f) + bilinear(levels[l1]!) * f
 }
 /** What the kernel computes for content rect `r` over an opaque `fn`: its grid and level, and the mean Rec. 709 luma. */
 function expected(r: LumaRect, W: number, H: number, fn: Colour) {
   const g = grid(r, W, H)
-  return { ...g, luma: g.uvs.reduce((s, [u, v]) => s + luma709(fn(u!, v!)), 0) / 9 }
+  return { ...g, luma: g.uvs.reduce((s, [u, v]) => s + luma709(fn(u!, v!, g.level)), 0) / 9 }
 }
 
 describe('LumaPass kernel (run on the CPU through tsl-eval)', () => {
   const rects: LumaRect[] = [
-    { u: 0.1, v: 0.2, w: 0.25, h: 0.5 },          // 128 × 128 source texels: level log2(128) − 1 = 6
-    { u: 0.5, v: 0.5, w: 0.01, h: 0.01 },         // 5.12 × 2.56: level log2(5.12) − 1
-    { u: 0.9, v: 0.05, w: 0.001, h: 0.002 },      // under 2 texels: level 0
+    { u: 0.1, v: 0.2, w: 0.25, h: 0.5 },          // 128 × 128 source texels: level log2(128 / 6)
+    { u: 0.5, v: 0.5, w: 0.2, h: 0.05 },          // 102.4 × 12.8, 8:1: by the short side, log2(12.8 / 6) (not the long side's 5.7)
+    { u: 0.9, v: 0.05, w: 0.001, h: 0.002 },      // under 6 texels: level 0
   ].map(r => ({ u: Math.fround(r.u), v: Math.fround(r.v), w: Math.fround(r.w), h: Math.fround(r.h) }))   // as the float texture stores them
   const W = 512, H = 256
   const source = new RenderTarget(W, H).texture                         // a content RT's texture: its image carries the size
   const curved: Colour = (u, v) => [u * u, v * v, u * v]                // not linear: a single centre tap would not match
 
-  it('averages a 3 × 3 grid over each element\'s rect at level log2(max(w·W, h·H)) − 1, in Rec. 709 luminance', () => {
+  it('averages a 3 × 3 grid over each element\'s rect at level log2(min(w·W, h·H) / 6), in Rec. 709 luminance', () => {
     const p = new LumaPass(4); p.setRects(rects)
     const colour = { fn: curved }, r = cpuRenderer(p.rectTexture, source, colour)
     p.render(r, source, 1 / 60)
@@ -162,10 +189,24 @@ describe('LumaPass kernel (run on the CPU through tsl-eval)', () => {
       taps.forEach((t, k) => { expect(t.uv[0]).toBeCloseTo(e.uvs[k]![0]!, 6); expect(t.uv[1]).toBeCloseTo(e.uvs[k]![1]!, 6); expect(t.level).toBeCloseTo(e.level, 6) })
       Array.from(out.d.slice(i * 4, i * 4 + 4)).forEach((x, c) => expect(x).toBeCloseTo(c < 3 ? e.luma : 1, 12))   // the first render writes through
     })
-    expect(expected(rects[0]!, W, H, curved).level).toBeCloseTo(6, 6)
+    expect(expected(rects[0]!, W, H, curved).level).toBeCloseTo(Math.log2(128 / 6), 6)
+    expect(expected(rects[1]!, W, H, curved).level).toBeCloseTo(Math.log2(12.8 / 6), 5)
     expect(expected(rects[2]!, W, H, curved).level).toBe(0)
     const unused = r.taps.filter(t => t.texel === 3 && t.of === 'source')   // an unused texel (rect 0 × 0): level 0, never log2(0)
     expect(unused).toHaveLength(9); expect(unused.every(t => t.level === 0)).toBe(true)
+  })
+  it('a 9:1 pill over opaque white, transparent around it, measures white: every tap\'s footprint stays inside the rect', () => {
+    // 756 × 84 px in a 1024 × 512 RT (the signup field's proportions), at offsets with different mip-grid alignments,
+    // read through a real mip chain and trilinear filter: the outer taps sit a sixth of the short side from the edge
+    const RW = 1024, RH = 512, pill = new RenderTarget(RW, RH).texture
+    for (const [x0, y0] of [[101, 77], [13, 300], [200, 211], [64, 64]] as const) {
+      const levels = coverageMips(RW, RH, x0, y0, 756, 84)
+      const p = new LumaPass(1); p.setRects([{ u: x0 / RW, v: y0 / RH, w: 756 / RW, h: 84 / RH }])
+      const r = cpuRenderer(p.rectTexture, pill, { fn: (u, v, lod) => { const a = trilinear(levels, u, v, lod); return [a, a, a, a] } })
+      p.render(r, pill, 1 / 60)
+      expect(r.taps.filter(t => t.of === 'source').every(t => Math.abs(t.level - Math.log2(84 / 6)) < 1e-4)).toBe(true)
+      expect(r.images.get(p.texture)!.d[0]).toBeGreaterThan(0.95)
+    }
   })
   it('weights the channels by Rec. 709', () => {
     for (const [c, w] of [[[1, 0, 0], 0.2126], [[0, 1, 0], 0.7152], [[0, 0, 1], 0.0722]] as const) {
@@ -237,13 +278,21 @@ describe('LumaPass kernel on a glass Surface: content over the frosted screen (C
     expect(run(0, null).luma).toBeCloseTo(0, 12)
     expect(run(0.5, null).luma).toBeCloseTo(luma709(C) * 0.5, 12)
   })
+  it('a 9:1 screen bbox over a white screen region, dark around it, under transparent content measures the frosted white', () => {
+    const SW = 1024, SH = 512, levels = coverageMips(SW, SH, 101, 77, 756, 84), copy = new FramebufferTexture(SW, SH)
+    const p = new LumaPass(1); p.setRects([whole]); p.setScreenRects([{ u: 101 / SW, v: 77 / SH, w: 756 / SW, h: 84 / SH }])
+    const r = cpuRenderer(p.rectTexture, source, { fn: () => [0, 0, 0, 0] }, { texture: copy, fn: (u, v, lod) => { const a = trilinear(levels, u, v, lod); return [a, a, a] } })
+    p.render(r, source, 1 / 60, copy)
+    expect(r.taps.filter(t => t.of === 'screen').every(t => Math.abs(t.level - Math.log2(84 / 6)) < 1e-4)).toBe(true)   // above the frost floor
+    expect(r.images.get(p.texture)!.d[0]).toBeGreaterThan(0.95)
+  })
   it('reads the capture over a 3 × 3 grid of the screen rect, at its grid level but never finer than the slab\'s frost', () => {
     const screenTaps = run(0, capture).taps.filter(t => t.of === 'screen')
     const g = grid(screenAt, 1600, 800, SLAB_BEHIND.level)
-    expect(g.level).toBeCloseTo(Math.log2(800) - 1, 12)
+    expect(g.level).toBeCloseTo(Math.log2(200 / 6), 12)                    // the short side, in capture px
     expect(screenTaps).toHaveLength(9)
     screenTaps.forEach((t, k) => { expect(t.uv[0]).toBeCloseTo(g.uvs[k]![0]!, 6); expect(t.uv[1]).toBeCloseTo(g.uvs[k]![1]!, 6); expect(t.level).toBeCloseTo(g.level, 6) })
-    const p = new LumaPass(1); p.setRects([whole]); p.setScreenRects([{ u: 0.5, v: 0.5, w: 0.001, h: 0.001 }])   // 1.6 × 0.8 texels
+    const p = new LumaPass(1); p.setRects([whole]); p.setScreenRects([{ u: 0.5, v: 0.5, w: 0.01, h: 0.02 }])   // 16 × 16 texels: under the frost
     const r = cpuRenderer(p.rectTexture, source, { fn: () => [0, 0, 0, 0] }, { texture: capture, fn: () => S })
     p.render(r, source, 1 / 60, capture)
     expect(r.taps.filter(t => t.of === 'screen').every(t => Math.abs(t.level - SLAB_BEHIND.level) < 1e-9)).toBe(true)
