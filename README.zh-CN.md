@@ -30,8 +30,8 @@
 
 | 计划 | 范围 | 状态 |
 |---|---|---|
-| 1 — 基础 | monorepo、`@glassui/core`（节点树、样式/主题/tw、Yoga 布局、事件、焦点、滚动、弹簧、渲染列表）、`@glassui/text`（支持中文换行的系统字体引擎） | 进行中 |
-| 2 — 渲染 | `@glassui/render`：three.js WebGPU/TSL 玻璃、面板、文字、阴影、Surface、质量分级 | 计划中 |
+| 1 — 基础 | monorepo、`@glassui/core`（节点树、样式/主题/tw、Yoga 布局、事件、焦点、滚动、弹簧、渲染列表）、`@glassui/text`（支持中文换行的系统字体引擎） | 已完成 |
+| 2 — 渲染 | `@glassui/render`：three.js WebGPU/TSL 玻璃、面板、文字、阴影、Surface、质量分级 | 进行中（在分支上，视觉检查点 1–2 已通过） |
 | 3 — Vue 与组件 | Vue 自定义渲染器、第一批组件、IME 桥、manifest | 计划中 |
 
 ![注册表单正视图](docs/images/signup-front.jpg)
@@ -43,9 +43,12 @@
 ```bash
 pnpm install
 pnpm playground         # http://127.0.0.1:5176 ，基于 @glassui/core + @glassui/render 的注册表单和世界层场景
+pnpm test:visual        # playground 的 Playwright 视觉回归：无头 Chromium 里的 WebGL2（SwiftShader）与 WebGPU
 ```
 
 查询参数：`?scene=signup|world|both`（默认 `both`）、`?quality=high|medium|low|minimal`（默认自适应）、`?webgl` 强制 WebGL2 后端。拖动背景可环绕观察（表单固定在屏幕上，世界层面板随场景移动）。HUD 显示后端、帧率、每帧 draw call 总数（整帧：内容 pass、阴影贴图、宿主场景和 UI）、质量档位和 Surface 数。`pnpm playground:build` 把静态构建输出到 `examples/playground/dist`。
+
+`pnpm test:visual` 在两个后端上把 `signup` 和 `world` 场景（1280 × 900，`high` 档）与 `examples/visual/tests/visual.spec.ts-snapshots/` 里的基线比对。基线与机器绑定（系统字体栅格化、GPU 驱动）：换一台机器时，先装一次 Playwright 的 Chromium（`pnpm --filter visual exec playwright install chromium`），再用 `pnpm test:visual:update` 生成自己的基线，详见 `examples/visual/README.md`。
 
 原来的 spike 仍保留作对比：
 
@@ -62,7 +65,9 @@ docs/superpowers/spikes/  每个 spike 的发现与推理
 spikes/glass3d/           当前 Demo：真 3D 的 Liquid Glass 注册表单
 spikes/glass/             第一版（被否掉的）平面 SDF 方案，留作对比
 packages/                 @glassui/core、@glassui/text、@glassui/render……（由各计划逐步填入）
+packages/render/          @glassui/render：three.js WebGPU/TSL 渲染器，包括玻璃、面板、文字、阴影、Surface、质量分级
 examples/playground/      基于这些包搭的注册表单和世界层场景（`pnpm playground`）
+examples/visual/          playground 在两个后端上的 Playwright 视觉回归（`pnpm test:visual`）
 ```
 
 ## 玻璃是怎么做的（一段话）

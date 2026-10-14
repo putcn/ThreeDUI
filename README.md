@@ -30,8 +30,8 @@ Early, in the open. The rendering approach was validated in a series of spikes (
 
 | Plan | Scope | Status |
 |---|---|---|
-| 1 — Foundation | monorepo, `@glassui/core` (node tree, style/theme/tw, Yoga layout, events, focus, scroll, springs, render lists), `@glassui/text` (CJK-aware system-font engine) | in progress |
-| 2 — Render | `@glassui/render`: three.js WebGPU/TSL glass, panels, text, shadows, surfaces, quality tiers | planned |
+| 1 — Foundation | monorepo, `@glassui/core` (node tree, style/theme/tw, Yoga layout, events, focus, scroll, springs, render lists), `@glassui/text` (CJK-aware system-font engine) | done |
+| 2 — Render | `@glassui/render`: three.js WebGPU/TSL glass, panels, text, shadows, surfaces, quality tiers | in progress (on a branch; visual checkpoints 1–2 passed) |
 | 3 — Vue + components | Vue custom renderer, first component set, IME bridge, manifests | planned |
 
 ![Front view of the sign-up form](docs/images/signup-front.jpg)
@@ -43,9 +43,12 @@ Early, in the open. The rendering approach was validated in a series of spikes (
 ```bash
 pnpm install
 pnpm playground         # http://127.0.0.1:5176  — the sign-up form and a world-layer scene on @glassui/core + @glassui/render
+pnpm test:visual        # Playwright visual regression of the playground: WebGL2 (SwiftShader) and WebGPU in headless Chromium
 ```
 
 Query parameters: `?scene=signup|world|both` (default `both`), `?quality=high|medium|low|minimal` (default: adaptive), `?webgl` to force the WebGL2 backend. Drag the background to orbit (the form stays put; the world-layer panel moves with the scene). The HUD shows the backend, fps, draw calls per frame (the whole frame: content passes, shadow map, host scene and UI), quality tier and Surface count. `pnpm playground:build` writes a static build to `examples/playground/dist`.
+
+`pnpm test:visual` compares the `signup` and `world` scenes (1280 × 900, `high` tier) on both backends with the baselines in `examples/visual/tests/visual.spec.ts-snapshots/`. Baselines are machine-specific (system-font rasterisation, GPU driver): on another machine install Playwright's Chromium once (`pnpm --filter visual exec playwright install chromium`) and generate your own with `pnpm test:visual:update` — see `examples/visual/README.md`.
 
 The original spike is still there for comparison:
 
@@ -62,7 +65,9 @@ docs/superpowers/spikes/  what each spike found, with the reasoning
 spikes/glass3d/           the current demo: real-3D Liquid Glass sign-up form
 spikes/glass/             the first (rejected) flat-SDF approach, kept for comparison
 packages/                 @glassui/core, @glassui/text, @glassui/render, … (filled in by the plans)
+packages/render/          @glassui/render: the three.js WebGPU/TSL renderer — glass, panels, text, shadows, Surfaces, quality tiers
 examples/playground/      the sign-up form and a world-layer scene built on the packages (`pnpm playground`)
+examples/visual/          Playwright visual regression of the playground on both backends (`pnpm test:visual`)
 ```
 
 ## How the glass works, in one paragraph

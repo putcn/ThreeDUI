@@ -53,11 +53,15 @@ docs/                        superpowers 规范与计划；组件文档后续期
 每个 three 场景一个。持有 `renderer`、`camera`、`scene` 引用；`tick(delta)` 驱动布局、动画、渲染列表；创建 `@pmndrs/pointer-events` 的 forwarder，把 DOM 指针事件（鼠标/触摸/笔，以及 XR 射线）变为对节点的 `pointerdown/up/move/enter/leave/click/wheel`；维护焦点链与键盘事件；持有全局 `FontManager`、`QualityController`、`ImeBridge`（§7.3）。
 
 ```ts
-const root = createUIRoot({ renderer, scene, camera, theme, quality: 'auto' })
+const root = await createUIRoot({ renderer, scene, camera, theme, quality: 'auto' })
 root.screen   // ScreenLayer：面向相机的 Surface 容器，单位 CSS px，DPR 感知，位于相机近平面附近
 root.world    // Object3D：挂进 scene 的世界层容器
 root.tick(dt) // 在宿主 render loop 里调用，或 root.autoTick(true) 自管
 ```
+
+`createUIRoot` 默认以 **overlay 模式** 工作：UI 有自己的 `Scene`，在宿主场景之后用同一相机、共享深度缓冲渲染（世界层 Surface 仍被宿主几何遮挡、也遮挡宿主几何），灯光与环境贴图由 UI 场景独享，因此 §5.4 的"只在 Surface 内投影"自然成立；`mode: 'shared'` 把图层挂进宿主场景（宿主灯光生效，UI 阴影可能落到宿主的 receiveShadow 物体上；宿主场景没有 `environment` 时才设为棚拍环境图）。
+
+实现（Plan 2，`packages/render/src/root.ts`）：`createUIRoot` 是 async（先 `await renderer.init()`，失败时 reject `GlassUIError`）。选项：`renderer, scene, camera, theme?, scheme?`（默认 `'light'`）`, quality?: QualityTier | 'auto'`（默认 `'auto'`）`, text?: TextEngine`（默认 `SystemFontEngine`）`, createCanvas?, environment?: 'studio' | Texture | null`（默认 `'studio'`）`, mode?: 'overlay' | 'shared'`（默认 `'overlay'`）`, pointer?, keyboard?`（默认 true）`, reducedMotion?, reducedTransparency?`（默认取媒体查询）。`UIRoot` 成员：`screen, world, uiScene, lights, theme, scheme, text, quality`（`QualityController`）`, anim`（`AnimationRuntime`）`, surfaces, pointer`（`PointerBridge | null`）`, backend`（`'webgpu' | 'webgl2' | 'unknown'`）；`createSurface({ layer?: 'screen' | 'world', fill?, left?, top?, ...SurfaceOptions })`（屏幕层 `fill` 跟随视口，否则左上角在 CSS px `left/top`；世界层 `ptPerUnit` 默认 244）、`removeSurface(s)`、`tick(dt)`（秒；布局、动画、内容 pass、绘制顺序、阴影拟合，不画）、`render()`（overlay：先宿主场景再叠 UI 场景；shared：宿主场景）、`renderUI()`（overlay：宿主已自己画过时只叠 UI）、`frame(nowMs?)`（钳制 dt 的 `tick` + `render`，`'auto'` 时顺带采样画质）、`autoTick(on)`（经 `renderer.setAnimationLoop` 每帧调 `frame`）、`on('quality' | 'error', fn)`（返回取消函数）、`dispose()`。指针与键盘由自带的 `PointerBridge`（canvas DOM 事件 → 射线 → Surface pt）处理；`@pmndrs/pointer-events` forwarder 与 `ImeBridge` 后置（§12）。
 
 ### 3.2 `Surface extends THREE.Object3D`
 
@@ -139,9 +143,11 @@ interface Style {
 
 1. **内容面（Surface 内容层）**：所有非玻璃节点（box/text/image/scroll 的内容）画到 Surface 自己的 RT。
 2. **贴在内容面上的玻璃**：`glass` 节点与 `bg:'glass'` 的节点在同一 Surface 内，其 backdrop 就是该 Surface 的内容层 RT；折射射线穿过玻璃后与面板平面求交，交点换算成面板 UV 采样——任意 3D 变换下精确、无需屏幕捕获、可缓存。这是默认路径。
+
+   实现（Plan 2）：玻璃（类 2 与类 3 的底板）只在 `high` 档画背面→正面两遍（`QualityProfile.backFaces`），其余档只画正面一遍；底边亮带与轮廓由装饰层（`rim`）提供。`background: 'glass'` 的 Surface 上，元素玻璃在内容层 RT 透明处复用底板那一次屏幕捕获补上"板后"的像素（按底板的磨砂等级与提亮；`high` 档带深度剔除）——底板是该 Surface 的第一笔绘制，捕获早于它，所以不多一次拷贝、也不采样自己的底板与内容，同一 Surface 内"玻璃不采样玻璃"仍然成立。`background: 'none'` 的 Surface 不做屏幕捕获，其元素玻璃在内容透明处折射为黑（已知限制，§12）。
 3. **悬浮玻璃**：`background:'glass'` 的 Surface 自身（浮在 3D 世界上的玻璃面板），折射射线投影到**屏幕空间 backdrop 捕获**。
 
-Apple 规则"玻璃不采样玻璃"按默认遵守：类 2 玻璃只看内容层。提供 `physicalStacking: true` 选项，允许有限次（质量档上限）子矩形重捕获，用于故意叠玻璃的效果。
+Apple 规则"玻璃不采样玻璃"按默认遵守：类 2 玻璃只看内容层。提供 `physicalStacking: true` 选项，允许有限次（质量档上限）子矩形重捕获，用于故意叠玻璃的效果。`physicalStacking` 后置（见 §12）。
 
 ### 5.2 玻璃几何：`GlassSlab`
 
@@ -150,7 +156,7 @@ Apple 规则"玻璃不采样玻璃"按默认遵守：类 2 玻璃只看内容层
 - **`fillet`（默认）**：竖直侧壁 + 顶面小半径圆角 + 平顶，底边也有更小的圆角。按钮默认 厚度 = 高度 × 0.2，顶圆角 = 高度 × 0.06，底圆角 = 高度 × 0.04（参考 80pt 高按钮：16 / 5 / 3 pt）。这是"直角的干练 + 圆润精致"的来源；更大的圆角或枕形剖面会显得像塑料糖。
 - **`lens`**（`squircle` / `circle` 凸起剖面）：只用于圆环、装饰性元素。
 
-网格参数化为 9-slice 形式：顶点携带 `anchor(±1,±1)`、`cornerOffset`、`profileT` 属性，实际位置在顶点着色器里由实例参数 `size / radius / thickness / fillet / filletBottom` 计算。因此**一个 Surface 内所有玻璃共用一份几何，用 instancing 一次绘制**；尺寸、圆角、厚度、按压缩放都是逐实例数据。玻璃元素按**背面→正面**两遍绘制（背面先画，正面采样含背面的画面），让底边亮带与内部反光出现。GlassContainer 的形状融合在几何层做（Phase 2 后半）。
+网格参数化为 9-slice 形式：顶点携带 `anchor(±1,±1)`、`cornerOffset`、`profileT` 属性，实际位置在顶点着色器里由实例参数 `size / radius / thickness / fillet / filletBottom` 计算。因此**一个 Surface 内所有玻璃共用一份几何，用 instancing 一次绘制**；尺寸、圆角、厚度、按压缩放都是逐实例数据。玻璃元素按**背面→正面**两遍绘制（背面先画，正面采样含背面的画面），让底边亮带与内部反光出现（Plan 2：仅 `high` 档，见 §5.1）。GlassContainer 的形状融合在几何层做（Phase 2 后半；Plan 2 未做，随组件进 Plan 3，§12）。
 
 ### 5.3 玻璃材质（TSL，基于 PBR 节点材质）
 
@@ -161,10 +167,11 @@ Apple 规则"玻璃不采样玻璃"按默认遵守：类 2 玻璃只看内容层
 3. **装饰层**（平面贴片，§5.5）：轮廓细亮线 + 底边亮带、元素下方的透射光晕。
 
 其它：
-- **光照与反射**：来自宿主场景的灯与 PMREM 环境贴图。无宿主灯时 `UIRoot` 提供默认 UI key light 和一张内置的**程序化棚拍环境图**（左上大柔光箱 + 底部细光带 + 一个小热点）；均匀的环境图（如 RoomEnvironment）出不来顶边那条亮线。
+- **光照与反射**：来自宿主场景的灯与 PMREM 环境贴图。无宿主灯时 `UIRoot` 提供默认 UI key light 和一张内置的**程序化棚拍环境图**（左上大柔光箱 + 底部细光带 + 一个小热点）；均匀的环境图（如 RoomEnvironment）出不来顶边那条亮线。（Plan 2：`UIRoot` 总是创建 UI key light + hemi，随相机移动；overlay 模式下宿主灯不照 UI，见 §3.1。）
 - **自适应亮度**：每个玻璃元素在金字塔最小层采样平均亮度，写入"每元素一个 texel"的 ping-pong 纹理并做时间平滑（τ≈0.2s）；前景文字材质读同一 texel 决定明/暗，无 CPU 回读。
+  实现（Plan 2）：`setLuma(texture, count)` 的 `count` 是 luma 纹理的宽度（pass 的 `maxCount`），texel `i` 对应玻璃批次第 `i` 个实例；只有 `variant: 'clear'` 且 `adaptive` 的实例带 luma 索引，luma ≥ 0.6 时其透射项 × 0.65。luma 取元素实际看到的背景：内容层（预乘）+ (1 − α)·磨砂后的屏幕（`background: 'glass'` 时取底板上一帧的屏幕捕获，按元素投影到屏幕的包围盒采样；其余 Surface 只取内容层）。每个元素 3×3 次采样，读内容层 RT 的 mip（不是金字塔），层级按元素在 RT 中的短边取 `max(log2(min(w, h)/6), 0)`，半精度目标纹理，τ ≈ 0.2 s 指数平滑。运行频率：`'glass'` Surface 上有 clear+adaptive 玻璃时每帧运行；其余情况在内容重绘后运行 1 s（帧时间）再停。前景文字读 luma 后置（§12）。
 - **按压内发光**：以指尖点为中心的发射项，随 `press` 弹簧变化。
-- 深度测试开、写入关；类 3 玻璃拒绝"捕获深度 < 玻璃深度"的样本。
+- 深度测试开、写入关；类 3 玻璃拒绝"捕获深度 < 玻璃深度"的样本（Plan 2：仅 `high` 档）。
 - 灯光预算：不做 tone mapping，hemi + key + env 总量控制在 ≈1，否则白玻璃过曝。
 
 参数（`GlassParams`，全部有默认值，`theme.glass` 可覆盖，节点 `style.glass` 可覆盖）：
@@ -193,10 +200,10 @@ interface GlassParams {
 ### 5.4 阴影与反射
 
 - `UIRoot` 的 UI key light 渲染一张 **VSM**；`renderer.shadowMap.transmitted = true` + `material.castShadowNode = vec4(透过色, alpha)` 得到**彩色透射阴影**（three 原生，spike 验证），彩色玻璃下方自然有同色阴影。
-- **默认只在 Surface 内部投影**：元素投到自己的 Surface 上；Surface 本身不投到世界几何上（`castToWorld: false`），世界几何也不接收 UI 阴影——spike 里投到背景墙的影子透过半透明面板看起来是脏的。需要时可逐 Surface 打开。
+- **默认只在 Surface 内部投影**：元素投到自己的 Surface 上；Surface 本身不投到世界几何上（`castToWorld: false`），世界几何也不接收 UI 阴影——spike 里投到背景墙的影子透过半透明面板看起来是脏的。需要时可逐 Surface 打开（Plan 2：`castToWorld` 只有字段、尚未生效，§12）。
 - 注意 VSM 下 `receiveShadow` 的物体也会被画进阴影贴图，布景要同时关掉 cast 与 receive。
-- 阴影贴图覆盖范围按可见 UI 包围盒自动拟合；低/minimal 档回落到解析高斯阴影贴片。
-- **面板反射**：Surface 的内容层 RT 直接作为其上玻璃元素的"倒影源"（按磨砂程度取 mip 模糊，按 alpha 加权混入 ≈20%），不再用 `reflector` 重画场景。
+- 阴影贴图覆盖范围按可见 UI 包围盒自动拟合；低/minimal 档回落到解析高斯阴影贴片（Plan 2：贴片后置，目前用 512 VSM，见 §5.6）。
+- **面板反射**：玻璃元素把反射方向镜像到面板平面下方、与面板求交后采样内容层 RT（按磨砂取模糊层级，按 Fresnel × 0.2 混入）；不再用 `reflector` 重画场景。Surface 自身的玻璃底板不再倒映控件（spike 的 reflector 路径未移植进 `@glassui/render`）。实现细节：取内容层 RT 的 mip（层级 = 磨砂层级 + 2，`high` 档也不用金字塔），以预乘 over 混入，内容透明处不反射。
 
 ### 5.5 面板、文字、图片
 
@@ -209,11 +216,19 @@ interface GlassParams {
 
 1. `core.tick` → 对每个脏 Surface 生成渲染列表与实例缓冲（面板实例、字形实例、玻璃实例、图片）。
 2. **内容层重绘**：对脏的 Surface，用正交相机把其非玻璃列表画到该 Surface RT；若有类 2 玻璃，再为该 RT 建 2–4 层模糊金字塔（仅覆盖玻璃矩形并集 + 位移余量）。
+
+   实现（Plan 2）：`high` 档的模糊是 4 层 dual-Kawase 金字塔（RGBA、texel 类型随内容 RT），覆盖整张内容 RT（未裁剪到玻璃并集，也不论有无玻璃），只在内容 RT 重绘时重建（每次重绘多 9 个 pass：5 次下采样 + 4 次上采样，层 i = 上采样(下采样 i+1)，RMS 半径约 5/10/20/41 texel；玻璃按 roughness 在清晰层与各层间插值）；其余档位用内容 RT 的 mip 链（`lod = roughness × 8`）。
 3. **UI 阴影 pass**：UI key light 视角渲染所有 UI 几何到 VSM（仅在 UI 变换/布局脏时重绘）。
+
+   实现（Plan 2）：阴影相机按可见 Surface 的包围盒（内容面到最高玻璃顶面）拟合（`fitShadowCamera`，边距为并集最长边的 5 %）；`shadow.autoUpdate = false`，只在相机移动（灯随相机）、Surface 位姿变化或增删、内容需重绘或动画进行中才重新拟合并 `needsUpdate`，换档时也重绘一次。屏幕层与世界层 Surface 共用这一次拟合与一张 VSM：两者同时存在时（如 playground `?scene=both`）屏幕层 Surface 在世界单位里很小，分到的阴影纹素不足（已知限制，§12）。
 4. **世界渲染**：宿主场景 + 所有 Surface 内容 quad（深度写入）+ 填充面板。
 5. **屏幕 backdrop 捕获**：仅当存在类 3 玻璃；TSL `viewportSharedTexture`/`viewportMipTexture` 取帧缓冲并建金字塔（scissor 到并集矩形）。
+
+   实现（Plan 2）：每个 `background: 'glass'` 的 Surface 每帧一次整帧缓冲拷贝（`ScreenCapture`，带 mip，未 scissor、无金字塔），在其底板处取得；同一 Surface 的元素玻璃与 luma 复用它，`high` 档的深度剔除另有一次共享的深度拷贝。
 6. **玻璃与前景**：按从远到近画玻璃实例批次，再画其上的文字/图标。
 7. MSAA 4× 开启（两个后端均支持）；质量档由 `QualityController` 用 GPU 计时或帧时间迟滞切换，并响应 `prefers-reduced-transparency` / `prefers-reduced-motion`。
+
+   实现（Plan 2）：MSAA 由宿主 renderer 的 `antialias` 决定（playground 开启），内容层 RT 不开 MSAA（面板与文字靠 SDF / `fwidth` 抗锯齿）。显式 `quality` 档位不采样、不自动升降（仍可 `root.quality.set()`），只有 `'auto'` 自适应：初始档按设备（触屏 `medium`，否则 `high`，也是升档上限）；样本以刷新率为基准（`FrameSampler`：最近 60 个帧间隔的最小值为刷新周期 P，钳 4–40 ms；间隔 > 1.5 P 算掉帧、样本取该间隔，否则取 tick+render 的 CPU 时间；> 250 ms 视为暂停、不计）；30 帧一窗，连续 2 窗均值 > 20 ms 降一档，连续 5 窗 < 10 ms 升一档；被自动降过 d 次的档，升回需 5·2^max(0, d−1) 个快窗，降过 3 次后不再自动升回。GPU 计时后置。`prefers-reduced-transparency` 钉在 `minimal`（不采样），`root.quality.setReducedTransparency(false)` 解除后回到钉住期间 `set` 的档，否则回到上限档；两个媒体查询只在 `createUIRoot` 时读一次（之后经 `root.quality.setReducedTransparency()` / `root.anim.reducedMotion` 改）。
 
 | 档位 | backdrop | 模糊 | 玻璃 | 阴影 |
 |---|---|---|---|---|
@@ -221,6 +236,8 @@ interface GlassParams {
 | medium（移动默认） | 半分辨率 RGBA8 | mip 3 层 | 色散仅 ≥0.25px 时 | VSM 1024 |
 | low | 四分之一分辨率 | mip 2 层 | 无折射，tint + Fresnel | 解析阴影贴片 |
 | minimal / 降低透明度 | 无 | 无 | 近不透明磨砂填充 + 边框 | 解析阴影贴片 |
+
+实现（Plan 2，`QUALITY`）：各档实际差别是内容层 RT 的 texel 类型与分辨率比例（high 半浮点 × 1；medium RGBA8 × 0.5；low / minimal RGBA8 × 0.25）、背面遍与深度剔除（仅 high）、模糊（high 金字塔，其余 mip）与 VSM 尺寸（2048 / 1024 / 512 / 512）；屏幕捕获各档都是整帧分辨率。low/minimal 的解析阴影贴片后置，目前用 512 VSM。low 的"无折射"、minimal 的"近不透明磨砂填充 + 边框"与 medium 的"色散仅 ≥0.25px"也后置：`QualityProfile.refraction` / `dispersion` 已定义但材质尚未读取，各档都折射、都色散（§12）。
 
 ### 5.7 WebGL2 回落
 
@@ -321,7 +338,7 @@ app.mount(root.screen.createSurface({ fill: true }))  // 或 mount(someSurface)
 
 - **core/text（Node，无 GPU）**：Vitest。样式解析与 tw 解析（含错误消息快照）、Yoga 布局结果、事件冒泡与命中测试（圆角、裁剪、elevation）、焦点顺序、滚动物理、spring 数值、文字测量与换行（中英混排）、manifest 生成。
 - **vue**：Vitest + 自定义渲染器挂到内存 Surface：`v-if/v-for/slots/Teleport/Transition` 的节点树快照；组件 props 校验。
-- **render（浏览器）**：Playwright 跑 `examples/visual`，WebGPU 与 `forceWebGL` 各一遍，像素比对（阈值）；覆盖每个组件各状态、屏幕层/世界层、玻璃四档、中文文本、IME 组合态截图。
+- **render（浏览器）**：Playwright 跑 `examples/visual`，WebGPU 与 `forceWebGL` 各一遍，像素比对（阈值）；覆盖每个组件各状态、屏幕层/世界层、玻璃四档、中文文本、IME 组合态截图。Plan 2 已有的部分：playground 的 `signup` 与 `world` 两个场景，1280×900、DPR 1、`high` 档，WebGPU 与 WebGL2（SwiftShader）各一遍，像素差预算 2 %（`maxDiffPixelRatio: 0.02`），另有控制台错误闸门（页面异常或 `console.error` 直接判失败）；基线在参考机上生成、与机器绑定（`examples/visual/README.md`）。
 - **性能基线**：playground 内置 100 按钮 + 20 玻璃容器场景，记录帧时间与 draw call 数，CI 上只做回归阈值（Chrome headless，WebGL 路径）。
 - **IME**：Playwright 的 `keyboard.imeSetComposition` 做组合输入的自动化；真机手工检查清单（iOS Safari、Android Chrome、macOS 中文输入法）。
 
@@ -329,12 +346,14 @@ app.mount(root.screen.createSurface({ fill: true }))  // 或 mount(someSurface)
 
 - **Phase 0 · 风险 spike**：①② 已完成（`spikes/glass3d/`，结论见 `docs/superpowers/spikes/2026-10-07-glass-tsl-spike.md`，已回填 §5）；③ `@pmndrs/glyph` 0.1 中文表现 vs Canvas2D atlas 待做，作为实现计划的第一个任务。
 - **Phase 1 · core + text**：Node/Style/tw/theme、Yoga、事件/焦点/滚动、spring、SystemFontEngine、渲染列表；全部可在 Node 测试。
-- **Phase 2 · render**：Surface RT、面板/文字/阴影材质、玻璃材质与金字塔、屏幕层/世界层、质量分级；playground 可视。
+- **Phase 2 · render**：Surface RT、面板/文字/阴影材质、玻璃材质与金字塔、屏幕层/世界层、质量分级；playground 可视（Plan 2：`docs/superpowers/plans/2026-10-08-glassui-plan-2-render.md`）。
 - **Phase 3 · vue + 组件**：渲染器、11 个组件、Dialog/Portal、IME 桥、manifest、视觉回归、性能基线。
 
 ## 12. 待后续期的问题（已知、不阻塞）
 
 无障碍语义树（Flutter/Babylon 式并行 ARIA DOM）；组件全集（Select、Tabs、Table、Menu、Slider、Segmented、Toast、Tooltip、DatePicker…）；Vite 编译期 `tw`；文档站；React 适配；Taffy（CSS Grid）；阴影投到任意世界几何；WebXR 手势与系统键盘。
+
+**Plan 2 后置**（细节见 Plan 2 的 Deferred 一节）：`physicalStacking`（玻璃看见玻璃，需按层把玻璃 pass 再捕获进第二张内容 RT）；`GlassContainer` 形状融合（§5.2，随组件进 Plan 3）；low/minimal 的解析高斯阴影贴片（目前 512 VSM）；各档的 `refraction` / `dispersion` 开关（low/minimal 的无折射与近不透明填充、medium 的 `dispersion: 'auto'` 即 ≥0.25 px 才色散；材质目前一律折射、色散）；自适应 luma → 文字颜色（§5.5，需要 `color: 'auto'`/vibrancy 样式信号）；`@pmndrs/pointer-events`（XR 射线，`hitSurfaces` 是唯一要替换的接缝）；`Surface.billboard`、`Surface.shadow`（§3.2，随 `<Surface>` 组件）与 `castToWorld` 生效；IME 桥（§7.3）、Vue 渲染器、组件、manifest（Plan 3）；悬停 `glint` 增强与 `focusVisible` 焦点环（§7.2，Plan 3 组件；按压的指尖内发光已接通）；媒体查询变化的实时响应；GPU 计时；`background: 'none'` 的 Surface 上元素玻璃在内容透明处折射为黑（拟仅在有玻璃实例时、在内容 quad 之前惰性捕获一次）；屏幕层与世界层共用一次阴影拟合（拟按层分别拟合或分贴图）；`high` 档金字塔裁剪到玻璃并集；mip 档的 `lod = roughness × 8` 与 Kawase 顶层（RMS 半径 ≈41 texel）在同一 roughness 下模糊宽度不一致；`high` 档每片元 15 次内容采样（3 个色散通道 × 清晰层 + 4 层金字塔）；视觉回归基线与机器绑定（系统字体栅格化、GPU 驱动），CI 需各自生成一次；`world` 场景的视觉回归不敏感（UI 只占画面约 350×230 px，2 % 预算约等于卡片的 30 %）；从 workspace 去掉 `spikes/*`（glyph spike 引入 React）。
 
 ## 13. 参考
 
