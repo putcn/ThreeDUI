@@ -74,7 +74,7 @@ examples/visual/          playground 在两个后端上的 Playwright 视觉回�
 
 每个控件是一块拉伸出厚度的超椭圆：竖直侧壁，顶边和底边各有一圈小圆角。材质是 three.js 的 `MeshPhysicalNodeMaterial`，用它的 `backdropNode` 钩子把 diffuse 项替换成"透过玻璃看到的像"（用真实法线做 Snell 折射、穿过真实厚度、三通道不同 IOR 做色散），高光、Fresnel、薄膜干涉和环境反射都由引擎提供。有颜色的控件不是吸收色，而是从玻璃内部*发光*，按 Fresnel 加权所以边缘更亮。阴影是方差阴影贴图并开启 `shadowMap.transmitted`，彩色玻璃投出彩色影子。光栅化做不出来的那几样"晶莹"特征——轮廓亮线、底边亮带、下方的光晕——作为薄薄的装饰层叠在几何上。完整的推理过程（包括走过的弯路）见上面的博客。
 
-**共用渲染器。** `createUIRoot` 会把渲染器的阴影贴图切换为 VSM 并开启透射阴影（`shadowMap.enabled = true`、`type = VSMShadowMap`、`transmitted = true`）。three 按渲染器而不是按场景保存这些设置，所以宿主应用自己的阴影也会受影响；保存并恢复宿主原有设置计划后续实现。UI 自己的灯光在 UI 场景里，只照亮 UI。
+**共用渲染器。** `createUIRoot` 会把渲染器的阴影贴图切换为 VSM 并开启透射阴影（`shadowMap.enabled = true`、`type = VSMShadowMap`、`transmitted = true`）。three 按渲染器而不是按场景保存这些设置，所以宿主应用自己的阴影也会受影响；保存并恢复宿主原有设置计划后续实现。默认的 overlay 模式下，UI 自己的灯光在 UI 场景里，只照亮 UI；`mode: 'shared'` 时灯光会加进宿主场景，也照亮宿主。
 
 ## 许可证
 

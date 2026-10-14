@@ -55,7 +55,8 @@ pnpm test:visual:update        # writes tests/visual.spec.ts-snapshots/*.png
 Inspect every PNG (and, on the reference machine only, commit it). `signup` has reference renders in `docs/images/`
 (`signup-front.jpg`). `signup-medium` and `signup-minimal` have none and are judged by eye: medium is the same form
 drawn without back faces, depth reject or the blur pyramid (text as sharp as at `high`); minimal shows the controls as
-near-opaque frosted fills whose rims, edge glow and the primary button's glow still read. `world` has none either and
+near-opaque fills (light grey, or the accent for coloured controls) with a solid border in `tertiaryLabel` and no
+rims. `world` has none either and
 is judged by eye: the glass card stands to the right, tipped back, and the wall occludes its lower-left corner and the
 left end of the Cancel pill.
 
