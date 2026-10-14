@@ -31,7 +31,7 @@
 | 计划 | 范围 | 状态 |
 |---|---|---|
 | 1 — 基础 | monorepo、`@glassui/core`（节点树、样式/主题/tw、Yoga 布局、事件、焦点、滚动、弹簧、渲染列表）、`@glassui/text`（支持中文换行的系统字体引擎） | 已完成 |
-| 2 — 渲染 | `@glassui/render`：three.js WebGPU/TSL 玻璃、面板、文字、阴影、Surface、质量分级 | 进行中（在分支上，视觉检查点 1–2 已通过） |
+| 2 — 渲染 | `@glassui/render`：three.js WebGPU/TSL 玻璃、面板、文字、阴影、Surface、质量分级 | 已完成 |
 | 3 — Vue 与组件 | Vue 自定义渲染器、第一批组件、IME 桥、manifest | 计划中 |
 
 ![注册表单正视图](docs/images/signup-front.jpg)

@@ -31,7 +31,7 @@ Early, in the open. The rendering approach was validated in a series of spikes (
 | Plan | Scope | Status |
 |---|---|---|
 | 1 — Foundation | monorepo, `@glassui/core` (node tree, style/theme/tw, Yoga layout, events, focus, scroll, springs, render lists), `@glassui/text` (CJK-aware system-font engine) | done |
-| 2 — Render | `@glassui/render`: three.js WebGPU/TSL glass, panels, text, shadows, surfaces, quality tiers | in progress (on a branch; visual checkpoints 1–2 passed) |
+| 2 — Render | `@glassui/render`: three.js WebGPU/TSL glass, panels, text, shadows, surfaces, quality tiers | done |
 | 3 — Vue + components | Vue custom renderer, first component set, IME bridge, manifests | planned |
 
 ![Front view of the sign-up form](docs/images/signup-front.jpg)
