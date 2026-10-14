@@ -260,6 +260,63 @@ describe('PointerTracker semantics', () => {
   })
 })
 
+describe('element handlers, dblclick and contextmenu (Plan 3 seams)', () => {
+  it('runs a node\'s element handler after the dispatcher\'s listeners, bubbling like them', () => {
+    const d = new EventDispatcher(), root = new Node('box'), child = new Node('box'); root.appendChild(child)
+    const order: string[] = []
+    d.on(child, 'click', () => order.push('listener'))
+    child.setHandler('click', () => order.push('child handler'))
+    root.setHandler('click', e => order.push(`root handler ${e.currentTarget === root}`))
+    d.dispatch(child, 'click')
+    expect(order).toEqual(['listener', 'child handler', 'root handler true'])
+    child.setHandler('click', null); order.length = 0
+    d.dispatch(child, 'click')
+    expect(order).toEqual(['listener', 'root handler true'])
+  })
+  it('an element handler sees local coordinates, and stopPropagation in a listener still lets the node\'s own handler run', () => {
+    const s = scene(); const d = new EventDispatcher(); const log: string[] = []
+    d.on(s.btn, 'click', e => { log.push('listener'); e.stopPropagation() })
+    s.btn.setHandler('click', e => log.push(`btn ${e.localX},${e.localY}`))
+    s.root.setHandler('click', () => log.push('root'))
+    d.dispatch(s.btn, 'click', { x: 70, y: 75 })
+    expect(log).toEqual(['listener', 'btn 10,15'])   // the DOM runs every listener of the current node, then stops
+    expect([...s.btn.handlers.keys()]).toEqual(['click'])
+  })
+  it('dblclick after two clicks on one node within 500 ms and 4 pt', () => {
+    let t = 0
+    const d = new EventDispatcher(), root = new Node('box')
+    root.layout = { x: 0, y: 0, width: 100, height: 100 }
+    const tr = new PointerTracker(root, d, defaultTheme, { now: () => t })
+    const got: string[] = []
+    root.setHandler('click', () => got.push('click')); root.setHandler('dblclick', () => got.push('dblclick'))
+    tr.down(10, 10); tr.up(10, 10); t = 300; tr.down(12, 11); tr.up(12, 11)
+    expect(got).toEqual(['click', 'click', 'dblclick'])
+    got.length = 0; t = 2000; tr.down(10, 10); tr.up(10, 10); t = 2700; tr.down(10, 10); tr.up(10, 10)
+    expect(got).toEqual(['click', 'click'])                                 // too slow
+    got.length = 0; t = 4000; tr.down(10, 10); tr.up(10, 10); t = 4100; tr.down(20, 10); tr.up(20, 10)
+    expect(got).toEqual(['click', 'click'])                                 // too far
+  })
+  it('dblclick needs both clicks on the same node', () => {
+    let t = 0
+    const s = scene(); const d = new EventDispatcher(); const got: string[] = []
+    const tr = new PointerTracker(s.root, d, defaultTheme, { now: () => t })
+    s.root.setHandler('dblclick', e => got.push(e.target.id))
+    tr.down(100, 61); tr.up(100, 61); t = 100; tr.down(100, 58); tr.up(100, 58)   // btn, then panel (3 pt apart)
+    expect(got).toEqual([])
+    t = 200; tr.down(100, 58); tr.up(100, 58)
+    expect(got).toEqual(['panel'])
+  })
+  it('contextMenu dispatches contextmenu at the hit node and presses nothing', () => {
+    const d = new EventDispatcher(), root = new Node('box'); root.layout = { x: 0, y: 0, width: 100, height: 100 }
+    const tr = new PointerTracker(root, d)
+    const got: string[] = []; root.setHandler('contextmenu', e => got.push(`${e.x},${e.y}`))
+    tr.contextMenu(5, 6)
+    expect(got).toEqual(['5,6']); expect(tr.pressed).toBeNull(); expect(root.state.pressed).toBe(false)
+    tr.contextMenu(500, 6)                                                  // off the tree: nothing
+    expect(got).toEqual(['5,6'])
+  })
+})
+
 describe('hitTest with concentric radii and scale (Plan 2 seams)', () => {
   const theme = defaultTheme
   it('concentric resolves against the parent radius minus the inset', () => {

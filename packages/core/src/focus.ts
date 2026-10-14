@@ -16,9 +16,13 @@ function tabIndexOf(n: Node): number {
  * `focus()` also takes nodes without a tabIndex (like the DOM's `tabIndex = -1`), but never one that is detached,
  * disabled or hidden. `state.focused` is updated (through `Node.setState`) before `blur`/`focus` (which do not
  * bubble) are dispatched; a `blur` listener that moves focus elsewhere wins over the focus change that blurred it.
+ * `state.focusVisible` (the focus ring, CSS `:focus-visible`) follows how focus arrived: keyboard navigation shows it,
+ * a press (`focusFromPointer`) does not, and a plain `focus(node)` shows it when the last of those was the keyboard.
  */
 export class FocusManager {
   private cur: Node | null = null
+  /** The last focus change came from keys (`next`/`prev`, Tab), not a press: the ring shows (CSS `:focus-visible`). */
+  private keyboard = false
 
   constructor(private readonly root: Node, private readonly d: EventDispatcher) {}
 
@@ -37,22 +41,44 @@ export class FocusManager {
     return [...positive, ...out.filter(o => o.tab === 0)].map(o => o.n)
   }
 
-  /** `blur` on the old node, then `focus` on `node`; `null` just blurs. A no-op for nodes that cannot take focus. */
-  focus(node: Node | null): void {
+  /**
+   * `blur` on the old node, then `focus` on `node`; `null` just blurs. A no-op for nodes that cannot take focus, and
+   * for the node already focused (its ring stays as it is). `opts.visible` decides the ring; by default it shows when
+   * the last focus change came from the keyboard.
+   */
+  focus(node: Node | null, opts: { visible?: boolean } = {}): void {
     if (node === this.cur || (node && !this.canFocus(node))) return
     const old = this.cur
     if (old) {
-      this.cur = null; old.setState({ focused: false })
+      this.cur = null; old.setState({ focused: false, focusVisible: false })
       this.d.dispatch(old, 'blur')
     }
     // A blur listener may have focused another node, or made `node` unfocusable.
     if (!node || this.cur || !this.canFocus(node)) return
-    this.cur = node; node.setState({ focused: true })
+    this.cur = node; node.setState({ focused: true, focusVisible: opts.visible ?? this.keyboard })
     this.d.dispatch(node, 'focus')
   }
 
-  /** From nothing focused (or a node outside the Tab order), Tab starts at the first node and Shift+Tab at the last. */
+  /**
+   * A press on `node` (the pressed node, or null for none): focuses the nearest node at or above it, up to the root,
+   * that has a finite `tabIndex` (any value, negative included, as the DOM's `tabindex`) and can take focus, without
+   * the ring; blurs when there is none.
+   */
+  focusFromPointer(node: Node | null): void {
+    this.keyboard = false
+    for (let n = node; n; n = n.parent) {
+      if (Number.isFinite(tabIndexOf(n)) && this.canFocus(n)) { this.focus(n, { visible: false }); return }
+      if (n === this.root) break
+    }
+    this.focus(null)
+  }
+
+  /**
+   * From nothing focused (or a node outside the Tab order), Tab starts at the first node and Shift+Tab at the last.
+   * Keyboard navigation: the node lands with its ring.
+   */
   private step(dir: 1 | -1): Node | null {
+    this.keyboard = true
     const list = this.focusables()
     if (!list.length) { this.focus(null); return null }
     const i = this.cur ? list.indexOf(this.cur) : -1

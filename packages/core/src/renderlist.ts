@@ -57,6 +57,12 @@ export function sortKey(z: number, layer: 'pool' | 'glass' | 'content' | 'rim'):
   return z + (layer === 'pool' ? -0.25 : layer === 'glass' ? 0 : layer === 'content' ? 0.25 : 0.5)
 }
 
+/**
+ * The focus-visible ring (spec §7.2): a border `width` pt wide, `offset` pt outside the node's shape (its radius grown
+ * by as much), in the `color` token; drawn as a panel in the node's pool layer (content layer, under its glass edge).
+ */
+export const FOCUS_RING = { width: 2.5, offset: 3, color: 'accent' } as const
+
 /** `o` without its `undefined` entries, so optional fields stay absent under exactOptionalPropertyTypes. */
 function defined<T extends Record<string, unknown>>(o: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as { [K in keyof T]?: Exclude<T[K], undefined> }
@@ -116,8 +122,10 @@ export function resolveGlass(s: Style, rect: Rect, theme: Theme, scheme: ColorSc
  * Walks `surface.root` in pre-order and emits its draw data. Each node's effective style (state branches merged)
  * decides what it draws: glass (`type: 'glass'` or `bg: 'glass' | 'glass-clear'`) with a `rim` and a `pool`
  * decoration; a panel for any other `bg` colour or a border; text for `text` nodes (`props.value`); an image for
- * `image` nodes (`props.src`). `display: 'none'` skips the subtree. Radii are clamped to half the shorter side;
- * `concentric` resolves against the parent's radius (the root's parent is the surface's `cornerRadius`).
+ * `image` nodes (`props.src`); a `FOCUS_RING` panel for a node with `state.focused && state.focusVisible`, unless
+ * `props.focusRing === false` (a component that draws its own). `display: 'none'` skips the subtree. Radii are
+ * clamped to half the shorter side; `concentric` resolves against the parent's radius (the root's parent is the
+ * surface's `cornerRadius`).
  * A node's `visual` values, while it animates, replace its layout rect (its children follow the visual rect) and the
  * style targets they cover. Unknown tokens throw `GlassUIError`.
  */
@@ -152,6 +160,13 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
       const color: RGBA = v?.bg ?? (s.bg !== undefined && s.bg !== 'none' ? resolveColor(s.bg, theme, scheme) : [0, 0, 0, 0])
       const border = s.border && { width: s.border.width, color: resolveColor(s.border.color, theme, scheme) }
       rl.panels.push({ ...base, radius, color, ...defined({ border }), z: sortKey(myZ, 'glass') })
+    }
+    if (n.state.focused && n.state.focusVisible && n.props.focusRing !== false) {
+      const o = FOCUS_RING.offset
+      rl.panels.push({
+        ...base, rect: { x: rect.x - o, y: rect.y - o, width: rect.width + 2 * o, height: rect.height + 2 * o }, radius: radius + o,
+        color: [0, 0, 0, 0], border: { width: FOCUS_RING.width, color: resolveColor(FOCUS_RING.color, theme, scheme) }, z: sortKey(myZ, 'pool'),
+      })
     }
     if (n.type === 'text') {
       const t = resolveTextStyle(n, theme, scheme)

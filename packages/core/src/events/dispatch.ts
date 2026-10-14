@@ -2,7 +2,9 @@ import type { Node } from '../node'
 import { defaultTheme, type Theme } from '../style/theme'
 import { absoluteRect, hitTest } from './hit'
 
-export type UIEventType = 'pointerdown' | 'pointerup' | 'pointermove' | 'pointerenter' | 'pointerleave' | 'pointercancel' | 'click' | 'wheel' | 'keydown' | 'keyup' | 'focus' | 'blur' | 'press' | 'change'
+/** Every event type, in one list the type is read from (a renderer maps `onClick` → `'click'` against it). */
+export const UI_EVENT_TYPES = ['pointerdown', 'pointerup', 'pointermove', 'pointerenter', 'pointerleave', 'pointercancel', 'click', 'dblclick', 'contextmenu', 'wheel', 'keydown', 'keyup', 'focus', 'blur', 'press', 'change'] as const
+export type UIEventType = typeof UI_EVENT_TYPES[number]
 export type PointerType = 'mouse' | 'touch' | 'pen' | 'xr'
 export interface UIEvent {
   type: UIEventType; target: Node; currentTarget: Node
@@ -35,9 +37,10 @@ export class EventDispatcher {
   }
 
   /**
-   * Runs `type`'s listeners on `target`, then on each ancestor (except non-bubbling types).
+   * Runs `type`'s listeners on `target`, then its element handler (`Node.handlers`), then the same on each ancestor
+   * (except non-bubbling types). `stopPropagation` stops after the current node, its handler included.
    * The path is captured before any listener runs, so listeners that move or remove nodes do not change it;
-   * listeners added or removed on a node during its turn take effect from the next dispatch.
+   * listeners or a handler added or removed on a node during its turn take effect from the next dispatch.
    */
   dispatch(target: Node, type: UIEventType, init: Partial<UIEvent> = {}): UIEvent {
     const e: UIEvent = {
@@ -53,10 +56,12 @@ export class EventDispatcher {
     if (!NON_BUBBLING.has(type)) for (let p = target.parent; p; p = p.parent) path.push(p)
     for (const n of path) {
       const fns = this.listeners.get(n)?.get(type)
-      if (fns?.size) {
+      const own = n.handlers.get(type)
+      if (fns?.size || own) {
         e.currentTarget = n
         const r = absoluteRect(n); e.localX = e.x - r.x; e.localY = e.y - r.y
-        for (const fn of [...fns]) fn(e)
+        if (fns) for (const fn of [...fns]) fn(e)
+        own?.(e)
       }
       if (e.propagationStopped) break
     }
@@ -64,13 +69,18 @@ export class EventDispatcher {
   }
 }
 
+/** A second `click` this soon (ms) after the first, this close (pt), on the same node, also fires `dblclick`. */
+const DBLCLICK = { ms: 500, pt: 4 } as const
+
 /**
  * Turns one pointer's move/down/up/cancel (Surface pt) into node events and `state.hover/pressed`.
  * Like CSS `:hover`/`:active`, hover and press cover the hit node and all its ancestors up to `root`;
  * `pointerenter`/`pointerleave` go to each node entered (outermost first) or left (innermost first).
  * As in the DOM, `click` fires on up at the nearest common ancestor of the down and up targets (none when the up
- * misses the tree, or the pressed node has since left it). State is updated through `Node.setState` (which marks
- * the nodes dirty) before events are dispatched, so listeners see it.
+ * misses the tree, or the pressed node has since left it); a `click` on the node the previous one hit, within
+ * `DBLCLICK` (time from `opts.now`, default `performance.now()`), is followed by `dblclick` there (a third click starts
+ * over). `contextMenu` is a secondary-button press. State is updated through `Node.setState` (which marks the nodes
+ * dirty) before events are dispatched, so listeners see it.
  * Call `cancel()` when the pointer is lost or leaves the Surface.
  */
 export class PointerTracker {
@@ -78,8 +88,12 @@ export class PointerTracker {
   private hoverPath: Node[] = []
   private pressPath: Node[] = []
   private last: { x: number; y: number; pointerType: PointerType } = { x: 0, y: 0, pointerType: 'mouse' }
+  private lastClick: { node: Node; t: number; x: number; y: number } | null = null
+  private readonly now: () => number
 
-  constructor(private readonly root: Node, private readonly d: EventDispatcher, private readonly theme: Theme = defaultTheme) {}
+  constructor(private readonly root: Node, private readonly d: EventDispatcher, private readonly theme: Theme = defaultTheme, opts: { now?: () => number } = {}) {
+    this.now = opts.now ?? (() => performance.now())
+  }
 
   get hovered(): Node | null { return this.hoverPath[0] ?? null }
   get pressed(): Node | null { return this.pressPath[0] ?? null }
@@ -107,7 +121,18 @@ export class PointerTracker {
     this.hover(hit)
     if (hit) this.d.dispatch(hit, 'pointerup', this.last)
     const target = was && hit ? this.commonAncestor(was, hit) : null
-    if (target) this.d.dispatch(target, 'click', this.last)
+    if (!target) return
+    const t = this.now(), prev = this.lastClick, at = this.last   // read before listeners can move the pointer
+    const double = prev !== null && prev.node === target && t - prev.t <= DBLCLICK.ms && Math.hypot(x - prev.x, y - prev.y) <= DBLCLICK.pt
+    this.lastClick = double ? null : { node: target, t, x, y }
+    this.d.dispatch(target, 'click', at)
+    if (double) this.d.dispatch(target, 'dblclick', at)
+  }
+
+  /** A secondary-button press: `contextmenu` at the hit node; no press state (the DOM presses nothing either). */
+  contextMenu(x: number, y: number, pointerType: PointerType = 'mouse'): void {
+    const hit = this.locate(x, y, pointerType)
+    if (hit) this.d.dispatch(hit, 'contextmenu', this.last)
   }
 
   /** Drops the press (`pointercancel` to the pressed node) and the hover (`pointerleave`s), at the last position. */

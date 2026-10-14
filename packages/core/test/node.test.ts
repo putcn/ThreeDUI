@@ -43,7 +43,7 @@ describe('Node tree', () => {
     label.setStyle({ hover: { fontSize: 20 } })
     clean()
     child.setState({ hover: true })
-    expect(child.state).toEqual({ hover: true, pressed: false, focused: false, disabled: false })
+    expect(child.state).toEqual({ hover: true, pressed: false, focused: false, disabled: false, focusVisible: false })
     expect([child.dirty.paint, root.dirty.paint, label.dirty.paint]).toEqual([true, true, false])
     expect([child.dirty.layout, root.dirty.layout]).toEqual([false, false])   // an undefined value is not a layout key
     clean()
@@ -99,6 +99,42 @@ describe('Node tree', () => {
     expect(a.parent).toBeNull()
     expect(b.children).toEqual([c])
     expect(c.root).toBe(a)
+  })
+})
+
+describe('Plan 3 seams', () => {
+  it('replaceStyle replaces, and an equal style leaves the node clean', () => {
+    const n = new Node('box'); n.setStyle({ width: 10, bg: 'fill' })
+    n.dirty = { layout: false, paint: false, text: false, tree: false }
+    n.replaceStyle({ width: 10, bg: 'fill' })
+    expect(n.dirty.paint).toBe(false)
+    n.replaceStyle({ width: 10 })
+    expect(n.style).toEqual({ width: 10 }); expect(n.dirty.paint).toBe(true); expect(n.dirty.layout).toBe(true)
+  })
+  it('replaceStyle compares deeply, ignoring key order, and marks the ancestors too', () => {
+    const root = new Node('box'), n = new Node('box'); root.appendChild(n)
+    n.setStyle({ hover: { opacity: 0.5 }, glass: { glow: { color: 'accent', strength: 1.1 } }, border: { width: 1, color: 'separator' } })
+    const clean = () => { for (const x of [root, n]) x.dirty = { layout: false, paint: false, text: false, tree: false } }
+    clean()
+    n.replaceStyle({ border: { color: 'separator', width: 1 }, glass: { glow: { strength: 1.1, color: 'accent' } }, hover: { opacity: 0.5 } })
+    expect([n.dirty.paint, n.dirty.layout, root.dirty.paint]).toEqual([false, false, false])
+    n.replaceStyle({ border: { color: 'separator', width: 1 }, glass: { glow: { strength: 1.2, color: 'accent' } }, hover: { opacity: 0.5 } })
+    expect([n.dirty.paint, n.dirty.layout, root.dirty.paint, root.dirty.layout]).toEqual([true, true, true, true])
+    const patch = { width: 20 }
+    n.replaceStyle(patch); clean(); patch.width = 30                     // a caller reusing its object…
+    n.replaceStyle(patch)                                                // …is still seen to change: the node kept a copy
+    expect([n.style.width, n.dirty.layout]).toEqual([30, true])
+  })
+  it('setHandler sets and clears one handler per type; focusVisible is state, not a style branch', () => {
+    const n = new Node('box'); const fn = () => {}
+    n.setHandler('click', fn); n.setHandler('dblclick', fn)
+    expect([...n.handlers.keys()]).toEqual(['click', 'dblclick']); expect(n.handlers.get('click')).toBe(fn)
+    n.setHandler('click', null)
+    expect([...n.handlers.keys()]).toEqual(['dblclick'])
+    n.setStyle({ focused: { width: 20 } })
+    n.dirty = { layout: false, paint: false, text: false, tree: false }
+    n.setState({ focusVisible: true })                                  // paints (the ring), never re-lays out
+    expect([n.state.focusVisible, n.dirty.paint, n.dirty.layout]).toEqual([true, true, false])
   })
 })
 

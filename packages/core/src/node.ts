@@ -1,11 +1,18 @@
 import { LAYOUT_KEYS, TEXT_LAYOUT_KEYS, type Style } from './style/schema'
 import { GlassUIError } from './errors'
 import type { RGBA } from './style/theme'
+import type { UIEvent, UIEventType } from './events/dispatch'   // type-only: no runtime cycle
 
 export type NodeType = 'box' | 'text' | 'image' | 'glass' | 'scroll' | 'portal' | 'anchor'
 export interface Rect { x: number; y: number; width: number; height: number }
 export interface DirtyFlags { layout: boolean; paint: boolean; text: boolean; tree: boolean }
-export interface NodeState { hover: boolean; pressed: boolean; focused: boolean; disabled: boolean }
+/**
+ * Interaction state. `hover`, `pressed`, `focused` and `disabled` switch the style branches of the same name;
+ * `focusVisible` (focused, and the ring shows: CSS `:focus-visible`, set by `FocusManager`) is not a branch.
+ */
+export interface NodeState { hover: boolean; pressed: boolean; focused: boolean; disabled: boolean; focusVisible: boolean }
+/** The states that are style branches. */
+type StateBranch = Exclude<keyof NodeState, 'focusVisible'>
 
 /** Glass numbers the animation runtime can drive (`glow.strength` as `glowStrength`). */
 export type GlassNumericKey = 'thickness' | 'fillet' | 'filletBottom' | 'scatter' | 'lift' | 'edgeGlow' | 'ior' | 'dispersion' | 'roughness' | 'absorption' | 'glowStrength' | 'envIntensity' | 'specularIntensity' | 'innerGlow'
@@ -24,12 +31,26 @@ export interface VisualValues {
 
 let nextId = 1
 
-const STATES = ['hover', 'pressed', 'focused', 'disabled'] as const
+const STATES = ['hover', 'pressed', 'focused', 'disabled', 'focusVisible'] as const
 
 /** Whether switching `branch` on or off can move or resize a node of `type`: it sets a layout key to a value. */
-function changesLayout(branch: Style[keyof NodeState], type: NodeType): boolean {
+function changesLayout(branch: Style[StateBranch], type: NodeType): boolean {
   if (!branch) return false
   return Object.entries(branch).some(([k, v]) => v !== undefined && (LAYOUT_KEYS.has(k) || (type === 'text' && TEXT_LAYOUT_KEYS.has(k))))
+}
+
+/** Structural equality of style values: primitives (NaN equals NaN), arrays in order, plain objects by key (any order). */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a === 'number' && typeof b === 'number') return Number.isNaN(a) && Number.isNaN(b)
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => deepEqual(v, b[i]))
+  }
+  const plain = (o: object): boolean => { const p = Object.getPrototypeOf(o); return p === Object.prototype || p === null }
+  if (!plain(a) || !plain(b)) return false   // anything else (a class instance) is equal only to itself
+  const ka = Object.keys(a), kb = Object.keys(b)
+  return ka.length === kb.length && ka.every(k => Object.hasOwn(b, k) && deepEqual((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k]))
 }
 
 export class Node {
@@ -40,7 +61,8 @@ export class Node {
   props: Record<string, unknown> = {}
   style: Style = {} as Style
   layout: Rect = { x: 0, y: 0, width: 0, height: 0 }
-  private readonly st: NodeState = { hover: false, pressed: false, focused: false, disabled: false }
+  private readonly st: NodeState = { hover: false, pressed: false, focused: false, disabled: false, focusVisible: false }
+  private readonly hs = new Map<string, (e: UIEvent) => void>()
   private el = 0
   private tl = { x: 0, y: 0 }
   /** Animated overrides, see `VisualValues`; set through `setVisual`. */
@@ -98,8 +120,27 @@ export class Node {
   }
 
   /**
+   * Replaces the whole style (unvalidated, like `setStyle`) with a shallow copy of `style`; a deep-equal style is a
+   * no-op, so re-patching an unchanged style costs nothing and leaves the node clean.
+   */
+  replaceStyle(style: Style): void {
+    if (deepEqual(this.style, style)) return
+    this.style = { ...style }
+    this.markDirty('layout'); this.markDirty('paint')
+  }
+
+  /**
+   * Element-level handlers, one per event type (Vue's `on*` props): `EventDispatcher.dispatch` runs a node's handler
+   * after its own listeners for the type, so a node carries handlers without a Surface. Change them with `setHandler`.
+   */
+  get handlers(): ReadonlyMap<string, (e: UIEvent) => void> { return this.hs }
+  /** Sets the handler for `type`, replacing the previous one; `null` removes it. */
+  setHandler(type: UIEventType, fn: ((e: UIEvent) => void) | null): void { if (fn) this.hs.set(type, fn); else this.hs.delete(type) }
+
+  /**
    * Sets the given state flags. An actual change marks `paint`; it also marks `layout` when a state branch being
    * switched on or off sets a layout key (`LAYOUT_KEYS`, plus typography on `text` nodes, which changes the measure).
+   * `focusVisible` is not a branch: it only repaints (the focus ring).
    */
   setState(partial: Partial<NodeState>): void {
     let changed = false, layout = false
@@ -108,7 +149,7 @@ export class Node {
       if (v === undefined || v === this.st[k]) continue
       this.st[k] = v
       changed = true
-      layout ||= changesLayout(this.style[k], this.type)
+      if (k !== 'focusVisible') layout ||= changesLayout(this.style[k], this.type)
     }
     if (changed) this.markDirty('paint')
     if (layout) this.markDirty('layout')

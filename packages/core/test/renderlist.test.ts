@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest'
 import { Node } from '../src/node'
 import { createYogaLayout, type LayoutEngine } from '../src/layout/yoga'
 import { createSurface } from '../src/surface'
-import { buildRenderList, sortKey, type RenderList } from '../src/renderlist'
+import { buildRenderList, sortKey, FOCUS_RING, type RenderList } from '../src/renderlist'
 import { IDENTITY, apply } from '../src/transform2d'
 import { effectiveStyle } from '../src/style/effective'
 import { defaultTheme as theme, resolveColor } from '../src/style/theme'
@@ -271,6 +271,34 @@ describe('buildRenderList rules', () => {
       text: '', font: { family: 'mono', size: theme.fontSize.sm, weight: 700 }, color: resolveColor('accent', theme, 'dark'),
       maxLines: 2, lineHeight: 20, letterSpacing: 0.5, wrap: false,   // 1.4 × 14 pt = 19.6
     })
+  })
+})
+
+describe('focus ring (Plan 3 seams)', () => {
+  it('draws the focus ring around a visibly focused node, outside its rect', () => {
+    const s = createSurface({ width: 200, height: 100 })
+    const b = new Node('glass', 'b'); b.setStyle({ position: 'absolute', left: 20, top: 20, width: 100, height: 40, radius: 8 })
+    b.setState({ focused: true, focusVisible: true })
+    s.root.appendChild(b); layout(s)
+    const ring = buildRenderList(s, theme, 'light').panels.find(p => p.node === b)!
+    expect(ring.rect).toEqual({ x: 17, y: 17, width: 106, height: 46 })
+    expect(ring.radius).toBe(11); expect(ring.color).toEqual([0, 0, 0, 0])
+    expect(ring.border).toEqual({ width: FOCUS_RING.width, color: resolveColor('accent', theme, 'light') })
+    b.setState({ focusVisible: false })
+    expect(buildRenderList(s, theme, 'light').panels.find(p => p.node === b)).toBeUndefined()
+    b.setState({ focusVisible: true }); b.setProp('focusRing', false)
+    expect(buildRenderList(s, theme, 'light').panels.find(p => p.node === b)).toBeUndefined()
+  })
+  it('sits in the node\'s pool layer with its transform, opacity and clip, beside its own panel; focusVisible alone draws nothing', () => {
+    const b = box('box', 'b', { left: 10, top: 10, width: 60, height: 30, bg: 'fill', radius: 'capsule', scale: 0.5, opacity: 0.5 })
+    const card = box('box', 'card', { left: 0, top: 0, width: 100, height: 100, overflow: 'hidden' }, b)
+    const s = layout(surface(card))
+    b.setState({ focused: true, focusVisible: true })
+    const [own, ring] = buildRenderList(s, theme, 'light').panels.filter(p => p.node === b)
+    expect(ring!.z).toBe(sortKey(own!.z, 'pool')); expect(ring!.radius).toBe(15 + FOCUS_RING.offset)
+    expect([ring!.transform, ring!.opacity, ring!.clip]).toEqual([own!.transform, own!.opacity, own!.clip])
+    b.setState({ focused: false })
+    expect(buildRenderList(s, theme, 'light').panels.filter(p => p.node === b)).toHaveLength(1)
   })
 })
 

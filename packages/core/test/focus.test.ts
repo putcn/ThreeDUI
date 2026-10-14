@@ -104,6 +104,60 @@ describe('FocusManager edge cases', () => {
     t.fm.focus(t.b)
     expect([t.a.state.focused, t.b.state.focused, t.b.dirty.paint]).toEqual([false, true, true])
   })
+  it('focusFromPointer focuses the nearest node with a tabIndex, without the ring; keys focus with it', () => {
+    const d = new EventDispatcher(), root = new Node('box')
+    const field = new Node('glass'); field.setProp('tabIndex', 0)
+    const icon = new Node('image'); field.appendChild(icon); root.appendChild(field)
+    const plain = new Node('box'); root.appendChild(plain)
+    const f = new FocusManager(root, d)
+    f.focusFromPointer(icon)
+    expect(f.current).toBe(field); expect(field.state.focused).toBe(true); expect(field.state.focusVisible).toBe(false)
+    f.focusFromPointer(plain)
+    expect(f.current).toBeNull(); expect(field.state.focused).toBe(false)
+    f.key('Tab')
+    expect(f.current).toBe(field); expect(field.state.focusVisible).toBe(true)
+    f.focus(null)
+    expect(field.state.focusVisible).toBe(false)
+  })
+  it('focusFromPointer skips disabled nodes and counts tabIndex -1 as focusable (DOM tabindex)', () => {
+    const d = new EventDispatcher(), root = new Node('box')
+    const outer = new Node('box'); outer.setProp('tabIndex', -1)
+    const inner = new Node('box'); inner.setProp('tabIndex', 0); inner.setState({ disabled: true })
+    outer.appendChild(inner); root.appendChild(outer)
+    const f = new FocusManager(root, d)
+    f.focusFromPointer(inner)
+    expect(f.current).toBe(outer)
+  })
+  it('focus(node) shows the ring after keys and hides it after a press, unless told; visible follows each focus change', () => {
+    const t = tree()
+    t.fm.focus(t.a)                                                    // nothing yet: no ring
+    expect(t.a.state.focusVisible).toBe(false)
+    t.fm.focus(t.b, { visible: true })
+    expect([t.a.state.focusVisible, t.b.state.focusVisible]).toEqual([false, true])
+    t.fm.next()                                                        // keys: the ring, and so is a focus() after them
+    expect(t.fm.current).toBe(t.a); expect(t.a.state.focusVisible).toBe(true); expect(t.b.state.focusVisible).toBe(false)
+    t.fm.focus(t.c)
+    expect(t.c.state.focusVisible).toBe(true)
+    t.fm.focusFromPointer(t.b)                                         // a press: no ring, and none for a focus() after it
+    expect([t.b.state.focused, t.b.state.focusVisible, t.c.state.focusVisible]).toEqual([true, false, false])
+    t.fm.focus(t.a)
+    expect(t.a.state.focusVisible).toBe(false)
+    t.fm.prev()
+    expect(t.fm.current).toBe(t.b); expect(t.b.state.focusVisible).toBe(true)
+    t.fm.focusFromPointer(null)                                        // a press on nothing blurs
+    expect(t.fm.current).toBeNull(); expect(t.b.state.focusVisible).toBe(false)
+  })
+  it('focusFromPointer stops at the root and ignores a hidden or detached press target', () => {
+    const t = tree()
+    const outside = new Node('box', 'outside'); outside.setProp('tabIndex', 0)
+    const inner = new Node('box', 'inner'); outside.appendChild(t.root); t.root.appendChild(inner)
+    t.fm.focus(t.a)
+    t.fm.focusFromPointer(inner)                                       // the root's own parent is outside the tree
+    expect(t.fm.current).toBeNull()
+    const stray = new Node('box', 'stray'); stray.setProp('tabIndex', 0)
+    t.fm.focusFromPointer(stray)
+    expect(t.fm.current).toBeNull(); expect(stray.state.focused).toBe(false)
+  })
   it('lets a blur listener move focus elsewhere and keeps state consistent', () => {
     const t = tree(); const log: string[] = []
     for (const n of [t.a, t.b, t.c]) { t.d.on(n, 'focus', () => log.push(`focus:${n.id}`)); t.d.on(n, 'blur', () => log.push(`blur:${n.id}`)) }
