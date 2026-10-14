@@ -59,8 +59,29 @@ export { SLAB_FROST } from '../glass/frost'
 /** `renderOrder` of each draw inside the content RT's scene. */
 export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as const
 
-/** What is behind a `'none'` Surface, as its element glass sees it: no slab, so no frost (mip level 0, no lift). */
+/**
+ * What is behind a `'none'` Surface: no slab, so no frost of its own — no lift, and no level floor (its element glass
+ * reads it at the glass's own roughness level, as it reads the content; the luma at its tap grid's level).
+ */
 const NO_FROST = { level: 0, lift: 0 } as const
+
+/** Element handler types (`Node.handlers`) that make a node take the pointer on a `'none'` Surface. */
+const POINTER_HANDLERS = ['pointerdown', 'pointerup', 'pointermove', 'pointerenter', 'pointerleave', 'click', 'dblclick', 'contextmenu', 'wheel'] as const
+
+/**
+ * Whether `n` paints (glass, text, an image, a background other than `'none'`, a border) or is interactive (a finite
+ * `tabIndex`, read as the focus manager reads it, or an element handler for a pointer type).
+ */
+function paintedOrInteractive(n: Node): boolean {
+  if (n.type === 'glass' || n.type === 'text' || n.type === 'image') return true
+  const s = effectiveStyle(n)
+  if ((s.bg !== undefined && s.bg !== 'none') || s.border !== undefined) return true
+  const t = n.props.tabIndex
+  if (Number.isFinite(typeof t === 'number' || (typeof t === 'string' && t.trim() !== '') ? Number(t) : NaN)) return true
+  // `Node.handlers` (element handlers: Vue's on* props) is read when the node has it
+  const handlers = (n as { handlers?: ReadonlyMap<string, unknown> }).handlers
+  return handlers !== undefined && POINTER_HANDLERS.some(h => handlers.has(h))
+}
 
 /** The `'fill'` glass mode's colours, linear: the background slab's, the element glass's and its border's. */
 export interface FillColors { slab: Color; glass: Color; border: Color }
@@ -106,6 +127,7 @@ export function createContentMaterial(content: Texture): MeshStandardNodeMateria
  * The draw that makes a `'none'` Surface's behind-capture copy the framebuffer before its content quad. three copies at
  * the first draw of a frame that samples the capture; this one samples it (sampling is what schedules the copy:
  * `updateBefore`) at the slab's place in the order, and writes nothing (no colour, no depth).
+ * three's WebGL backend does not reset `colorMask` on clear: the content quad (colour-writing, next in the same group) restores it — keep it so.
  */
 function createCaptureProbe(capture: ScreenCapture): Mesh<PlaneGeometry, MeshBasicNodeMaterial> {
   const m = new MeshBasicNodeMaterial()
@@ -269,9 +291,9 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * a render copies the depth buffer once per Surface, not once per face) and the element glass's (its back with
    * `q.backFaces`, refracting the content RT). On a glass Surface element glass also sees the slab's screen capture,
    * through the slab's frost, where the content is transparent, and with `q.depthReject` reads the slab's depth capture
-   * too (no further copy); on a 'none' Surface it sees the behind-capture there (`syncBehind`; unfrosted, no depth
-   * reject), or, without one, refracts the content RT alone. The captures are owned by the Surface: a rebuild never
-   * disposes them.
+   * too (no further copy); on a 'none' Surface it sees the behind-capture there (`syncBehind`; at the glass's own
+   * roughness level, as it sees the content, with no lift and no depth reject), or, without one, refracts the content
+   * RT alone. The captures are owned by the Surface: a rebuild never disposes them.
    *
    * `q.glassMode` (`GlassMode`): `'straight'` looks through the same backdrops unrefracted, with no depth reject (and no
    * depth capture); `'fill'` hands no backdrop to any draw (the theme's fill colour instead), so while it lasts no draw
@@ -296,10 +318,11 @@ export class Surface extends Object3D<SurfaceEventMap> {
       }
     }
     // what is behind the content plane, captured before any of this Surface's content: on a glass Surface the slab's
-    // captures (the slab is its first draw), through its frost; on a 'none' one the probe's (at the slab's place), as is
+    // captures (the slab is its first draw), through its frost; on a 'none' one the probe's (at the slab's place),
+    // frosted by the glass's own roughness alone (no `screenLevel`: the material's default, the content's level)
     const behind = mode === 'fill' ? {}
       : slab && screen ? { screen, screenLevel: SLAB_BEHIND.level, screenLift: SLAB_BEHIND.lift, depthReject: reject, ...(depth ? { depth } : {}) }
-        : this.behindCapture ? { screen: this.behindCapture, screenLevel: NO_FROST.level, screenLift: NO_FROST.lift }
+        : this.behindCapture ? { screen: this.behindCapture, screenLift: NO_FROST.lift }
           : {}
     const element: GlassMaterial[] = []
     for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
@@ -415,17 +438,17 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /**
    * Whether a pointer at (x, y) Surface pt belongs to this Surface: always on a glass or coloured background (the
-   * panel is UI); on a 'none' one only where a node other than a bare root is hit — a root with no `bg` (or `'none'`)
-   * and no `border` — so a full-screen HUD lets the pointer through its empty areas to what is behind it (other
-   * Surfaces, then the host app).
+   * panel is UI); on a 'none' one only where some node on the path from the hit node up to the root paints or is
+   * interactive (`paintedOrInteractive`). So a full-screen HUD — bare root, full-size layout wrappers and all — lets
+   * the pointer through its empty areas to what is behind it (other Surfaces, then the host app).
    */
   takesPointer(x: number, y: number): boolean {
     if (this.model.background !== 'none') return true
-    const hit = this.hitNode(x, y)
-    if (!hit) return false
-    if (hit !== this.model.root) return true
-    const s = effectiveStyle(hit)
-    return hit.type === 'glass' || (s.bg !== undefined && s.bg !== 'none') || s.border !== undefined
+    for (let n = this.hitNode(x, y); n; n = n.parent) {
+      if (paintedOrInteractive(n)) return true
+      if (n === this.model.root) break
+    }
+    return false
   }
 
   /** The pointer's position on this Surface (pt), or null when it is elsewhere: where a press glows (the bridge sets it). */

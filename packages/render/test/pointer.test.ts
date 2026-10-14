@@ -220,7 +220,8 @@ describe('PointerBridge.handle', () => {
     const { s, bridge } = scene()
     const list = new Node('scroll', 'list'); list.setStyle({ position: 'absolute', left: 0, top: 300, width: 400, height: 100 })
     // flexShrink 0: core's yoga shrinks like CSS (default 1), which would fit `tall` into the 100 pt viewport
-    const tall = new Node('box', 'tall'); tall.setStyle({ height: 500, flexShrink: 0 }); list.appendChild(tall); s.root.appendChild(list); s.tick(0)
+    // painted: on a 'none' Surface the pointer (and so the wheel) falls through unpainted, non-interactive nodes
+    const tall = new Node('box', 'tall'); tall.setStyle({ height: 500, flexShrink: 0, bg: 'fill' }); list.appendChild(tall); s.root.appendChild(list); s.tick(0)
     const onWheel = vi.fn(); s.events.on(list, 'wheel', onWheel)
     bridge.handle('pointermove', { clientX: 50, clientY: 350 })
     const prevent = vi.fn()

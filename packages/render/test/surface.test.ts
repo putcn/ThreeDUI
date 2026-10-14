@@ -477,6 +477,8 @@ describe('Surface', () => {
     const probe = probeOf(s)
     expect(probe).toHaveLength(1)
     expect(probe[0]!.renderOrder).toBeLessThan(SURFACE_ORDER.content)
+    // what that order rests on: the probe sorts with the (transparent) content quad, in the Surface's own layer group
+    expect((probe[0]!.material as Material).transparent).toBe(true); expect(probe[0]!.parent).toBe(s.layer)
     const base = (ms: Mesh[]) => new Set(ms.flatMap(m => materialGraph(m.material as Material)).filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!()))
     const probeBase = base(probe)
     expect(probeBase.size).toBe(1)
@@ -484,6 +486,21 @@ describe('Surface', () => {
     g.remove(); s.tick(0)
     expect(probeOf(s)).toEqual([])
     expect(capturesIn([...meshes(s), ...meshes(s.contentPass.scene)])).toEqual([])
+  })
+  it("a 'none' Surface's element glass reads what is behind it at its own roughness level, as it frosts its content", () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx })
+    const g = new Node('glass'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60, glass: { roughness: 0.5 } })
+    s.root.appendChild(g); s.tick(0)
+    for (const mode of ['refract', 'straight'] as const) {
+      s.setQuality({ ...ctx.quality, glassMode: mode })
+      const samples = capturesIn(elementGlass(s)).map(n => (n as GraphNode & { levelNode?: GraphNode | null }).levelNode).filter(l => l)
+      expect(samples.length).toBeGreaterThan(0)
+      // the level is the glass's roughness (its vGlassOptics varying) × FROST.levelPerRoughness, not a constant
+      for (const l of samples) {
+        expect(l!.constructor.type).not.toBe('ConstNode')
+        expect(nodesOf(l).some(n => n.constructor.type === 'VaryingNode' && (n as { name?: string }).name === 'vGlassOptics')).toBe(true)
+      }
+    }
   })
   it("a 'none' Surface in the 'fill' glass mode takes no capture even with glass", () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx, quality: QUALITY.minimal })
@@ -531,6 +548,36 @@ describe('Surface', () => {
       }
     } finally { spy.mockRestore() }
     expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
+  })
+  it("takesPointer on a 'none' Surface: only where a node on the path from the hit up to the root is painted or interactive", () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 1 }, { ...ctx })
+    // a full-size layout wrapper, as a Vue template has, around a painted chip, a text, an image and an unpainted box
+    const wrap = new Node('box', 'wrap'); wrap.setStyle({ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%' })
+    const chip = new Node('box', 'chip'); chip.setStyle({ position: 'absolute', left: 10, top: 10, width: 50, height: 50, bg: 'fill' })
+    const label = new Node('text', 'label'); label.setProp('value', 'Hi'); label.setStyle({ position: 'absolute', left: 100, top: 10, width: 60, height: 20 })
+    const inner = new Node('box', 'inner'); inner.setStyle({ position: 'absolute', left: 300, top: 200, width: 50, height: 50 })
+    for (const n of [chip, label, image('pic', new Texture(), 200, 10), inner]) wrap.appendChild(n)
+    s.root.appendChild(wrap); s.tick(0)
+    expect(s.hitNode(300, 150)).toBe(wrap); expect(s.hitNode(310, 210)).toBe(inner)
+    expect(s.takesPointer(20, 20)).toBe(true)                          // the chip's background
+    expect(s.takesPointer(110, 15)).toBe(true)                         // a text
+    expect(s.takesPointer(210, 20)).toBe(true)                         // an image
+    expect(s.takesPointer(300, 150)).toBe(false)                       // the wrapper's empty area: through to what is behind
+    expect(s.takesPointer(310, 210)).toBe(false)                       // an unpainted box in it: through too
+    wrap.setProp('tabIndex', 0)                                        // focusable: interactive, and so is all of it
+    expect(s.takesPointer(300, 150)).toBe(true); expect(s.takesPointer(310, 210)).toBe(true)
+    wrap.setProp('tabIndex', null)
+    expect(s.takesPointer(300, 150)).toBe(false)
+    // element handlers (`Node.handlers`, Vue's on* props): a pointer type takes, a key type does not; only on the hit path
+    const handlers = new Map<string, unknown>([['keydown', () => {}]])
+    Object.defineProperty(inner, 'handlers', { value: handlers, configurable: true })
+    expect(s.takesPointer(310, 210)).toBe(false)
+    handlers.set('click', () => {})
+    expect(s.takesPointer(310, 210)).toBe(true); expect(s.takesPointer(300, 150)).toBe(false)
+    inner.setStyle({ border: { width: 1, color: 'separator' } }); handlers.clear(); s.tick(0)
+    expect(s.takesPointer(310, 210)).toBe(true)                        // a border paints
+    s.root.setStyle({ bg: '#00000040' }); s.tick(0)
+    expect(s.takesPointer(300, 150)).toBe(true)                        // a root background paints the whole Surface
   })
   it('takesPointer: a bare root takes nothing, a hit node, a coloured root or a glass background takes the pointer', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 1 }, { ...ctx })
