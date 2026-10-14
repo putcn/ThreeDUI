@@ -167,8 +167,10 @@ describe('createUIRoot', () => {
     root.render()
     expect(seen).toEqual([false, true, false]); expect(o.renderer.autoClear).toBe(false)
     o.renderer.render.mockImplementation(() => { throw new Error('lost device') })
-    expect(() => root.render()).toThrow('lost device'); expect(o.renderer.autoClear).toBe(false)
-    expect(() => root.renderUI()).toThrow('lost device'); expect(o.renderer.autoClear).toBe(false)
+    expect(() => root.render()).toThrow('lost device'); expect(o.renderer.autoClear).toBe(false)   // the host scene's own throw
+    const errors: unknown[] = []; root.on('error', e => errors.push(e))
+    expect(() => root.renderUI()).not.toThrow(); expect(o.renderer.autoClear).toBe(false)         // the UI scene's: isolated
+    expect(errors).toEqual([{ surface: null, error: new Error('lost device') }])
   })
   it('shared mode puts the layers into the host scene and renders once', async () => {
     const o = { ...base(), mode: 'shared' as const }; const root = await createUIRoot(o)
@@ -362,7 +364,7 @@ describe('createUIRoot', () => {
     const next = root.createSurface({ width: 200, height: 100, left: 0, top: 0 })
     const later = root.createSurface({ width: 200, height: 100, left: 0, top: 200 })
     const n = new Node('box'); n.setStyle({ bg: 'nope' }); bad.root.appendChild(n)
-    root.on('error', e => { root.removeSurface(e.surface); root.removeSurface(later) })
+    root.on('error', e => { if (e.surface) root.removeSurface(e.surface); root.removeSurface(later) })
     const spies = [next, later].map(s => [vi.spyOn(s, 'tick'), vi.spyOn(s, 'prepare')])
     root.tick(1 / 60)
     expect(root.surfaces).toHaveLength(1); expect(root.surfaces[0]).toBe(next)
@@ -374,7 +376,7 @@ describe('createUIRoot', () => {
     const bad = root.createSurface({ width: 10, height: 10, fill: true })
     const next = root.createSurface({ width: 200, height: 100, left: 0, top: 0 })
     bad.glass.geometry.deleteAttribute('iTouch')               // its glass rebuild throws
-    root.on('error', e => root.removeSurface(e.surface))
+    root.on('error', e => { if (e.surface) root.removeSurface(e.surface) })
     const set = vi.spyOn(next, 'setQuality')
     root.quality.set('low')
     expect(root.surfaces).toHaveLength(1); expect(root.surfaces[0]).toBe(next); expect(set).toHaveBeenCalledTimes(1)
@@ -650,5 +652,107 @@ describe('the root API for the Vue layer', () => {
     const p = root.screenFromPoint(c, 0, 0)!
     expect(p.x).toBeCloseTo(300, 3); expect(p.y).toBeCloseTo(250, 3)
     expect(f.model.width).toBe(800); expect(f.model.height).toBe(600)
+  })
+})
+
+describe('root hardening', () => {
+  async function createRoot(extra: Omit<Partial<UIRootOptions>, 'renderer' | 'camera'> = {}) {
+    const o = { ...base(), ...extra }
+    return { root: await createUIRoot(o), renderer: o.renderer, scene: o.scene }
+  }
+  /** Makes the stub's `render` throw `message` whenever `scene` is drawn with `s`'s draws shown. */
+  function throwOn(renderer: ReturnType<typeof stubRenderer>, scene: Scene, s: Surface, message = 'shader'): void {
+    renderer.render.mockImplementation((drawn: Scene) => {
+      let shown = false; s.layer.traverseVisible(() => { shown = true })
+      if (drawn === scene && shown && s.visible) throw new Error(message)
+    })
+  }
+  it('after dispose, frames do nothing and createSurface throws', async () => {
+    const { root, renderer } = await createRoot(); root.dispose()
+    const draws = renderer.render.mock.calls.length, sample = vi.spyOn(root.quality, 'sample')
+    expect(() => root.tick(0)).not.toThrow(); expect(() => root.frame(0)).not.toThrow(); root.frame(16)
+    root.render(); root.renderUI()
+    expect(renderer.render).toHaveBeenCalledTimes(draws); expect(sample).not.toHaveBeenCalled()
+    expect(() => root.createSurface({ width: 1, height: 1 })).toThrow(/dispose/)
+    expect(() => root.createSurface({ width: 1, height: 1 })).toThrow(GlassUIError)
+    expect(root.surfaces).toHaveLength(0)
+  })
+  it('after dispose, setTheme and setScheme are no-ops and autoTick touches no loop', async () => {
+    const { root, renderer } = await createRoot()
+    const seen = vi.fn(); root.on('theme', seen)
+    root.autoTick(true); root.dispose()
+    expect(renderer.setAnimationLoop).toHaveBeenLastCalledWith(null)
+    const theme: Theme = { ...defaultTheme, colors: { light: { ...defaultTheme.colors.light }, dark: defaultTheme.colors.dark } }
+    root.setTheme(theme); root.setScheme('dark')
+    expect(root.theme).toBe(defaultTheme); expect(root.scheme).toBe('light'); expect(seen).not.toHaveBeenCalled()
+    const loops = renderer.setAnimationLoop.mock.calls.length
+    root.autoTick(true); root.autoTick(false)               // the host may have its own loop by now
+    expect(renderer.setAnimationLoop).toHaveBeenCalledTimes(loops)
+  })
+  it('a Surface disposed directly leaves the root', async () => {
+    const { root } = await createRoot(); const s = root.createSurface({ width: 10, height: 10 })
+    const forget = vi.spyOn(root.pointer!, 'forget')
+    s.dispose(); s.dispose()
+    expect(root.surfaces).not.toContain(s); expect(root.screen.surfaces.has(s)).toBe(false)
+    expect(forget).toHaveBeenCalledTimes(1); expect(forget).toHaveBeenCalledWith(s)
+    const w = root.createSurface({ width: 10, height: 10, layer: 'world' }); w.dispose()
+    expect(root.surfaces).toHaveLength(0); expect(w.parent).toBeNull()
+    expect(() => root.tick(0)).not.toThrow()
+    root.removeSurface(s)                                    // not this root's any more: nothing to do
+  })
+  it('removeSurface disposes once, and root.dispose disposes each Surface once', async () => {
+    const { root } = await createRoot()
+    const a = root.createSurface({ width: 10, height: 10 }), b = root.createSurface({ width: 10, height: 10 })
+    const freed = vi.fn(); a.addEventListener('dispose', freed); b.addEventListener('dispose', freed)
+    root.removeSurface(a); root.removeSurface(a)
+    expect(freed).toHaveBeenCalledTimes(1)
+    root.dispose()
+    expect(freed).toHaveBeenCalledTimes(2); expect(root.surfaces).toHaveLength(0)
+  })
+  it('a throwing UI render fails the Surface that throws and the next frame draws the others', async () => {
+    const { root, renderer } = await createRoot()
+    const good = root.createSurface({ width: 10, height: 10 }), bad = root.createSurface({ width: 10, height: 10 })
+    const errors: unknown[] = []; root.on('error', e => errors.push(e.surface))
+    throwOn(renderer, root.uiScene, bad)
+    root.tick(0); expect(() => root.renderUI()).not.toThrow()
+    expect(errors).toEqual([bad]); expect(bad.error).toBeTruthy(); expect(good.error).toBeNull()
+    expect(good.layer.visible).toBe(true); expect(bad.layer.visible).toBe(true)   // restored after the isolation
+    expect(renderer.autoClear).toBe(true)
+    renderer.render.mockClear()
+    root.tick(0); expect(() => root.renderUI()).not.toThrow()
+    expect(renderer.render).toHaveBeenLastCalledWith(root.uiScene, expect.anything()); expect(errors).toEqual([bad])
+  })
+  it('a UI render error no Surface reproduces, or that the scene throws without any Surface, fails none', async () => {
+    const { root, renderer } = await createRoot()
+    const a = root.createSurface({ width: 10, height: 10 }), b = root.createSurface({ width: 10, height: 10 })
+    const errors: { surface: Surface | null; error: Error }[] = []; root.on('error', e => errors.push(e))
+    renderer.render.mockImplementationOnce(() => { throw 'flaky' })   // once: every isolated draw succeeds
+    root.renderUI()
+    expect(errors).toEqual([{ surface: null, error: new Error('flaky') }])
+    renderer.render.mockImplementation(() => { throw new Error('lost device') })   // with or without Surfaces
+    root.renderUI()
+    expect(errors[1]).toEqual({ surface: null, error: new Error('lost device') })
+    expect(errors).toHaveLength(2); expect(a.error).toBeNull(); expect(b.error).toBeNull()
+  })
+  it('isolates every Surface that throws; a listener removing one meanwhile is fine', async () => {
+    const { root, renderer } = await createRoot()
+    const a = root.createSurface({ width: 10, height: 10 }), ok = root.createSurface({ width: 10, height: 10 }), b = root.createSurface({ width: 10, height: 10 })
+    renderer.render.mockImplementation((drawn: Scene) => {
+      let shown = 0; for (const s of [a, b]) s.layer.traverseVisible(() => { shown++ })
+      if (drawn === root.uiScene && shown > 0) throw new Error('shader')
+    })
+    const errors: unknown[] = []; root.on('error', e => { errors.push(e.surface); root.removeSurface(b) })
+    root.renderUI()
+    expect(errors).toEqual([a]); expect(a.error).toBeTruthy(); expect(ok.error).toBeNull()
+    expect(root.surfaces).toEqual([a, ok]); expect(b.disposed).toBe(true)
+  })
+  it('shared mode isolates the throwing Surface around the host scene\'s render', async () => {
+    const { root, renderer, scene } = await createRoot({ mode: 'shared' })
+    const good = root.createSurface({ width: 10, height: 10 }), bad = root.createSurface({ width: 10, height: 10, layer: 'world' })
+    const errors: unknown[] = []; root.on('error', e => errors.push(e.surface))
+    throwOn(renderer, scene, bad)
+    expect(() => root.render()).not.toThrow()
+    expect(errors).toEqual([bad]); expect(good.error).toBeNull()
+    expect(() => root.render()).not.toThrow(); expect(errors).toEqual([bad])
   })
 })

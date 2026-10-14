@@ -724,6 +724,53 @@ describe('Surface', () => {
     expect(s.parent).toBeNull()
     forget.mockRestore(); release.mockRestore()
   })
+  it('dispose is idempotent: a second call frees nothing twice; one dispose event, after everything is freed', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
+    const g = new Node('glass'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60 })
+    s.root.appendChild(g); s.tick(0)
+    const tracked = new Set<{ addEventListener(type: 'dispose', fn: () => void): void }>([s.contentPass.target, s.contentMesh.geometry, s.contentMesh.material as Material, ...meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab || elementGlass(s).includes(m)).map(m => m.material as Material)])
+    const freed = new Map<object, number>()
+    for (const o of tracked) o.addEventListener('dispose', () => freed.set(o, (freed.get(o) ?? 0) + 1))
+    let freedBeforeEvent = false
+    const onDispose = vi.fn(() => { freedBeforeEvent = [...tracked].every(o => freed.get(o) === 1) }); s.addEventListener('dispose', onDispose)
+    expect(s.disposed).toBe(false)
+    s.dispose(); s.dispose()
+    expect(s.disposed).toBe(true); expect(onDispose).toHaveBeenCalledTimes(1); expect(freedBeforeEvent).toBe(true)
+    expect(tracked.size).toBeGreaterThan(5); for (const o of tracked) expect(freed.get(o)).toBe(1)
+  })
+  it('a disposed Surface does not tick, prepare or rebuild', () => {
+    const { s, btn } = signup()
+    s.tick(1 / 60); s.dispose()
+    btn.setStyle({ width: 100 })
+    const compute = vi.spyOn(ctx.layout, 'compute'), build = vi.spyOn(s as unknown as { buildGlass(q: unknown): void }, 'buildGlass')
+    const renderer = stubRenderer()
+    try {
+      s.tick(1 / 60); s.prepare(renderer, { width: 400, height: 300 }, 1)
+      s.setQuality({ ...ctx.quality, backFaces: false }); s.restyle(); ctx.text.atlas.invalidate()
+      expect(s.refreshText()).toBe(false)
+      expect(compute).not.toHaveBeenCalled(); expect(renderer.render).not.toHaveBeenCalled(); expect(build).not.toHaveBeenCalled()
+      expect(s.error).toBeNull()
+    } finally { compute.mockRestore() }
+  })
+  it('markFailed stops the Surface: error set, hidden, one error event; its nodes\' whenSettled waiters settle', async () => {
+    const { s, btn } = signup()
+    s.tick(1 / 60); btn.setState({ pressed: true }); s.tick(1 / 60)
+    expect(s.needsFrame).toBe(true)                // the press is animating
+    let settled = false
+    void ctx.anim.whenSettled(btn).then(() => { settled = true })
+    const onError = vi.fn(); s.addEventListener('error', onError)
+    s.markFailed('shader')
+    expect(s.error).toBeInstanceOf(Error); expect(s.error!.message).toBe('shader')
+    expect(s.visible).toBe(false); expect(s.needsFrame).toBe(false); expect(onError).toHaveBeenCalledTimes(1)
+    await Promise.resolve()
+    expect(settled).toBe(true)                    // a failed Surface never ticks again: its waiters must not hang
+    s.markFailed(new Error('again'))              // already down: the first error stands, no second event
+    expect(s.error!.message).toBe('shader'); expect(onError).toHaveBeenCalledTimes(1)
+    s.dispose()
+    const late = new Surface({ width: 10, height: 10 }, ctx); late.dispose()
+    late.markFailed(new Error('after dispose'))   // a disposed Surface stays as it is
+    expect(late.error).toBeNull()
+  })
 })
 
 describe('Surface: the dual-Kawase pyramid (quality.blur = \'kawase\')', () => {

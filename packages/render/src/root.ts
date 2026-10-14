@@ -62,8 +62,11 @@ export type CreateSurfaceOptions = SurfaceOptions & { layer?: 'screen' | 'world'
 
 export interface UIRootEventMap {
   quality: { tier: QualityTier; prev: QualityTier; profile: Readonly<QualityProfile> }
-  /** A Surface failed a frame (it stopped drawing). */
-  error: { surface: Surface; error: Error }
+  /**
+   * A Surface failed (it stopped drawing: `Surface.markFailed`), or, with `surface: null`, a render of the UI threw and
+   * no Surface reproduced it (`render` / `renderUI`).
+   */
+  error: { surface: Surface | null; error: Error }
   /**
    * `setTheme` / `setScheme` swapped the theme or scheme, or increased contrast turned on or off (the media query, live);
    * every Surface has been rebuilt for it.
@@ -83,24 +86,29 @@ export interface UIRoot {
   readonly backend: 'webgpu' | 'webgl2' | 'unknown'
   /**
    * `layer: 'screen'` (default): pt = CSS px, `fill`, `center` or at `left/top` (`CreateSurfaceOptions`); `'world'`: a
-   * child of `world` (`ptPerUnit` default 244; `billboard` faces the camera).
+   * child of `world` (`ptPerUnit` default 244; `billboard` faces the camera). `Surface.dispose` on it also removes it
+   * from the root (as `removeSurface` does). Throws a `GlassUIError` after `dispose`.
    */
   createSurface(opts: CreateSurfaceOptions): Surface
+  /**
+   * Drops the Surface from the root (its list entry, pointer state and screen placement) and disposes it; a no-op for
+   * one that is not (any more) the root's.
+   */
   removeSurface(surface: Surface): void
   /**
    * Swaps the theme: the shared context's theme and text measure, the animation runtime's theme, then every Surface
    * restyled (`Surface.restyle`: fills, an opaque background, the glass, every node marked); emits `'theme'`. A theme
-   * without `colors.light` / `colors.dark` tables throws a `GlassUIError` and changes nothing.
+   * without `colors.light` / `colors.dark` tables throws a `GlassUIError` and changes nothing. A no-op after `dispose`.
    */
   setTheme(theme: Theme): void
   /**
-   * Swaps the colour scheme (dark mode) as `setTheme` swaps the theme; a no-op for the current scheme. Anything but
-   * `'light'` / `'dark'` throws a `GlassUIError` and changes nothing.
+   * Swaps the colour scheme (dark mode) as `setTheme` swaps the theme; a no-op for the current scheme, and after
+   * `dispose`. Anything but `'light'` / `'dark'` throws a `GlassUIError` and changes nothing.
    */
   setScheme(scheme: ColorScheme): void
   /**
    * Layout, animation, content passes, draw order and the shadow fit; `dt` in seconds. Billboard world Surfaces turn to
-   * face the camera before their matrices are read. Ends by resolving the `afterTick` promises.
+   * face the camera before their matrices are read. Ends by resolving the `afterTick` promises. A no-op after `dispose`.
    */
   tick(dt: number): void
   /**
@@ -118,11 +126,18 @@ export interface UIRoot {
    * Overlay: the host scene (cleared: `autoClear` true for that draw), then the UI scene over it without clearing
    * (shared depth); `renderer.autoClear` is put back to the host's value afterwards, also when a draw throws. Shared:
    * the host scene, the UI being in it, with the host's own `autoClear`.
+   *
+   * Render isolation (spec §9): a throw from the draw that holds the UI (the UI scene; shared: the host scene) does not
+   * propagate. The root draws that scene again with each shown Surface's `layer` alone (the others hidden, then
+   * restored) and fails (`Surface.markFailed`) every Surface that throws so, each emitting `'error'`; when none does, or
+   * when the scene throws with every Surface hidden (the fault is not a Surface's), it emits `'error'` with `surface:
+   * null` and fails none. The next frame draws the Surfaces left. Overlay's host-scene draw is the host's: its throw
+   * propagates. A no-op after `dispose`.
    */
   render(): void
   /**
    * Overlay: the UI scene alone, over what the host drew this frame (`autoClear` false for the call, then the host's
-   * value again); a no-op when shared.
+   * value again), with `render`'s isolation; a no-op when shared, and after `dispose`.
    */
   renderUI(): void
   /**
@@ -130,10 +145,13 @@ export interface UIRoot {
    * call, e.g. the animation loop's. With `quality: 'auto'` each frame also feeds the quality controller, relative to
    * the display's refresh (`FrameSampler`: a dropped refresh counts its interval, a frame that met it its CPU time), so
    * `'auto'` assumes a continuous loop — `autoTick(true)` or a host rAF loop calling `frame` every refresh. An explicit
-   * tier never samples.
+   * tier never samples. A no-op after `dispose`.
    */
   frame(nowMs?: number): void
-  /** `true`: `renderer.setAnimationLoop(t => root.frame(t))`; `false`: clears the loop if (and only if) this installed it. */
+  /**
+   * `true`: `renderer.setAnimationLoop(t => root.frame(t))`; `false`: clears the loop if (and only if) this installed it.
+   * A no-op after `dispose` (which cleared a loop it installed).
+   */
   autoTick(on: boolean): void
   on<K extends keyof UIRootEventMap>(type: K, fn: (e: UIRootEventMap[K]) => void): () => void
   dispose(): void
@@ -243,6 +261,18 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
    */
   function each(fn: (s: Surface) => void): void { for (const s of [...surfaces]) if (surfaces.includes(s)) fn(s) }
 
+  /**
+   * Drops the root's references to `s` (its list entry, the pointer's capture and hover, its screen placement, its
+   * last pose); false when it is not (any more) this root's. `removeSurface` and a direct `Surface.dispose` both end here.
+   */
+  function forgetSurface(s: Surface): boolean {
+    const i = surfaces.indexOf(s)
+    if (i < 0) return false
+    surfaces.splice(i, 1)
+    pointer?.forget(s); screen.unplace(s); lastPose.delete(s)
+    return true
+  }
+
   const listeners: { [K in keyof UIRootEventMap]: Set<(e: UIRootEventMap[K]) => void> } = { quality: new Set(), error: new Set(), theme: new Set() }
   function emit<K extends keyof UIRootEventMap>(type: K, e: UIRootEventMap[K]): void {
     for (const fn of [...listeners[type]]) try { fn(e) } catch (err) { console.error(`[glassui] a "${type}" listener threw:`, err) }
@@ -288,6 +318,36 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   /** Resolved (and dropped) at the end of every `tick`, and by `dispose`. */
   const afterTickWaiters: (() => void)[] = []
   function settleAfterTick(): void { for (const resolve of afterTickWaiters.splice(0)) resolve() }
+
+  const toError = (e: unknown): Error => e instanceof Error ? e : new Error(String(e))
+
+  /** `renderer.render(target, camera)`, with a throw isolated (`isolate`) instead of propagating. */
+  function draw(target: Scene): void {
+    try { renderer.render(target, camera) } catch (e) { isolate(target, e) }
+  }
+
+  /**
+   * Render isolation (spec §9): drawing `target` threw `e`. Draws it again with each shown Surface's `layer` alone (the
+   * others hidden, restored in `finally`) and fails (`markFailed`) the Surfaces whose draw throws; each emits `'error'`
+   * through the listener `createSurface` added. When none throws alone, or `target` throws with every Surface hidden
+   * (then none is to blame: a lost device, the lights, a shared host's own objects), emits `'error'` with `surface:
+   * null` instead. Never throws.
+   */
+  function isolate(target: Scene, e: unknown): void {
+    const shown = surfaces.filter(s => s.visible && !s.error)
+    const was = shown.map(s => s.layer.visible)
+    /** Draws `target` with only `only`'s layer shown among `shown` (null: none of them); what that threw, or null. */
+    const alone = (only: Surface | null): Error | null => {
+      shown.forEach(s => { if (s !== only) s.layer.visible = false })
+      try { renderer.render(target, camera); return null }
+      catch (err) { return toError(err) }
+      finally { shown.forEach((s, i) => { s.layer.visible = was[i]! }) }
+    }
+    const culprits: [Surface, Error][] = []
+    if (shown.length && alone(null) === null) for (const s of shown) { const err = alone(s); if (err) culprits.push([s, err]) }
+    if (!culprits.length) { emit('error', { surface: null, error: toError(e) }); return }
+    for (const [s, err] of culprits) s.markFailed(err)   // a no-op on one an earlier culprit's listener disposed
+  }
 
   const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3(), point = new Vector3(), view = new Vector3()
   const qCam = new Quaternion(), qParent = new Quaternion()
@@ -342,22 +402,19 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     get scheme() { return scheme },
     get contrast() { return contrast },
     createSurface(o) {
+      if (disposed) throw new GlassUIError('UIRoot.createSurface', 'root 已经 dispose')
       const { layer = 'screen', fill, center, left, top, ...rest } = o
       const s = new Surface(layer === 'screen' ? { ...rest, ptPerUnit: 1, placement: 'screen' } : { ...rest, placement: 'world' }, ctx)
       s.addEventListener('error', e => emit('error', { surface: s, error: e.error }))
+      s.addEventListener('dispose', () => { forgetSurface(s) })   // disposed directly: it leaves the root too
       if (layer === 'screen') screen.place(s, fill ? { fill: true } : center ? { center: true } : { left: left ?? 0, top: top ?? 0 })
       else world.add(s)
       surfaces.push(s)
       return s
     },
-    removeSurface(s) {
-      const i = surfaces.indexOf(s)
-      if (i < 0) return
-      surfaces.splice(i, 1)
-      pointer?.forget(s); screen.unplace(s); lastPose.delete(s)
-      s.dispose()
-    },
+    removeSurface(s) { if (forgetSurface(s)) s.dispose() },
     tick(dt) {
+      if (disposed) return
       renderer.getSize(size)
       screen.update(camera, { width: size.x, height: size.y })   // also brings camera.matrixWorld up to date
       camera.getWorldPosition(lights.group.position); camera.getWorldQuaternion(lights.group.quaternion)
@@ -382,8 +439,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       fitShadows(changed)
       settleAfterTick()
     },
-    setTheme(t) { checkTheme('UIRoot.setTheme', t); theme = t; restyleAll() },
-    setScheme(sc) { checkScheme('UIRoot.setScheme', sc); if (sc !== scheme) { scheme = sc; restyleAll() } },
+    setTheme(t) { if (disposed) return; checkTheme('UIRoot.setTheme', t); theme = t; restyleAll() },
+    setScheme(sc) { if (disposed) return; checkScheme('UIRoot.setScheme', sc); if (sc !== scheme) { scheme = sc; restyleAll() } },
     afterTick() {
       if (disposed) return Promise.resolve()   // no tick will come
       return new Promise<void>(resolve => { afterTickWaiters.push(resolve) })
@@ -398,7 +455,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       return { x: (p.x + 1) / 2 * r.width, y: (1 - p.y) / 2 * r.height }
     },
     render() {
-      if (mode === 'shared') { renderer.render(scene, camera); return }
+      if (disposed) return
+      if (mode === 'shared') { draw(scene); return }
       const hostAutoClear = renderer.autoClear
       renderer.autoClear = true
       try {
@@ -407,12 +465,13 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       } finally { renderer.autoClear = hostAutoClear }
     },
     renderUI() {
-      if (mode === 'shared') return
+      if (disposed || mode === 'shared') return
       const hostAutoClear = renderer.autoClear
       renderer.autoClear = false   // over the host's colour and depth
-      try { renderer.render(uiScene, camera) } finally { renderer.autoClear = hostAutoClear }
+      try { draw(uiScene) } finally { renderer.autoClear = hostAutoClear }
     },
     frame(nowMs) {
+      if (disposed) return
       const now = nowMs ?? performance.now()
       const t0 = performance.now()
       root.tick(scheduler.dt(now))
@@ -422,6 +481,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       if (sample !== null) quality.sample(sample)
     },
     autoTick(on) {
+      if (disposed) return   // its loop is cleared; a later one is the host's
       if (!renderer.setAnimationLoop) throw new GlassUIError('UIRoot.autoTick', '渲染器没有 setAnimationLoop：请在宿主的渲染循环里调用 root.frame()')
       if (on) { looping = true; renderer.setAnimationLoop(t => root.frame(t)) }
       else if (looping) { looping = false; renderer.setAnimationLoop(null) }   // never the host's own loop
@@ -434,7 +494,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     dispose() {
       if (disposed) return
       disposed = true
-      if (looping) renderer.setAnimationLoop?.(null)   // only a loop `autoTick` installed: the host may run its own
+      if (looping) { looping = false; renderer.setAnimationLoop?.(null) }   // only a loop `autoTick` installed: the host may run its own
       pointer?.detach()
       for (const stop of stopMedia) stop()
       if (pointer && canvas.style && touchAction !== undefined) canvas.style.touchAction = touchAction

@@ -63,7 +63,7 @@ ready.catch(showError)
 
 async function start(): Promise<UIRoot> {
   const root = await createUIRoot({ renderer, scene: hostScene, camera, quality })
-  root.on('error', e => console.error('[glassui]', e.surface.name, e.error))
+  root.on('error', e => console.error('[glassui]', e.surface?.name ?? '(no Surface)', e.error))
   const surfaces: Surface[] = []
   if (mode !== 'world') {
     const form = buildSignup(root)

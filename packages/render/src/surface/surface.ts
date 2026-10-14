@@ -58,7 +58,12 @@ export interface QualitySettings {
  * the tier (every glass build reads the fill colours from here).
  */
 export interface SurfaceContext { theme: Theme; scheme: ColorScheme; layout: LayoutEngine; measure: MeasureFn; anim: AnimationRuntime; text: TextEngine; pages: AtlasPages; quality: QualitySettings; contrast: boolean }
-export interface SurfaceEventMap extends Object3DEventMap { error: { error: Error } }
+export interface SurfaceEventMap extends Object3DEventMap {
+  /** The Surface failed (`markFailed`: a frame or a rebuild threw, or the root's render isolation blamed it). */
+  error: { error: Error }
+  /** `dispose` ran (once, after everything was freed). */
+  dispose: object
+}
 
 /** `renderOrder` of each draw inside a Surface's `layer`; images take [images, images + ½) in z order (`ImageSet`). */
 export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, images: 3.5, glyphs: 4 } as const
@@ -211,7 +216,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * before the first: to the last) instead of leaving the canvas (`PointerBridge`). Default false.
    */
   trapFocus = false
-  /** Set when a frame threw: the Surface stops drawing (`visible = false`) and has emitted `{ type: 'error', error }`. */
+  /** Set when the Surface failed (`markFailed`): it stops drawing (`visible = false`) and has emitted `{ type: 'error', error }`. */
   error: Error | null = null
   /** True while animating. */
   needsFrame = false
@@ -253,6 +258,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private parts: Partition | null = null
   /** The atlas epoch the glyph batches were last built at (the pages are shared: another Surface may have seen the change). */
   private seenEpoch: number
+  private isDisposed = false
 
   constructor(opts: SurfaceOptions, ctx: SurfaceContext) {
     super()
@@ -400,13 +406,14 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * A quality change for this Surface: rebuilds the glass draws for `q` (and the blur pyramid for `q.blur`; a 'none'
    * Surface's behind-capture, which the 'fill' glass mode drops; the rims when it enters or leaves the 'fill' glass mode),
    * switches the content RT's texel type and marks the content dirty (the RT's size follows `q.contentScale` at the next
-   * `prepare`). A throw fails the Surface instead of propagating. It leaves the shared `ctx.quality` alone: the root
-   * owns that (it is what new Surfaces start from), replaces it on a tier change and then calls this on every Surface.
+   * `prepare`). A throw fails the Surface instead of propagating; a failed or disposed Surface only records `q`. It
+   * leaves the shared `ctx.quality` alone: the root owns that (it is what new Surfaces start from), replaces it on a
+   * tier change and then calls this on every Surface.
    */
   setQuality(q: QualitySettings): void {
     const wasFill = this.quality.glassMode === 'fill'
     this.quality = q
-    if (this.error) return
+    if (this.error || this.isDisposed) return
     try {
       this.syncPyramid(q)
       this.syncBehind(this.glass.buffer.count > 0 && q.glassMode !== 'fill')
@@ -414,7 +421,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       this.contentPass.setType(q.contentType)
       if (this.parts && wasFill !== (q.glassMode === 'fill')) this.fillRims(this.parts)
       this.contentDirty = true
-    } catch (e) { this.fail(e) }
+    } catch (e) { this.markFailed(e) }
   }
 
   /**
@@ -423,10 +430,10 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * optics come from `theme.glass`), the glass draws (rebuilt through `buildGlass`, so a 'none' Surface keeps its
    * behind-capture and a glass one its screen capture), and every node marked for layout, paint and text (a text
    * style's size and colour may come from the theme) with the content redrawn. A throw fails the Surface instead of
-   * propagating; a failed Surface ignores it.
+   * propagating; a failed or disposed Surface ignores it.
    */
   restyle(): void {
-    if (this.error) return
+    if (this.error || this.isDisposed) return
     try {
       const { theme, scheme } = this.ctx
       this.pointer.theme = theme
@@ -436,7 +443,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       this.buildGlass(this.quality)
       this.root.walk(n => { n.markDirty('layout'); n.markDirty('paint'); n.markDirty('text') })
       this.contentDirty = true
-    } catch (e) { this.fail(e) }
+    } catch (e) { this.markFailed(e) }
   }
 
   get root(): Node { return this.model.root }
@@ -514,9 +521,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The pointer's position on this Surface (pt), or null when it is elsewhere: where a press glows (the bridge sets it). */
   setPointer(pt: [number, number] | null): void { this.pointerPt = pt }
 
-  /** Layout → animation → render list → batches (sets `contentDirty`). A throw fails the Surface instead of propagating. */
+  /**
+   * Layout → animation → render list → batches (sets `contentDirty`). A throw fails the Surface instead of propagating;
+   * a failed or disposed Surface does nothing.
+   */
   tick(dt: number): void {
-    if (this.error) return
+    if (this.error || this.isDisposed) return
     this.lastDt = dt
     try {
       const root = this.root, ctx = this.ctx
@@ -539,7 +549,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       // ones only need a frame
       if (this.contentImages.pollChanged()) this.contentDirty = true
       if (this.foregroundImages.pollChanged()) this.needsFrame = true
-    } catch (e) { this.fail(e) }
+    } catch (e) { this.markFailed(e) }
   }
 
   private fill(list: RenderList, p: Partition): void {
@@ -567,12 +577,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * root calls it on every Surface when the epoch moved during its tick. True if it rebuilt.
    */
   refreshText(): boolean {
-    if (this.error || !this.parts || this.ctx.text.atlas.epoch === this.seenEpoch) return false
+    if (this.error || this.isDisposed || !this.parts || this.ctx.text.atlas.epoch === this.seenEpoch) return false
     try {
       this.fillText(this.parts)
       this.contentDirty = true
       return true
-    } catch (e) { this.fail(e); return false }
+    } catch (e) { this.markFailed(e); return false }
   }
 
   /** The glyph quads, laid out once more if the atlas evicted while they were built (their slots moved under them). */
@@ -631,10 +641,11 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * appears). Then the luma (`SurfaceLuma.update`, not in the 'fill' glass mode), from the content RT's own mips: on a
    * redraw and while its smoothing settles after one; on a glass Surface drawn with `camera` (the root passes its
    * own), every frame, over the slab's screen capture too (frosted as the slab frosts it); likewise on a 'none' Surface
-   * with a behind-capture, over that (unfrosted).
+   * with a behind-capture, over that (unfrosted). A throw fails the Surface instead of propagating; a failed or disposed
+   * Surface does nothing.
    */
   prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number, camera?: Camera): void {
-    if (this.error) return
+    if (this.error || this.isDisposed) return
     try {
       // the quality's scale caps supersampling: the RT never drops below one texel per CSS px (it is what the content
       // quad displays), so it only bites above DPR 1; the Surface's own `contentScale` multiplies the result
@@ -659,15 +670,27 @@ export class Surface extends Object3D<SurfaceEventMap> {
       const capture = this.screen ?? this.behindCapture, frost = this.screen ? SLAB_BEHIND : NO_FROST
       const behind = capture && camera ? { behind: { capture, camera, plane: this.plane, frost } } : {}
       this.luma.update({ renderer, glass: this.list?.glass ?? [], surface: this.model, content: this.contentPass.texture, dt: this.lastDt, redrawn, ...behind })
-    } catch (e) { this.fail(e) }
+    } catch (e) { this.markFailed(e) }
   }
 
-  private fail(e: unknown): void {
+  /**
+   * Stops the Surface for good: `error` set (`e`, made an `Error` if it is not one), hidden (`visible = false`), no more
+   * frames (`tick`, `prepare` and the rebuilds do nothing), then one `{ type: 'error', error }` event (a throwing
+   * listener is logged, never rethrown: this runs inside frames). It never ticks again, so its nodes' animation state is
+   * dropped (`AnimationRuntime.forget`) and their `whenSettled` promises resolve. The first failure stands: a failed or
+   * disposed Surface ignores it. Its own frames call it when they throw; the root, when its render isolation blames it.
+   */
+  markFailed(e: unknown): void {
+    if (this.error || this.isDisposed) return
     this.error = e instanceof Error ? e : new Error(String(e))
     this.visible = false; this.needsFrame = false
+    this.ctx.anim.forget(this.root)
     // a throwing listener must not escape the frame either
     try { this.dispatchEvent({ type: 'error', error: this.error }) } catch (le) { console.error('[glassui] an "error" listener threw:', le) }
   }
+
+  /** `dispose` has run: the Surface's resources are freed and it does nothing any more. */
+  get disposed(): boolean { return this.isDisposed }
 
   /** Surface-local bounds of the content face up to the top of its tallest glass (for the shadow-camera fit). */
   get glassBounds(): Box3 {
@@ -677,16 +700,28 @@ export class Surface extends Object3D<SurfaceEventMap> {
     return new Box3(new Vector3(-w / 2, -h / 2, 0), new Vector3(w / 2, h / 2, top + 0.01))   // never flat
   }
 
+  /**
+   * Frees everything the Surface holds (its animation and layout state, render targets, geometries, materials,
+   * captures), detaches it from its parent, then emits `{ type: 'dispose' }` (the root it belongs to drops it then, so a
+   * Surface disposed directly leaves `root.surfaces` too; a throwing listener is logged). Idempotent: a second call
+   * frees nothing and emits nothing.
+   */
   dispose(): void {
-    this.ctx.anim.forget(this.root)
-    this.ctx.layout.dispose(this.root)
-    this.contentPass.dispose(); this.pyramid?.dispose(); this.luma.dispose()
-    for (const b of [this.glass, this.panels, this.rims, this.pools, this.backgroundGlass]) b?.dispose()
-    this.foregroundText.dispose(); this.contentText.dispose(); this.foregroundImages.dispose(); this.contentImages.dispose()
-    for (const gm of this.glassMaterials) gm.dispose()
-    for (const m of this.materials) m.dispose()
-    this.screen?.dispose(); this.depth?.dispose(); this.dropBehind()
-    this.contentMesh.geometry.dispose()
-    this.removeFromParent()
+    if (this.isDisposed) return
+    this.isDisposed = true   // first: a throw below must not lead to anything being freed twice
+    try {
+      this.ctx.anim.forget(this.root)
+      this.ctx.layout.dispose(this.root)
+      this.contentPass.dispose(); this.pyramid?.dispose(); this.luma.dispose()
+      for (const b of [this.glass, this.panels, this.rims, this.pools, this.backgroundGlass]) b?.dispose()
+      this.foregroundText.dispose(); this.contentText.dispose(); this.foregroundImages.dispose(); this.contentImages.dispose()
+      for (const gm of this.glassMaterials) gm.dispose()
+      for (const m of this.materials) m.dispose()
+      this.screen?.dispose(); this.depth?.dispose(); this.dropBehind()
+      this.contentMesh.geometry.dispose()
+    } finally {
+      this.removeFromParent()
+      try { this.dispatchEvent({ type: 'dispose' }) } catch (le) { console.error('[glassui] a "dispose" listener threw:', le) }
+    }
   }
 }
