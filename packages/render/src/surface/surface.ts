@@ -3,7 +3,7 @@ import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { float, screenUV, texture, uniform, uv, vec2 } from 'three/tsl'
 import {
   apply, buildRenderList, createSurface, effectiveStyle, EventDispatcher, FocusManager, hitTest, PointerTracker, resolveColor,
-  type AnimationRuntime, type ColorScheme, type GlassInstance, type LayoutEngine, type MeasureFn, type Node, type RenderList, type RGBA, type SurfaceModel, type Theme,
+  type AnimationRuntime, type ColorScheme, type GlassInstance, type LayoutEngine, type MeasureFn, type Node, type RenderList, type RGBA, type SurfaceModel, type Theme, type UIEventType,
 } from '@glassui/core'
 import type { TextEngine } from '@glassui/text'
 import { GlassBatch, type TouchState } from '../glass/batch'
@@ -66,7 +66,7 @@ export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as 
 const NO_FROST = { level: 0, lift: 0 } as const
 
 /** Element handler types (`Node.handlers`) that make a node take the pointer on a `'none'` Surface. */
-const POINTER_HANDLERS = ['pointerdown', 'pointerup', 'pointermove', 'pointerenter', 'pointerleave', 'click', 'dblclick', 'contextmenu', 'wheel'] as const
+const POINTER_HANDLERS: readonly UIEventType[] = ['pointerdown', 'pointerup', 'pointermove', 'pointerenter', 'pointerleave', 'click', 'dblclick', 'contextmenu', 'wheel']
 
 /**
  * Whether `n` paints (glass, text, an image, a background other than `'none'`, a border) or is interactive (a `scroll`
@@ -79,9 +79,7 @@ function paintedOrInteractive(n: Node): boolean {
   if ((s.bg !== undefined && s.bg !== 'none') || s.border !== undefined) return true
   const t = n.props.tabIndex
   if (Number.isFinite(typeof t === 'number' || (typeof t === 'string' && t.trim() !== '') ? Number(t) : NaN)) return true
-  // `Node.handlers` (element handlers: Vue's on* props) is read when the node has it
-  const handlers = (n as { handlers?: ReadonlyMap<string, unknown> }).handlers
-  return handlers !== undefined && POINTER_HANDLERS.some(h => handlers.has(h))
+  return POINTER_HANDLERS.some(h => n.handlers.has(h))
 }
 
 /** The `'fill'` glass mode's colours, linear: the background slab's, the element glass's and its border's. */

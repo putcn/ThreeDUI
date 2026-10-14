@@ -210,8 +210,7 @@ describe('PointerBridge.handle', () => {
   it('keyboard goes to the active surface focus manager', () => {
     const { s, btn, bridge } = scene()
     bridge.handle('pointerdown', { clientX: 200, clientY: 140, pointerId: 1 }); bridge.handle('pointerup', { clientX: 200, clientY: 140, pointerId: 1 })
-    bridge.handle('keydown', { key: 'Tab' })
-    expect(s.focus.current).toBe(btn)
+    expect(s.focus.current).toBe(btn)                                                // the press focused it
     const onKey = vi.fn(); s.events.on(btn, 'keydown', onKey)
     bridge.handle('keydown', { key: 'Escape' })
     expect(onKey).toHaveBeenCalledTimes(1); expect(onKey.mock.calls[0]![0].key).toBe('Escape')
@@ -317,6 +316,48 @@ describe('PointerBridge.handle', () => {
     bridge.handle('pointerup', { clientX: 200, clientY: 140, pointerId: 1, pointerType: 'touch', button: 0, isPrimary: true })
     expect(click).toHaveBeenCalledTimes(1); expect(click.mock.calls[0]![0].pointerType).toBe('touch')
   })
+  it('a primary press focuses the nearest focusable without the ring; a right-button down dispatches contextmenu and presses nothing', () => {
+    const { s, btn, bridge, canvas } = scene()
+    const label = new Node('box', 'label'); label.setStyle({ position: 'absolute', left: 20, top: 20, width: 100, height: 20 }); btn.appendChild(label)
+    const plain = new Node('box', 'plain'); plain.setStyle({ position: 'absolute', left: 400, top: 100, width: 100, height: 80, bg: 'fill' }); s.root.appendChild(plain); s.tick(0)
+    bridge.handle('pointerdown', { clientX: 150, clientY: 130, pointerId: 1, button: 0 })   // on the label inside btn
+    expect(s.pointer.pressed).toBe(label)
+    expect(s.focus.current).toBe(btn); expect(btn.state.focused).toBe(true); expect(btn.state.focusVisible).toBe(false)
+    bridge.handle('pointerup', { clientX: 150, clientY: 130, pointerId: 1, button: 0 })
+    const menu = vi.fn(); btn.setHandler('contextmenu', menu)
+    const down = vi.fn(); s.events.on(btn, 'pointerdown', down)
+    bridge.handle('pointerdown', { clientX: 210, clientY: 150, pointerId: 1, button: 2 })
+    expect(menu).toHaveBeenCalledTimes(1)
+    const e = menu.mock.calls[0]![0]
+    expect(e.target).toBe(btn); expect(e.x).toBeCloseTo(210, 3); expect(e.y).toBeCloseTo(150, 3)
+    expect(down).not.toHaveBeenCalled(); expect(btn.state.pressed).toBe(false); expect(s.pointer.pressed).toBeNull()
+    expect(canvas.setPointerCapture).toHaveBeenCalledTimes(1)                        // only the primary press captured
+    expect(s.focus.current).toBe(btn)
+    bridge.handle('pointerup', { clientX: 210, clientY: 150, pointerId: 1, button: 2 })
+    bridge.handle('pointerdown', { clientX: 210, clientY: 150, pointerId: 1, button: 1 })   // middle: ignored
+    expect(menu).toHaveBeenCalledTimes(1); expect(down).not.toHaveBeenCalled()
+    bridge.handle('pointerdown', { clientX: 450, clientY: 140, pointerId: 1, button: 0 })   // nothing focusable there: blurs
+    expect(s.pointer.pressed).toBe(plain); expect(bridge.active).toBe(s)
+    expect(s.focus.current).toBeNull(); expect(btn.state.focused).toBe(false)
+  })
+  it('a right-button down leaves the active Surface and its focus alone, and cancels a press whose up was lost', () => {
+    const { a, b, ab, bb, bridge } = two()
+    ab.setProp('tabIndex', 0)
+    bridge.handle('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 }); bridge.handle('pointerup', { clientX: 100, clientY: 100, pointerId: 1 })
+    expect(a.focus.current).toBe(ab)
+    const menu = vi.fn(); bb.setHandler('contextmenu', menu)
+    bridge.handle('pointerdown', { clientX: 450, clientY: 350, pointerId: 1, button: 2 })   // on b
+    expect(menu).toHaveBeenCalledTimes(1); expect(bb.state.pressed).toBe(false)
+    expect(bridge.active).toBe(a); expect(a.focus.current).toBe(ab)
+    bridge.handle('pointerdown', { clientX: 2000, clientY: 2000, pointerId: 1, button: 2 })  // on nothing
+    expect(bridge.active).toBe(a); expect(a.focus.current).toBe(ab)
+    const cancel = vi.fn(); a.events.on(ab, 'pointercancel', cancel)
+    bridge.handle('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 })              // its up is lost…
+    bridge.handle('pointerdown', { clientX: 450, clientY: 350, pointerId: 1, button: 2 })   // …a chord would be a move
+    expect(cancel).toHaveBeenCalledTimes(1); expect(ab.state.pressed).toBe(false); expect(menu).toHaveBeenCalledTimes(2)
+    bridge.handle('pointermove', { clientX: 450, clientY: 350 })                             // no capture left
+    expect(bridge.hovered).toBe(b); expect(bb.state.hover).toBe(true)
+  })
   it('canvas pointerleave clears hover, unless a press holds the capture', () => {
     const { btn, bridge } = scene()
     bridge.handle('pointermove', { clientX: 200, clientY: 140 })
@@ -340,8 +381,8 @@ describe('PointerBridge.handle', () => {
     const { a, b, ab, bridge } = two()
     const ac = new Node('glass', 'ac'); ac.setStyle({ position: 'absolute', left: 300, top: 50, width: 100, height: 100 })
     a.root.appendChild(ac); a.tick(0)
-    ab.setProp('tabIndex', 0); ac.setProp('tabIndex', 0)
     bridge.handle('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 }); bridge.handle('pointerup', { clientX: 100, clientY: 100, pointerId: 1 })
+    ab.setProp('tabIndex', 0); ac.setProp('tabIndex', 0)                            // after the press, which would focus ab
     const prevent = vi.fn()
     bridge.handle('keydown', { key: 'Tab', shiftKey: true, preventDefault: prevent })
     expect(a.focus.current).toBe(ac); expect(prevent).toHaveBeenCalledTimes(1)   // Shift+Tab from nothing: the last

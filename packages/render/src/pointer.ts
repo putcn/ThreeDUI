@@ -108,14 +108,17 @@ const FAR = -1e6
  * pt → that Surface's core `PointerTracker` / `FocusManager` / `EventDispatcher` (its own raycast; `@pmndrs/pointer-events`
  * can replace `hitSurfaces` for XR rays).
  *
- * One pointer, as the trackers model it: secondary pointers (`isPrimary: false`) and non-primary buttons are ignored.
- * A press captures (as `setPointerCapture` does in the DOM): until up/cancel, moves and the up go to the pressed Surface
- * (`active`) at the ray's point on its content plane, even off its quad or over another Surface, and no other Surface
- * is hovered. Otherwise moves hover the Surface under the pointer (`hovered`; `hitSurfaces`: an empty area of a bare
- * 'none' Surface lets the pointer through), and the one left behind gets its hover
- * cleared. Keys go to `active`, the Surface last pressed (pressing another Surface, or nothing, blurs its focus); before
- * any press, the topmost interactive Surface is adopted. Tab steps through its focusables and is prevented, except past
- * the last (Shift+Tab: before the first), which blurs and lets the browser move focus out of the canvas.
+ * One pointer, as the trackers model it: secondary pointers (`isPrimary: false`) are ignored. A primary-button down
+ * presses and focuses (`FocusManager.focusFromPointer`: the nearest focusable at or above the pressed node, without the
+ * ring; none blurs); a right-button down only dispatches `contextmenu` at the hit node (no press, no capture, focus and
+ * `active` unchanged); other buttons are ignored. A press captures (as `setPointerCapture` does in the DOM): until
+ * up/cancel, moves and the up go to the pressed Surface (`active`) at the ray's point on its content plane, even off
+ * its quad or over another Surface, and no other Surface is hovered. Otherwise moves hover the Surface under the
+ * pointer (`hovered`; `hitSurfaces`: an empty area of a bare 'none' Surface lets the pointer through), and the one left
+ * behind gets its hover cleared. Keys go to `active`, the Surface last pressed (pressing another Surface, or nothing,
+ * blurs its focus); before any press, the topmost interactive Surface is adopted. Tab steps through its focusables and
+ * is prevented, except past the last (Shift+Tab: before the first), which blurs and lets the browser move focus out of
+ * the canvas.
  * `handle` is the testable core; `attach` wires the canvas events to it.
  */
 export class PointerBridge {
@@ -205,6 +208,13 @@ export class PointerBridge {
         break
       }
       case 'pointerdown': {
+        if (e.button === 2) {
+          // a chorded button arrives as a move, so a held press here lost its up: drop it
+          if (this.pressing) { this.active?.pointer.cancel(); this.pressing = false }
+          const hit = this.cast(e)
+          if (hit) hit.surface.pointer.contextMenu(hit.x, hit.y, ptype)
+          break
+        }
         if (e.button !== undefined && e.button !== 0) break
         const hit = this.cast(e)
         // a held press whose up was lost: its tracker releases it on a down of its own, another Surface's cannot
@@ -214,6 +224,7 @@ export class PointerBridge {
         this.hover(hit?.surface ?? null, ptype)
         if (!hit) break
         hit.surface.setPointer([hit.x, hit.y]); hit.surface.pointer.down(hit.x, hit.y, ptype)
+        hit.surface.focus.focusFromPointer(hit.surface.pointer.pressed)
         this.pressing = true
         if (e.pointerId !== undefined) this.opts.canvas.setPointerCapture?.(e.pointerId)
         break

@@ -573,12 +573,15 @@ describe('Surface', () => {
     wrap.setProp('tabIndex', null)
     expect(s.takesPointer(300, 150)).toBe(false)
     // element handlers (`Node.handlers`, Vue's on* props): a pointer type takes, a key type does not; only on the hit path
-    const handlers = new Map<string, unknown>([['keydown', () => {}]])
-    Object.defineProperty(inner, 'handlers', { value: handlers, configurable: true })
+    inner.setHandler('keydown', () => {})
     expect(s.takesPointer(310, 210)).toBe(false)
-    handlers.set('click', () => {})
+    inner.setHandler('click', () => {})
     expect(s.takesPointer(310, 210)).toBe(true); expect(s.takesPointer(300, 150)).toBe(false)
-    inner.setStyle({ border: { width: 1, color: 'separator' } }); handlers.clear(); s.tick(0)
+    inner.setHandler('click', null)
+    expect(s.takesPointer(310, 210)).toBe(false)
+    inner.setHandler('contextmenu', () => {})
+    expect(s.takesPointer(310, 210)).toBe(true)
+    inner.setStyle({ border: { width: 1, color: 'separator' } }); inner.setHandler('contextmenu', null); inner.setHandler('keydown', null); s.tick(0)
     expect(s.takesPointer(310, 210)).toBe(true)                        // a border paints
     s.root.setStyle({ bg: '#00000040' }); s.tick(0)
     expect(s.takesPointer(300, 150)).toBe(true)                        // a root background paints the whole Surface
