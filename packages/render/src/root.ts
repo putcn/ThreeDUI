@@ -8,7 +8,7 @@ import { createMeasureFn } from './text/measure'
 import { AtlasPages } from './text/pages'
 import { createStudioEnvironment, createUILights, fitShadowCamera, UI_ENV_INTENSITY } from './lighting/lights'
 import { PointerBridge, type CanvasLike } from './pointer'
-import { defaultTier, QUALITY, QualityController, type QualityProfile, type QualityTier } from './quality'
+import { checkQualityTier, defaultTier, QUALITY, QualityController, type QualityProfile, type QualityTier } from './quality'
 import { FrameSampler, FrameScheduler } from './scheduler'
 import { projectPolygon } from './project'
 
@@ -30,7 +30,10 @@ export interface UIRenderer extends RendererLike {
 export interface UIRootOptions {
   renderer: UIRenderer; scene: Scene; camera: PerspectiveCamera | OrthographicCamera
   theme?: Theme; scheme?: ColorScheme
-  /** `'auto'` (default): from the device (touch → medium, reduced transparency → minimal) and adapting to frame time; a tier: fixed. */
+  /**
+   * `'auto'` (default): from the device (touch → medium, reduced transparency → minimal) and adapting to frame time; a
+   * tier: fixed. Anything else rejects with a `GlassUIError` naming the allowed values.
+   */
   quality?: QualityTier | 'auto'
   /** Default: a `SystemFontEngine` over `createCanvas` (default: DOM canvases). */
   text?: TextEngine; createCanvas?: CanvasFactory
@@ -109,6 +112,7 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  */
 export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const { renderer, scene, camera } = opts
+  if (opts.quality !== undefined) checkQualityTier('createUIRoot.quality', opts.quality, true)   // before touching the renderer
   try { await renderer.init?.() } catch (e) {
     throw new GlassUIError('createUIRoot', `渲染后端初始化失败（WebGPU 与 WebGL2 都不可用）：${e instanceof Error ? e.message : String(e)}`)
   }

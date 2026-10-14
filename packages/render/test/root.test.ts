@@ -2,9 +2,10 @@ import { describe, it, expect, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
 import { Box3, PerspectiveCamera, Scene, Texture, Vector2, Vector3, VSMShadowMap, type DirectionalLight } from 'three'
 import type { WebGPURenderer } from 'three/webgpu'
-import { Node } from '@glassui/core'
+import { GlassUIError, Node } from '@glassui/core'
 import { createUIRoot, type UIRenderer, type UIRootOptions } from '../src/root'
 import type { Surface } from '../src/surface/surface'
+import type { QualityTier } from '../src/quality'
 
 // Type-level guard (checked by `pnpm typecheck`): the real renderer satisfies the stub-able subset.
 export const asUIRenderer = (r: WebGPURenderer): UIRenderer => r
@@ -58,6 +59,17 @@ describe('createUIRoot', () => {
     expect((await createUIRoot(webgl)).backend).toBe('webgl2')
     const { backend: _, ...bare } = stubRenderer()
     expect((await createUIRoot({ ...base(), renderer: bare })).backend).toBe('unknown')
+  })
+  it('rejects an unknown quality tier readably, at createUIRoot and at root.quality.set', async () => {
+    const o = { ...base(), quality: 'ultra' as QualityTier }
+    await expect(createUIRoot(o)).rejects.toThrow(GlassUIError)
+    await expect(createUIRoot(o)).rejects.toThrow(/\[createUIRoot\.quality\] 未知的画质档位 "ultra"。允许值：high, medium, low, minimal, auto/)
+    expect(o.renderer.shadowMap.enabled).toBe(false)             // before touching the renderer
+    const root = await createUIRoot(base())
+    const s = root.createSurface({ width: 10, height: 10, fill: true })
+    expect(() => root.quality.set('minimum' as QualityTier)).toThrow(/未知的画质档位.*你可能想要：minimal/)
+    root.tick(1 / 60)
+    expect(s.error).toBeNull(); expect(root.quality.tier).toBe('medium')
   })
   it('rejects readably when the backend cannot initialise', async () => {
     const o = { ...base(), renderer: stubRenderer(async () => { throw new Error('no adapter') }) }

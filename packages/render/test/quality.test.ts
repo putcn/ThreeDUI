@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import { GlassUIError } from '@glassui/core'
 import { QualityController, QUALITY, defaultTier, type QualityTier } from '../src/quality'
 
 describe('QUALITY tiers', () => {
@@ -11,6 +12,20 @@ describe('QUALITY tiers', () => {
   it('each profile names its own tier and is frozen, as is the table (every root shares them)', () => {
     for (const t of ['high', 'medium', 'low', 'minimal'] as const) { expect(QUALITY[t].tier).toBe(t); expect(Object.isFrozen(QUALITY[t])).toBe(true) }
     expect(Object.isFrozen(QUALITY)).toBe(true)
+  })
+})
+
+describe('QualityController: tier names', () => {
+  it('rejects an unknown tier readably instead of leaving the profile undefined', () => {
+    const q = new QualityController({ initial: 'medium' })
+    expect(() => q.set('ultra' as QualityTier)).toThrow(GlassUIError)
+    expect(() => q.set('hgih' as QualityTier)).toThrow(/\[QualityController\.set\] 未知的画质档位 "hgih"。允许值：high, medium, low, minimal。你可能想要：high/)
+    expect(q.tier).toBe('medium'); expect(q.profile).toBe(QUALITY.medium)
+    const pinned = new QualityController({ initial: 'medium', reducedTransparency: true })
+    expect(() => pinned.set('auto' as QualityTier)).toThrow(GlassUIError)   // not even recorded for later
+    pinned.setReducedTransparency(false); expect(pinned.tier).toBe('medium')
+    expect(() => new QualityController({ initial: 'max' as QualityTier })).toThrow(/\[QualityController\] 未知的画质档位 "max"/)
+    expect(() => new QualityController({ cap: 'none' as QualityTier })).toThrow(GlassUIError)
   })
 })
 

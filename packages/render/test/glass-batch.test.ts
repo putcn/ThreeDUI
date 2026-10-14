@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { InstancedBufferGeometry, Matrix3, Vector3 } from 'three'
 import { Node, IDENTITY, scaleAbout, type GlassInstance, type ResolvedGlass } from '@glassui/core'
-import { GlassBatch, GLASS_ATTRS } from '../src/glass/batch'
+import { GlassBatch, GLASS_ATTRS, MIN_THICKNESS } from '../src/glass/batch'
 import { slabVertex } from '../src/glass/vertex'
 import { createSlabBaseGeometry, evalSlabVertex, type SlabInstanceParams } from '../src/glass/slab9'
 import { instanceMatrix } from '../src/transform'
@@ -32,6 +32,25 @@ describe('GlassBatch', () => {
     expect(b.buffer.get(0, 'iClipRect')[2]).toBe(-1)
     expect(b.geometry.instanceCount).toBe(2)
     expect(GLASS_ATTRS).toHaveLength(14)
+  })
+  it('never packs a slab thinner than MIN_THICKNESS, nor a fillet outside [0, thickness] (0 or an overshooting spring gave NaN glass)', () => {
+    const shape = (p: Partial<ResolvedGlass>) => { const b = new GlassBatch(); b.update([inst('g', 1, { params: { ...params, ...p } })], s); return b.buffer.get(0, 'iShape') }
+    const eps = Math.fround(MIN_THICKNESS / 100)
+    for (const thickness of [0, -3, NaN]) {
+      const [, t, f, fb] = shape({ thickness })
+      expect(t).toBe(eps); expect(f).toBe(eps); expect(fb).toBe(eps)   // the fillets follow it down
+    }
+    expect(shape({ fillet: -1, filletBottom: -2 }).slice(2)).toEqual([0, 0])
+    expect(shape({ fillet: 20, filletBottom: NaN }).slice(1)).toEqual(f32([0.08, 0.08, 0]))
+    // the slab such an instance builds is finite everywhere (the CPU twin of the vertex stage)
+    const b = new GlassBatch(8, 8); b.update([inst('g', 1, { params: { ...params, thickness: 0, fillet: 0, filletBottom: 0 } })], s)
+    const [, , width, height] = b.buffer.get(0, 'iRect'), [radius, thickness, fillet, filletBottom] = b.buffer.get(0, 'iShape')
+    const p: SlabInstanceParams = { width: width!, height: height!, radius: radius!, thickness: thickness!, fillet: fillet!, filletBottom: filletBottom!, cornerExponent: 2, profile: 0 }
+    const slab = b.geometry.getAttribute('slab')
+    for (let i = 0; i < slab.count; i++) {
+      const v = evalSlabVertex({ ax: slab.getX(i), ay: slab.getY(i), angle: slab.getZ(i), ring: slab.getW(i) }, p, b.K)
+      expect([...v.position, ...v.normal].every(Number.isFinite)).toBe(true)
+    }
   })
   it('clear + adaptive glass gets its batch index as luma index', () => {
     const b = new GlassBatch()

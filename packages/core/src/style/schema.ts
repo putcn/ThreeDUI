@@ -10,9 +10,12 @@ const Token = z.string()   // design-token name or literal colour; resolved by t
 const Glow = z.object({ color: Token, strength: z.number().min(0), split: z.number().min(0).max(1).optional() }).strict()
 const Border = z.object({ width: Pt, color: Token }).strict()
 
+/** A glass slab's thickness or fillet: a negative one would turn the slab inside out (0 is clamped by the renderer). */
+const SlabPt = Pt.nonnegative('不能为负数（pt）')
+
 export const GlassParamsSchema = z.object({
   variant: z.enum(['regular', 'clear']).optional(),
-  thickness: Pt.optional(), fillet: Pt.optional(), filletBottom: Pt.optional(),
+  thickness: SlabPt.optional(), fillet: SlabPt.optional(), filletBottom: SlabPt.optional(),
   profile: z.enum(['fillet', 'lens']).optional(),
   scatter: z.number().min(0).max(1).optional(), lift: z.number().min(0).max(1).optional(),
   edgeGlow: z.number().min(0).optional(),
@@ -24,10 +27,12 @@ export const GlassParamsSchema = z.object({
   cornerExponent: z.number().min(2).optional(),
 }).strict()
 
+// The bounds `Spring` checks when the transition first runs (animation/spring.ts), so `setStyle` rejects what it would
+// throw on later; a `response` > 0 gives stiffness (2π/response)² > 0, a `dampingFraction` ≥ 0 damping ≥ 0.
 const Transition = z.union([
   z.enum(['snappy', 'smooth', 'bouncy']),
-  z.object({ stiffness: z.number(), damping: z.number(), mass: z.number().optional() }).strict(),
-  z.object({ response: z.number(), dampingFraction: z.number() }).strict(),
+  z.object({ stiffness: z.number().positive(), damping: z.number().nonnegative(), mass: z.number().positive().optional() }).strict(),
+  z.object({ response: z.number().positive(), dampingFraction: z.number().nonnegative() }).strict(),
   z.object({ duration: z.number(), easing: z.enum(['linear', 'ease-in', 'ease-out', 'ease-in-out']) }).strict(),
 ])
 
@@ -114,7 +119,7 @@ const UNION_ALLOWED: Record<string, readonly string[]> = {
   bg: ['glass', 'glass-clear', 'none', '<颜色 token 或 #hex>'],
   radius: ['number(pt)', 'capsule', 'concentric', '<radius token>'],
   fontSize: ['number(pt)', '<fontSize token>'],
-  transition: ['snappy', 'smooth', 'bouncy', '{stiffness,damping,mass?}', '{response,dampingFraction}', '{duration,easing}'],
+  transition: ['snappy', 'smooth', 'bouncy', '{stiffness>0,damping≥0,mass?>0}', '{response>0,dampingFraction≥0}', '{duration,easing}'],
   ...Object.fromEntries(Object.entries(Base.shape).filter(([, s]) => s.unwrap() === Length).map(([k]) => [k, LENGTH_ALLOWED])),
 }
 

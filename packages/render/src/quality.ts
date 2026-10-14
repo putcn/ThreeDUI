@@ -1,3 +1,4 @@
+import { GlassUIError } from '@glassui/core'
 import type { QualitySettings } from './surface/surface'
 
 export type QualityTier = 'high' | 'medium' | 'low' | 'minimal'
@@ -18,6 +19,15 @@ export const QUALITY: Readonly<Record<QualityTier, Readonly<QualityProfile>>> = 
   minimal: Object.freeze({ tier: 'minimal', contentType: 'byte', contentScale: 0.25, backFaces: false, depthReject: false, shadowMap: 512, blur: 'mip', glassMode: 'fill', dispersion: 'never' }),
 })
 const ORDER: QualityTier[] = ['minimal', 'low', 'medium', 'high']
+/** The tier names, best first. */
+export const QUALITY_TIERS: readonly QualityTier[] = Object.freeze(['high', 'medium', 'low', 'minimal'])
+export const isQualityTier = (t: unknown): t is QualityTier => typeof t === 'string' && (QUALITY_TIERS as readonly string[]).includes(t)
+/** Throws a readable `GlassUIError` (scope `scope`) unless `t` is a tier name (or, with `auto`, `'auto'`). */
+export function checkQualityTier(scope: string, t: unknown, auto = false): void {
+  if (isQualityTier(t) || (auto && t === 'auto')) return
+  const allowed = auto ? [...QUALITY_TIERS, 'auto'] : QUALITY_TIERS
+  throw new GlassUIError(scope, `未知的画质档位 "${String(t)}"`, { allowed, got: String(t) })
+}
 
 export function defaultTier(env: { touch: boolean; reducedTransparency: boolean }): QualityTier {
   return env.reducedTransparency ? 'minimal' : env.touch ? 'medium' : 'high'
@@ -49,6 +59,8 @@ export class QualityController {
   private readonly listeners = new Set<(tier: QualityTier, prev: QualityTier) => void>()
   private readonly queue: [tier: QualityTier, prev: QualityTier][] = []
   constructor(opts: { initial?: QualityTier; cap?: QualityTier; reducedTransparency?: boolean; window?: number } = {}) {
+    if (opts.initial !== undefined) checkQualityTier('QualityController', opts.initial)
+    if (opts.cap !== undefined) checkQualityTier('QualityController', opts.cap)
     this.cap = opts.cap ?? opts.initial ?? 'high'
     this.reduced = opts.reducedTransparency ?? false
     this.window = opts.window ?? 30
@@ -58,8 +70,12 @@ export class QualityController {
   get profile(): Readonly<QualityProfile> { return QUALITY[this.current] }
   onChange(fn: (tier: QualityTier, prev: QualityTier) => void): () => void { this.listeners.add(fn); return () => this.listeners.delete(fn) }
 
-  /** Switches to `tier`; while pinned, records it (at most the cap) as where clearing the pin returns instead. */
+  /**
+   * Switches to `tier`; while pinned, records it (at most the cap) as where clearing the pin returns instead. Throws a
+   * `GlassUIError` on an unknown tier name (nothing changes).
+   */
   set(tier: QualityTier): void {
+    checkQualityTier('QualityController.set', tier)
     if (this.reduced) { this.resume = ORDER.indexOf(tier) > ORDER.indexOf(this.cap) ? this.cap : tier; return }
     this.change(tier)
   }

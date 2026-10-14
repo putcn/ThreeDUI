@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { validateStyle, STYLE_KEYS } from '../src/style/schema'
+import { GlassUIError } from '../src/errors'
 import type { Length } from '../src/style/schema'
 
 describe('validateStyle', () => {
@@ -70,11 +71,33 @@ describe('validateStyle: nested keys, nested values and union errors', () => {
       .toThrow('[style.hover.inset] 非法取值 "true"。允许值：number(pt), "N%", auto')
     expect(() => validateStyle({ fontSize: true }))
       .toThrow('[style.fontSize] 非法取值 "true"。允许值：number(pt), <fontSize token>')
-    const transitionAllowed = '允许值：snappy, smooth, bouncy, {stiffness,damping,mass?}, {response,dampingFraction}, {duration,easing}'
+    const transitionAllowed = '允许值：snappy, smooth, bouncy, {stiffness>0,damping≥0,mass?>0}, {response>0,dampingFraction≥0}, {duration,easing}'
     expect(() => validateStyle({ transition: { opacity: 'snapy' } }))
       .toThrow(`[style.transition.opacity] 非法取值 "snapy"。${transitionAllowed}。你可能想要：snappy`)
     expect(() => validateStyle({ transition: { opacity: { stiffness: 1 } } }))
       .toThrow(`[style.transition.opacity] 非法取值 "{"stiffness":1}"。${transitionAllowed}`)
+  })
+
+  it('rejects spring parameters the spring would throw on later, at setStyle (spec §4.1)', () => {
+    const transitionAllowed = '允许值：snappy, smooth, bouncy, {stiffness>0,damping≥0,mass?>0}, {response>0,dampingFraction≥0}, {duration,easing}'
+    for (const bad of [{ stiffness: 0, damping: 10 }, { stiffness: -1, damping: 10 }, { stiffness: 100, damping: -1 }, { stiffness: 100, damping: 10, mass: 0 },
+      { stiffness: 100, damping: 10, mass: -2 }, { response: 0, dampingFraction: 0.8 }, { response: -0.3, dampingFraction: 0.8 }, { response: 0.3, dampingFraction: -0.1 },
+      { stiffness: Infinity, damping: 10 }, { stiffness: NaN, damping: 10 }]) {
+      expect(() => validateStyle({ transition: { scale: bad } }), JSON.stringify(bad)).toThrow(GlassUIError)
+      expect(() => validateStyle({ pressed: { transition: { opacity: bad } } }), JSON.stringify(bad)).toThrow(transitionAllowed)
+    }
+    expect(() => validateStyle({ transition: { scale: { stiffness: 0, damping: 10 } } })).toThrow(`[style.transition.scale] 非法取值 "{"stiffness":0,"damping":10}"。${transitionAllowed}`)
+    // the edges a spring accepts: no damping (it never settles, but it is finite), a critically damped response form
+    expect(validateStyle({ transition: { scale: { stiffness: 300, damping: 0 }, opacity: { response: 0.3, dampingFraction: 0 }, x: { stiffness: 1, damping: 1, mass: 0.5 } } }).transition?.scale)
+      .toEqual({ stiffness: 300, damping: 0 })
+  })
+
+  it('rejects a negative glass thickness or fillet (a slab of 0 is clamped by the renderer)', () => {
+    for (const key of ['thickness', 'fillet', 'filletBottom'] as const) {
+      expect(() => validateStyle({ glass: { [key]: -1 } })).toThrow(GlassUIError)
+      expect(() => validateStyle({ hover: { glass: { [key]: -0.5 } } })).toThrow(`[style.hover.glass.${key}] 不能为负数`)
+      expect(validateStyle({ glass: { [key]: 0 } }).glass?.[key]).toBe(0)
+    }
   })
 
   it('restricts transition keys to animatable properties', () => {

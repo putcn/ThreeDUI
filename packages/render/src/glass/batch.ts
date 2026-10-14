@@ -13,6 +13,14 @@ export const REFLECTION_STRENGTH = 0.2
 
 export interface TouchState { u: number; v: number; press: number }
 
+/**
+ * The thinnest slab packed (pt). The refraction and the Beer–Lambert tint divide by the thickness, so a slab of 0 — a
+ * style's `thickness: 0`, or a spring overshooting below it — would draw NaN (black) glass.
+ */
+export const MIN_THICKNESS = 0.01
+/** `v` clamped to [lo, hi]; a non-finite `v` is `lo`. */
+const clampPt = (v: number, lo: number, hi: number): number => Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo
+
 /** All glass elements of one Surface as instances of the shared slab geometry, sorted far→near by `z`. */
 export class GlassBatch {
   readonly geometry: InstancedBufferGeometry
@@ -40,7 +48,9 @@ export class GlassBatch {
       const p = inst.params
       const [cx, cy] = surfaceToLocal(inst.rect.x + inst.rect.width / 2, inst.rect.y + inst.rect.height / 2, s)
       b.set(i, 'iRect', cx, cy, inst.rect.width / ppu, inst.rect.height / ppu)
-      b.set(i, 'iShape', inst.radius / ppu, p.thickness / ppu, p.fillet / ppu, p.filletBottom / ppu)
+      // never 0 thick, fillets within [0, thickness] (the slab profile then fits them into it)
+      const thickness = clampPt(p.thickness, MIN_THICKNESS, Infinity)
+      b.set(i, 'iShape', inst.radius / ppu, thickness / ppu, clampPt(p.fillet, 0, thickness) / ppu, clampPt(p.filletBottom, 0, thickness) / ppu)
       b.set(i, 'iCorner', p.cornerExponent, p.profile === 'lens' ? 1 : 0, p.lift, p.edgeGlow)
       writeMatrixRows(b, i, instanceMatrix(inst, s, this.m))
       b.set(i, 'iOptics', p.ior, p.dispersion, p.roughness, p.scatter)
