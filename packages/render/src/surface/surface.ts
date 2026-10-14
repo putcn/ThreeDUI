@@ -1,4 +1,4 @@
-import { AddEquation, Box3, Color, CustomBlending, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Vector2, Vector3, type Material, type Object3DEventMap, type Texture } from 'three'
+import { AddEquation, Box3, Color, CustomBlending, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Vector2, Vector3, type Camera, type Material, type Object3DEventMap, type Texture } from 'three'
 import { MeshStandardNodeMaterial } from 'three/webgpu'
 import { texture, uniform, uv, vec2 } from 'three/tsl'
 import {
@@ -8,6 +8,7 @@ import {
 import type { TextEngine } from '@glassui/text'
 import { GlassBatch, type TouchState } from '../glass/batch'
 import { createGlassMaterial, DepthCapture, ScreenCapture, type GlassMaterial } from '../glass/material'
+import { SLAB_BEHIND, SLAB_FROST } from '../glass/frost'
 import { PanelBatch, cornerExponentFor } from '../panel/batch'
 import { createPanelMaterial } from '../panel/material'
 import { DecorationBatch } from '../decoration/batch'
@@ -32,8 +33,7 @@ export interface SurfaceEventMap extends Object3DEventMap { error: { error: Erro
 
 /** `renderOrder` of each draw inside a Surface's `layer`; images take [images, images + ½) in z order (`ImageSet`). */
 export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, images: 3.5, glyphs: 4 } as const
-/** The frosted background slab's roughness and lift; element glass on such a Surface sees what is behind it as the slab does. */
-export const SLAB_FROST = { roughness: 0.4, lift: 0.07 } as const
+export { SLAB_FROST } from '../glass/frost'
 /** `renderOrder` of each draw inside the content RT's scene. */
 export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as const
 
@@ -214,7 +214,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       }
     }
     // the slab's captures, which predate this Surface's draws: the slab is its first draw
-    const behind = slab && screen ? { screen, screenLevel: SLAB_FROST.roughness * 8, screenLift: SLAB_FROST.roughness * 0.08 + SLAB_FROST.lift, depthReject: q.depthReject, ...(depth ? { depth } : {}) } : {}
+    const behind = slab && screen ? { screen, screenLevel: SLAB_BEHIND.level, screenLift: SLAB_BEHIND.lift, depthReject: q.depthReject, ...(depth ? { depth } : {}) } : {}
     const element: GlassMaterial[] = []
     for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
       if (!on) continue
@@ -399,9 +399,10 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /**
    * Sizes the content RT (and the pyramid) for the Surface's projected size and redraws it when dirty (a resize makes it
    * dirty), then the pyramid: the content RT is its only input, so a clean RT means a current pyramid. Then the luma
-   * (`SurfaceLuma.update`): on a redraw and while its smoothing settles after one, from the content RT's own mips.
+   * (`SurfaceLuma.update`), from the content RT's own mips: on a redraw and while its smoothing settles after one; on a
+   * glass Surface drawn with `camera` (the root passes its own), every frame, over the slab's screen capture too.
    */
-  prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number): void {
+  prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number, camera?: Camera): void {
     if (this.error) return
     try {
       const size = contentRTSize(projectedPx, dpr, { scale: this.quality.contentScale * this.contentScale })
@@ -414,7 +415,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
         this.pyramid?.render(renderer, this.contentPass.texture)
         this.contentDirty = false
       }
-      this.luma.update(renderer, this.list?.glass ?? [], this.model, this.contentPass.texture, this.lastDt, redrawn)
+      const behind = this.screen && camera ? { behind: { capture: this.screen, camera, plane: this.plane } } : {}
+      this.luma.update({ renderer, glass: this.list?.glass ?? [], surface: this.model, content: this.contentPass.texture, dt: this.lastDt, redrawn, ...behind })
     } catch (e) { this.fail(e) }
   }
 

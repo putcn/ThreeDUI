@@ -249,7 +249,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       for (const s of surfaces) if (!s.error && (s.contentDirty || s.needsFrame)) changed = true   // rebuilt or animating
       assignDrawOrders()
       const dpr = renderer.getPixelRatio()
-      each(s => s.prepare(renderer, projectedPx(s), dpr))
+      each(s => s.prepare(renderer, projectedPx(s), dpr, camera))   // a glass Surface's luma projects its glass with it
       fitShadows(changed)
     },
     render() {

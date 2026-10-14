@@ -289,6 +289,7 @@ describe('createUIRoot', () => {
     root.tick(1 / 60)
     expect(refresh).toHaveReturnedWith(true)
     expect(refresh.mock.invocationCallOrder[0]!).toBeLessThan(prepare.mock.invocationCallOrder[0]!)
+    expect(prepare.mock.calls[0]![3]).toBe(o.camera)            // a glass Surface's luma projects its glass with it
     expect(a.contentDirty).toBe(false)                         // drawn after the refresh
   })
   it('a listener removing Surfaces mid-tick does not make the tick skip the next one, nor touch a removed one', async () => {

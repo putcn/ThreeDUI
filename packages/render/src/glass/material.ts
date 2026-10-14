@@ -1,5 +1,5 @@
 import { BackSide, DataTexture, FrontSide, RGBAFormat, UnsignedByteType, type InstancedBufferGeometry, type Texture, type Vector2 } from 'three'
-import { MeshPhysicalNodeMaterial, ViewportDepthTextureNode, ViewportTextureNode, type Node, type TextureNode, type UniformNode } from 'three/webgpu'
+import { MeshPhysicalNodeMaterial, ViewportDepthTextureNode, ViewportTextureNode, type Node, type NodeFrame, type TextureNode, type UniformNode } from 'three/webgpu'
 import {
   attribute, float, vec2, vec3, vec4, uniform, texture, varying, positionView, positionViewDirection, normalView,
   transformNormalToView, negateOnBackSide, modelViewMatrix, cameraProjectionMatrix, viewportMipTexture,
@@ -7,6 +7,7 @@ import {
 } from 'three/tsl'
 import { GlassUIError } from '@glassui/core'
 import { GLASS_ATTRS } from './batch'
+import { FROST } from './frost'
 import { slabVertex } from './vertex'
 
 export interface GlassMaterialOptions {
@@ -82,14 +83,29 @@ function freeCopies(node: Capture, ownsTemplate: boolean): void {
   node.copies.clear()
 }
 
-/** `viewportMipTexture()` that frees every framebuffer copy, and its own template, on `dispose`. */
+/**
+ * `viewportMipTexture()` that frees every framebuffer copy, and its own template, on `dispose`, and records on its base
+ * the copy the last render made (`latest`).
+ */
 export class ScreenCapture extends ViewportTextureNode {
   readonly copies = new Set<Texture>()
+  /**
+   * The texture the last copy went into (with its mips), whichever target the render was for (the canvas: three r186
+   * resolves it as the renderer's `CanvasTarget`, so never the template `getTextureForReference(null)` returns; or a
+   * host's render target): what was on screen before this capture's first draw then. Null before the first copy.
+   */
+  latest: Texture | null = null
   /** It made its template (no texture passed in; `clone()` passes the base's). */
   private readonly ownsTemplate: boolean
   constructor(...args: ConstructorParameters<typeof ViewportTextureNode>) { super(...args); this.generateMipmaps = true; this.ownsTemplate = args[2] == null }
   override getTextureForReference(reference?: CaptureReference): Texture { return record(this, super.getTextureForReference(reference)) }
-  override dispose(): void { freeCopies(this, this.ownsTemplate); super.dispose() }
+  /** A sampled clone copies into the texture `updateReference` just resolved (its `value` is the base's): record it there. */
+  override updateBefore(frame: NodeFrame): boolean | undefined {
+    const r = super.updateBefore(frame), base = (this.referenceNode as ScreenCapture | null) ?? this
+    base.latest = this.value
+    return r
+  }
+  override dispose(): void { freeCopies(this, this.ownsTemplate); this.latest = null; super.dispose() }
 }
 
 /** `viewportDepthTexture()` that frees every depth copy on `dispose`; its template is three's, shared by all: kept. */
@@ -210,7 +226,7 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const clipDist = length(max(q, 0)).add(min(max(q.x, q.y), 0)).sub(clipR)
   m.maskNode = clipR.lessThan(0).or(clipDist.lessThanEqual(0))
 
-  const lod = roughness.mul(8)
+  const lod = roughness.mul(FROST.levelPerRoughness)
   const V = positionViewDirection, N = normalView
   // floored base: WGSL pow is exp2(y·log2 x), undefined at x = 0 (N·V = 1)
   const fresnel = pow(max(float(1).sub(clamp(dot(N, V), 0, 1)), 1e-6), 2.5)
@@ -271,7 +287,7 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const r = channel(float(1).sub(k)), g = channel(float(1)), b = channel(float(1).add(k))
   let c: Node<'vec3'> = vec3(r.c.r, g.c.g, b.c.b)
   c = c.mul(exp(float(1).sub(tint).mul(absorption).mul(g.t1.div(thickness)).negate()))   // Beer–Lambert
-  c = mix(c, vec3(1), roughness.mul(0.08).add(lift))                                      // frost + lift
+  c = mix(c, vec3(1), roughness.mul(FROST.liftPerRoughness).add(lift))                    // frost + lift
   if (contentTex) {
     // planar reflection (spec §5.4): mirror the reflected ray below the plane and sample the content where it lands
     const Rr = reflect(V.negate(), N)

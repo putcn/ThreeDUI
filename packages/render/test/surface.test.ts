@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { CustomBlending, DataTexture, FrontSide, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material, type RenderTarget } from 'three'
+import { CustomBlending, DataTexture, FramebufferTexture, FrontSide, PerspectiveCamera, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material, type RenderTarget } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial, type MeshBasicNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
@@ -10,6 +10,7 @@ import { createMeasureFn } from '../src/text/measure'
 import { REFLECTION_STRENGTH } from '../src/glass/batch'
 import { srgbToLinear } from '../src/color'
 import { surfaceToLocal } from '../src/units'
+import { ScreenCapture } from '../src/glass/material'
 import { buildShaders } from './fixtures/build-shaders'
 import { evalNode } from './fixtures/tsl-eval'
 
@@ -667,6 +668,24 @@ describe('Surface: adaptive luma (clear + adaptive glass, spec §5.3)', () => {
     const luma = r.drawn[1]!.texture
     expect(sampledBy(meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab))).not.toContain(luma)
     expect(sampledBy(elementGlass(s))).toContain(luma)
+  })
+  it('a glass Surface drawn with a camera measures every frame, quiet ones too, over the slab capture\'s latest copy; a \'none\' one settles', () => {
+    const camera = new PerspectiveCamera(40, 4 / 3, 0.1, 100); camera.position.z = 8; camera.updateMatrixWorld()
+    const glass = clearGlass(ctx, { variant: 'clear', adaptive: true }, 'glass'), none = clearGlass()
+    const capture = nodesOf((meshes(glass).find(m => m.renderOrder === SURFACE_ORDER.slab)!.material as MeshPhysicalNodeMaterial).backdropNode)
+      .find((n): n is GraphNode & ScreenCapture => n instanceof ScreenCapture)!.getBase() as ScreenCapture
+    const rs = [recording(), recording()] as const
+    for (const [s, r] of [[glass, rs[0]], [none, rs[1]]] as const) {
+      s.updateMatrixWorld(true); s.tick(0.25); s.prepare(r, { width: 400, height: 300 }, 1, camera)
+      for (let i = 0; i < 8; i++) { s.tick(0.25); s.prepare(r, { width: 400, height: 300 }, 1, camera) }   // 2 s of quiet frames
+    }
+    expect(rs[0].render).toHaveBeenCalledTimes(2 + 8)
+    expect(rs[1].render).toHaveBeenCalledTimes(2 + 3)                 // the settle window only
+    const read = (r: typeof rs[0]) => new Set(nodesOf(((r.scenes[r.scenes.length - 1] as Mesh).material as MeshBasicNodeMaterial).colorNode).map(n => n.value))
+    capture.latest = new FramebufferTexture(8, 8)                     // what the slab's next copy would leave
+    glass.tick(0.25); glass.prepare(rs[0], { width: 400, height: 300 }, 1, camera)
+    expect(read(rs[0])).toContain(capture.latest)
+    expect(read(rs[0])).toContain(glass.contentPass.texture)
   })
   it('dispose frees the luma pass', () => {
     const s = clearGlass(); s.tick(1 / 60)

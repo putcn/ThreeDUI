@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { uniform, vec4 } from 'three/tsl'
+import { uniform, vec2, vec4 } from 'three/tsl'
 import { Vector2, Texture, DataTexture, BackSide, FrontSide } from 'three'
 import { Node, IDENTITY, scaleAbout, GlassUIError, type GlassInstance, type ResolvedGlass } from '@glassui/core'
 import { GlassBatch, GLASS_ATTRS } from '../src/glass/batch'
@@ -194,6 +194,30 @@ describe('createGlassMaterial', () => {
     sharedCopy.addEventListener('dispose', () => { sharedFreed++ })
     given.dispose()
     expect(sharedFreed).toBe(0)
+  })
+})
+
+describe('ScreenCapture.latest', () => {
+  it('a sampled clone\'s copy is recorded on the base: the canvas target\'s clone (with mips), never the template; null after dispose', () => {
+    const capture = new ScreenCapture()
+    const tap = capture.sample(vec2(0.5, 0.5)) as unknown as ScreenCapture       // what a material holds
+    const canvasTarget = { getDrawingBufferSize: (v: Vector2) => v.set(64, 32) }, copied: { texture: Texture; mips: boolean }[] = []
+    const renderer = {
+      getRenderTarget: () => null, getCanvasTarget: () => canvasTarget,
+      copyFramebufferToTexture: (t: Texture) => { copied.push({ texture: t, mips: t.generateMipmaps }) },
+    }
+    const frame = { renderer } as never
+    expect(capture.latest).toBeNull()
+    tap.updateReference(frame); tap.updateBefore(frame)                         // as NodeFrame.updateBeforeNode does
+    expect(copied).toHaveLength(1)
+    const copy = copied[0]!.texture
+    expect(capture.latest).toBe(copy); expect(tap.latest).toBeNull()
+    expect(copy).toBe(capture.getTextureForReference(canvasTarget as never))
+    expect(copy).not.toBe(capture.getTextureForReference(null))                // r186 renders the canvas as its CanvasTarget
+    const image = copy.image as { width: number; height: number }
+    expect([image.width, image.height]).toEqual([64, 32]); expect(copied[0]!.mips).toBe(true)
+    capture.dispose()
+    expect(capture.latest).toBeNull()
   })
 })
 
