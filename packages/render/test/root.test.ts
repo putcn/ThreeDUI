@@ -96,6 +96,24 @@ describe('createUIRoot', () => {
     expect(w.contentPass.target.width).toBe(step(2 * pxPerUnit)); expect(w.contentPass.target.height).toBe(step(pxPerUnit))
     expect(form.contentPass.target.width).toBe(step(200)); expect(form.contentPass.target.height).toBe(step(150))
   })
+  it('sizes a world Surface through or behind the camera plane finitely: at most the viewport, 1 × 1 when all behind', async () => {
+    const o = base(); const root = await createUIRoot(o)       // the camera at the origin looking down −z; 800 × 600 CSS px, DPR 2, medium
+    const wall = root.createSurface({ width: 732, height: 244, layer: 'world' })        // 3 × 1 units
+    wall.position.set(0.3, 0, -0.5); wall.rotation.y = Math.PI / 2                     // local x → −z: from z = −2 to +1
+    const hair = root.createSurface({ width: 2.001 * 244, height: 244, layer: 'world' })
+    hair.position.set(-0.3, 0, -0.9995); hair.rotation.y = Math.PI / 2                 // its near edge 0.001 behind the eye
+    const gone = root.createSurface({ width: 488, height: 244, layer: 'world' }); gone.position.set(0, 0, 3)
+    root.tick(1 / 60)
+    const rt = (s: Surface) => [s.contentPass.target.width, s.contentPass.target.height]
+    // the viewport's 800 × 600 CSS px at DPR 2 and medium's ½ → 832 × 640; a naive per-corner projection mirrors the
+    // corners behind the eye (the wall: 704 tall) or blows them up (the hair: the 4096 cap)
+    for (const s of [wall, hair]) {
+      const [w, h] = rt(s)
+      expect(w).toBeGreaterThan(1); expect(w).toBeLessThanOrEqual(832); expect(h).toBeLessThanOrEqual(640)
+    }
+    expect(rt(wall)).toEqual([320, 640])                         // its visible half: from x = 0.24 (NDC) to the right edge, full height
+    expect(rt(gone)).toEqual([1, 1])
+  })
   it('the overlay renders the host scene, then the UI scene without clearing in between', async () => {
     const o = base(); const root = await createUIRoot(o)
     const autoClear: boolean[] = []

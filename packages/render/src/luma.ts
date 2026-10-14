@@ -1,4 +1,4 @@
-import { DataTexture, FloatType, HalfFloatType, LinearFilter, LinearSRGBColorSpace, NearestFilter, NoBlending, RenderTarget, RGBAFormat, Texture, UnsignedByteType, Vector2, Vector3, type Camera, type Object3D } from 'three'
+import { DataTexture, FloatType, HalfFloatType, LinearFilter, LinearSRGBColorSpace, NearestFilter, NoBlending, RenderTarget, RGBAFormat, Texture, UnsignedByteType, Vector2, type Camera, type Object3D } from 'three'
 import { MeshBasicNodeMaterial, QuadMesh, type Node, type Renderer, type TextureNode, type UniformNode } from 'three/webgpu'
 import { dot, float, log2, max, min, mix, texture, uniform, uv, vec2, vec3, vec4 } from 'three/tsl'
 import { GlassUIError, type GlassInstance } from '@glassui/core'
@@ -6,6 +6,7 @@ import { SLAB_BEHIND } from './glass/frost'
 import type { GlassMaterial, ScreenCapture } from './glass/material'
 import type { RendererLike } from './surface/content'
 import { surfaceToLocal, type SurfaceDims } from './units'
+import { projectPolygon } from './project'
 
 /** Spec §5.3: the time constant (s) of the backdrop luma's smoothing. */
 export const LUMA_TAU = 0.2
@@ -118,14 +119,17 @@ export class LumaPass {
   /** Packs screen `rects` (texel `i`'s in screen uv); they follow the camera, so a change keeps the smoothing. */
   setScreenRects(rects: readonly LumaRect[]): void { this.pack('setScreenRects', 1, rects) }
 
-  /** Writes `rects` into `row` (re-uploading only when it changed); true if it did. */
+  /**
+   * Writes `rects` into `row` (re-uploading only when it changed); true if it did. A non-finite number is written as 0:
+   * the kernel's smoothing blends with its previous result, so one NaN reaching the GPU would never wash out.
+   */
   private pack(scope: string, row: 0 | 1, rects: readonly LumaRect[]): boolean {
     if (rects.length > this.maxCount) throw new GlassUIError(`LumaPass.${scope}`, `${rects.length} 个矩形超过 maxCount（${this.maxCount}）`)
     const d = this.rectData, o = row * this.maxCount * 4
     let changed = row === 0 && rects.length !== this.rects
     rects.forEach((r, i) => {
       for (const [k, v] of [r.u, r.v, r.w, r.h].entries()) {
-        const f = Math.fround(v)
+        const f = Number.isFinite(v) ? Math.fround(v) : 0
         if (d[o + i * 4 + k] !== f) { d[o + i * 4 + k] = f; changed = true }
       }
     })
@@ -187,22 +191,20 @@ export interface LumaFrame {
   behind?: LumaBehind
 }
 
-const corner = new Vector3()
+/** The zero rect: what an element wholly behind the camera measures (a defined value, read by no visible glass). */
+const NO_RECT: LumaRect = Object.freeze({ u: 0, v: 0, w: 0, h: 0 })
 /**
  * The screen-uv bbox (v = 0 at the top, as the glass's `screenUVOf`) of rect `r`'s four corners on the content plane,
- * clamped to the screen.
+ * clamped to the screen. Projected by `projectPolygon`, so a rect through the camera plane never mirrors (it reaches
+ * the screen edge toward the camera) and one wholly behind the camera is `NO_RECT`; never a non-finite number.
  */
 export function screenRect(r: GlassInstance['rect'], s: SurfaceDims, { camera, plane }: Pick<LumaBehind, 'camera' | 'plane'>): LumaRect {
-  let u0 = Infinity, v0 = Infinity, u1 = -Infinity, v1 = -Infinity
-  for (const [x, y] of [[r.x, r.y], [r.x + r.width, r.y], [r.x, r.y + r.height], [r.x + r.width, r.y + r.height]] as const) {
-    const [lx, ly] = surfaceToLocal(x, y, s)
-    corner.set(lx, ly, 0).applyMatrix4(plane.matrixWorld).project(camera)
-    const u = (corner.x + 1) / 2, v = (1 - corner.y) / 2
-    u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v)
-  }
+  const corners = ([[r.x, r.y], [r.x + r.width, r.y], [r.x + r.width, r.y + r.height], [r.x, r.y + r.height]] as const).map(([x, y]) => surfaceToLocal(x, y, s))
+  const b = projectPolygon(corners, plane.matrixWorld, camera)
+  if (!b) return NO_RECT
   const clamp = (t: number) => Math.min(1, Math.max(0, t))
-  u0 = clamp(u0); v0 = clamp(v0)
-  return { u: u0, v: v0, w: clamp(u1) - u0, h: clamp(v1) - v0 }
+  const u0 = clamp((b.minX + 1) / 2), u1 = clamp((b.maxX + 1) / 2), v0 = clamp((1 - b.maxY) / 2), v1 = clamp((1 - b.minY) / 2)
+  return { u: u0, v: v0, w: u1 - u0, h: v1 - v0 }
 }
 
 /**

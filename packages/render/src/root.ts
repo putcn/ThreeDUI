@@ -10,6 +10,7 @@ import { createStudioEnvironment, createUILights, fitShadowCamera, UI_ENV_INTENS
 import { PointerBridge, type CanvasLike } from './pointer'
 import { defaultTier, QUALITY, QualityController, type QualityProfile, type QualityTier } from './quality'
 import { FrameSampler, FrameScheduler } from './scheduler'
+import { projectPolygon } from './project'
 
 /** The subset of `WebGPURenderer` the root drives (so tests can pass a stub). */
 export interface UIRenderer extends RendererLike {
@@ -88,6 +89,7 @@ export interface UIRoot {
 
 /** Screen Surfaces' draw orders start here; world ones take 1 (farthest) up to just below it. */
 const SCREEN_ORDER = 1000
+/** The content quad's corners (a unit `PlaneGeometry`, scaled to the Surface), in polygon order. */
 const CORNERS = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const
 
 const media = (q: string): boolean => typeof matchMedia === 'function' && matchMedia(q).matches
@@ -178,15 +180,15 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   let lastFitted = -1, looping = false, disposed = false
   const scheduler = new FrameScheduler(), frames = new FrameSampler()
 
-  /** CSS px the Surface covers: screen ones their scaled size; world ones the bounds of their projected content quad. */
+  /**
+   * CSS px the Surface covers: screen ones their scaled size; world ones the bounds of their projected content quad
+   * (`projectPolygon`): all of it when it is in front of the camera (so a Surface larger than the screen keeps one texel
+   * per CSS px), at most the viewport when it straddles the camera plane, nothing (a 1 × 1 RT) when it is behind.
+   */
   function projectedPx(s: Surface): { width: number; height: number } {
     if (s.model.placement === 'screen') return { width: s.model.width * s.scale.x, height: s.model.height * s.scale.y }
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
-    for (const [x, y] of CORNERS) {
-      v.set(x, y, 0).applyMatrix4(s.contentMesh.matrixWorld).project(camera)
-      minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x); minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y)
-    }
-    return { width: (maxX - minX) / 2 * size.x, height: (maxY - minY) / 2 * size.y }
+    const b = projectPolygon(CORNERS, s.contentMesh.matrixWorld, camera)
+    return b ? { width: (b.maxX - b.minX) / 2 * size.x, height: (b.maxY - b.minY) / 2 * size.y } : { width: 0, height: 0 }
   }
 
   /** Screen Surfaces `SCREEN_ORDER + i` in placement order; world ones 1 (farthest) up, equidistant ones in list order. */

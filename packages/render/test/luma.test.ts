@@ -455,6 +455,27 @@ describe('SurfaceLuma (a Surface\'s luma bookkeeping)', () => {
     const c = screenRect({ x: 0, y: 0, width: 200, height: 100 }, S2, { camera, plane })   // local x −2…0, y 0…1
     for (const [k, v] of [['u', 0], ['v', 0], ['w', 0.5], ['h', 0.5]] as const) expect(c[k]).toBeCloseTo(v, 9)
   })
+  it('screenRect: a rect through the camera plane stays finite and in the viewport; one wholly behind it is a zero rect', () => {
+    const S2 = { width: 400, height: 200, ptPerUnit: 100 }
+    const camera = new PerspectiveCamera(90, 1, 0.1, 10); camera.position.z = 2; camera.updateMatrixWorld()
+    // the plane lies flat ½ unit above the eye, its local +y running away from the camera: local y = 1 → z = 1, y = −1 → z = 3
+    const plane = new Object3D(); plane.position.set(0, 0.5, 2); plane.rotation.x = -Math.PI / 2; plane.updateMatrixWorld()
+    const inside = (r: LumaRect) => [r.u, r.v, r.w, r.h].every(Number.isFinite) && r.u >= 0 && r.v >= 0 && r.u + r.w <= 1 && r.v + r.h <= 1
+    const ahead = screenRect({ x: 0, y: 0, width: 400, height: 50 }, S2, { camera, plane })      // z 1 … 1.5: in front
+    const through = screenRect({ x: 0, y: 50, width: 400, height: 100 }, S2, { camera, plane })  // z 1.5 … 2.5: through the eye's plane
+    const behind = screenRect({ x: 100, y: 150, width: 100, height: 50 }, S2, { camera, plane }) // z 2.5 … 3: behind
+    expect(inside(ahead) && inside(through)).toBe(true)
+    expect(through.v).toBe(0); expect(through.w).toBe(1)        // toward the eye it runs off the top and both sides
+    expect(behind).toEqual({ u: 0, v: 0, w: 0, h: 0 })
+  })
+  it('the rect texture never holds a non-finite number: one is packed as 0', () => {
+    const p = new LumaPass(4)
+    p.setRects([{ u: NaN, v: 0.25, w: Infinity, h: 0.5 }])
+    p.setScreenRects([{ u: 0.5, v: -Infinity, w: NaN, h: 0.25 }])
+    const data = p.rectTexture.image.data as Float32Array
+    expect(Array.from(data.slice(0, 4))).toEqual([0, 0.25, 0, 0.5])
+    expect(Array.from(data.slice(16, 20))).toEqual([0.5, 0, 0, 0.25])
+  })
   it('dispose frees the pass', () => {
     const l = new SurfaceLuma(), r = recording()
     l.update(at(r, [glass('a', 1, { x: 0, y: 0, width: 10, height: 10 })]))
