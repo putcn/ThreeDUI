@@ -52,6 +52,15 @@ importers:
         specifier: ^8.3.3
         version: 8.3.3(@types/node@22.20.5)
 
+  examples/visual:
+    devDependencies:
+      '@playwright/test':
+        specifier: ^1.64.0
+        version: 1.64.0
+      vite:
+        specifier: ^8.3.3
+        version: 8.3.3(@types/node@22.20.5)
+
   packages/core:
     dependencies:
       yoga-layout:
@@ -432,6 +441,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@playwright/test@1.64.0':
+    resolution: {integrity: sha512-oTN9FNYuN6bqQMwiho6jJKLCG2/QOYCixGXuCjRmzOq23eODeukuY2XiAVoVpAECbuezMt1MHQjAiQxK8F+Y+g==}
+    engines: {node: '>=20'}
+    hasBin: true
+
   '@pmndrs/glyph@0.1.0':
     resolution: {integrity: sha512-mqmSXlnvkE67p39/c0SJf/Qf8VGj54BIs416+HVzCvp+XSMvEjY+XOvXizLzawonwB16Jfhe1iSnbxWTUXktyw==}
     hasBin: true
@@ -775,6 +789,16 @@ packages:
   picomatch@4.0.7:
     resolution: {integrity: sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==}
     engines: {node: '>=12'}
+
+  playwright-core@1.64.0:
+    resolution: {integrity: sha512-T9r+MZkTECl2+oUcZ26YgZzTrYidTsIhYYkJix+6iDOymOb1FB2RLLSOxRGnZGv5DStt+aduIVbt+E8WygXYpg==}
+    engines: {node: '>=20'}
+    hasBin: true
+
+  playwright@1.64.0:
+    resolution: {integrity: sha512-kVzTnYFYEyQ9RGzBjNCd2+yEqWmVbxl3AHPynv3qQ6JTjv4a+kwRcnqQwIpuP3NnrnIrE/Q6wWAIAvMfIE2/Yg==}
+    engines: {node: '>=20'}
+    hasBin: true
 
   postcss@8.5.29:
     resolution: {integrity: sha512-49cGhUbXj8Qenv0iTMxA1cFBzxXoctpC9Ujd77t1WcbJIr6nF/eI7g/8MgxrYldFRuAXvja7xQRwavoW7kgrxQ==}
@@ -1137,6 +1161,10 @@ snapshots:
   '@oxc-resolver/binding-win32-x64-msvc@11.24.2':
     optional: true
 
+  '@playwright/test@1.64.0':
+    dependencies:
+      playwright: 1.64.0
+
   '@pmndrs/glyph@0.1.0(@oxc-project/types@0.152.0)(react@19.2.8)(rolldown@1.2.12)(three@0.186.1)':
     dependencies:
       ajv: 6.15.0
@@ -1399,6 +1427,12 @@ snapshots:
   picocolors@1.1.1: {}
 
   picomatch@4.0.7: {}
+
+  playwright-core@1.64.0: {}
+
+  playwright@1.64.0:
+    dependencies:
+      playwright-core: 1.64.0
 
   postcss@8.5.29:
     dependencies:

@@ -1,5 +1,6 @@
 // GlassUI playground: the sign-up form (a screen-layer Surface) and a world-layer Surface over a host three.js scene.
 //   ?scene=signup|world|both  (default both)   ?quality=high|medium|low|minimal  (default auto)   ?webgl  (force WebGL2)
+//   ?hud=0  (no HUD: the visual harness's screenshots must not hold the live fps text; an error still shows)
 // Drag the background to orbit (not in ?scene=signup); the form stays put, the world Surface moves with the scene.
 
 import { Color, PerspectiveCamera, Raycaster, Scene, Vector2 } from 'three'
@@ -22,6 +23,7 @@ const mode: SceneMode = sceneParam === 'signup' || sceneParam === 'world' ? scen
 const qualityParam = params.get('quality')
 const isTier = (q: string | null): q is QualityTier => q !== null && Object.hasOwn(QUALITY, q)
 const quality: QualityTier | 'auto' = isTier(qualityParam) ? qualityParam : 'auto'
+const liveHud = params.get('hud') !== '0'
 if (sceneParam !== null && sceneParam !== mode) console.warn(`[playground] unknown ?scene=${sceneParam}; using "both"`)
 if (qualityParam !== null && qualityParam !== 'auto' && !isTier(qualityParam)) console.warn(`[playground] unknown ?quality=${qualityParam}; using "auto"`)
 
@@ -44,9 +46,12 @@ controls.enableDamping = true
 controls.enabled = orbit
 
 const hud = document.getElementById('hud')
+if (hud) hud.hidden = !liveHud
+/** Where the live status (fps, paused) goes: nowhere under `?hud=0`. */
+const stats = liveHud ? hud : null
 const showError = (e: unknown): void => {
   console.error('[playground]', e)
-  if (hud) { hud.className = 'hud error'; hud.textContent = e instanceof Error ? e.message : String(e) }
+  if (hud) { hud.hidden = false; hud.className = 'hud error'; hud.textContent = e instanceof Error ? e.message : String(e) }
 }
 
 // `handle` exists before `start()` runs, since `start()` writes `root` and `surfaces` into it; `ready` joins it after
@@ -92,7 +97,7 @@ async function start(): Promise<UIRoot> {
   // a hidden (or fully occluded) tab gets no animation frames: say so rather than leave a stale fps on screen, and
   // start the next reading afresh
   const notePaused = (): void => {
-    if (document.visibilityState === 'hidden' && hud) hud.textContent = `${root.backend} · paused: the tab is hidden (no animation frames)`
+    if (document.visibilityState === 'hidden' && stats) stats.textContent = `${root.backend} · paused: the tab is hidden (no animation frames)`
   }
   document.addEventListener('visibilitychange', () => { frames = 0; acc = 0; last = performance.now(); notePaused() })
   notePaused()
@@ -100,9 +105,9 @@ async function start(): Promise<UIRoot> {
     try { step(t) } catch (e) { void renderer.setAnimationLoop(null); showError(e); return }
     const now = performance.now()
     frames++; acc += (now - last) / 1000; last = now
-    if (acc > 0.5 && hud) {
+    if (acc > 0.5 && stats) {
       const fps = (frames / acc).toFixed(0), draws = renderer.info.render.drawCalls
-      hud.textContent = `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${surfaces.length} surface${surfaces.length === 1 ? '' : 's'}${orbit ? ' · drag to orbit' : ''}`
+      stats.textContent = `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${surfaces.length} surface${surfaces.length === 1 ? '' : 's'}${orbit ? ' · drag to orbit' : ''}`
       frames = 0; acc = 0
     }
   })

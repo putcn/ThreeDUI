@@ -1,0 +1,55 @@
+import { test, expect, type Page } from '@playwright/test'
+
+// What the playground exposes (examples/playground/src/main.ts `PlaygroundHandle`), as far as the harness reads it.
+declare global {
+  interface Window { __glassui?: { ready: Promise<{ backend: 'webgpu' | 'webgl2' }> } }
+}
+
+/** Wall clock to wait after `ready` (the springs, the first content passes). */
+const SETTLE_MS = 1000
+/**
+ * UI frame time to wait as well (s). The root clamps a frame's dt to 50 ms (`FrameScheduler.maxDt`), so below 20 fps
+ * (SwiftShader) 1000 ms of wall clock is less than 1 s of UI time; the backdrop luma's smoothing (τ = 0.2 s) needs
+ * `LUMA_SETTLE` = 1 s of it from the first frame, which has no screen capture yet. At 20 fps or more the two are equal.
+ */
+const SETTLE_UI_S = 1
+const MAX_DT_S = 1 / 20
+
+const scenes = ['signup', 'world'] as const
+for (const scene of scenes) {
+  test(`${scene} renders the same`, async ({ page }, info) => {
+    const webgl = info.project.name === 'webgl2'
+    // `hud=0`: no live fps text in the frame
+    await page.goto(`/?scene=${scene}&quality=high${webgl ? '&webgl' : ''}&hud=0`)
+    // only the backend crosses back: the root itself is not serialisable
+    const backend = await page.evaluate(async () => {
+      const handle = window.__glassui
+      if (!handle) throw new Error('window.__glassui is missing: the playground did not start')
+      return (await handle.ready).backend
+    })
+    // before the screenshot, so a fallback never writes or matches a baseline under the wrong backend
+    if (webgl) expect(backend).toBe('webgl2')
+    else {
+      test.skip(backend === 'webgl2', 'WebGPU unavailable: three fell back to WebGL2')
+      expect(backend).toBe('webgpu')
+    }
+    await settle(page)
+    await expect(page).toHaveScreenshot(`${scene}.png`)
+  })
+}
+
+/** Resolves once `SETTLE_MS` of wall clock and `SETTLE_UI_S` of the UI's clamped frame time have both passed. */
+async function settle(page: Page): Promise<void> {
+  await page.evaluate(([wallMs, uiS, maxDt]) => new Promise<void>(resolve => {
+    const start = performance.now()
+    let ui = 0, last: number | null = null
+    // the playground's loop runs on the same animation frames: the sum of clamped intervals is the root's frame time
+    const tick = (t: number): void => {
+      if (last !== null) ui += Math.min(maxDt, Math.max(0, (t - last) / 1000))
+      last = t
+      if (t - start >= wallMs && ui >= uiS) resolve()
+      else requestAnimationFrame(tick)
+    }
+    requestAnimationFrame(tick)
+  }), [SETTLE_MS, SETTLE_UI_S, MAX_DT_S] as const)
+}
