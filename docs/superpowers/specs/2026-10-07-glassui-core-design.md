@@ -50,7 +50,7 @@ docs/                        superpowers 规范与计划；组件文档后续期
 
 ### 3.1 `UIRoot`
 
-每个 three 场景一个。持有 `renderer`、`camera`、`scene` 引用；`tick(delta)` 驱动布局、动画、渲染列表；创建 `@pmndrs/pointer-events` 的 forwarder，把 DOM 指针事件（鼠标/触摸/笔，以及 XR 射线）变为对节点的 `pointerdown/up/move/enter/leave/click/wheel`；维护焦点链与键盘事件；持有全局 `FontManager`、`QualityController`、`ImeBridge`（§7.3）。
+每个 three 场景一个。持有 `renderer`、`camera`、`scene` 引用；`tick(delta)` 驱动布局、动画、渲染列表；创建 `@pmndrs/pointer-events` 的 forwarder，把 DOM 指针事件（鼠标/触摸/笔，以及 XR 射线）变为对节点的 `pointerdown/up/move/enter/leave/click/wheel`；维护焦点链与键盘事件；持有全局 `FontManager`、`QualityController`、`ImeBridge`（§7.3）。（Plan 2：没有单独的 `FontManager`，root 持有 `text`（`TextEngine`，默认 `SystemFontEngine`）与各 Surface 共享的字形 atlas 页；`ImeBridge` 后置。）
 
 ```ts
 const root = await createUIRoot({ renderer, scene, camera, theme, quality: 'auto' })
@@ -59,7 +59,7 @@ root.world    // Object3D：挂进 scene 的世界层容器
 root.tick(dt) // 在宿主 render loop 里调用，或 root.autoTick(true) 自管
 ```
 
-`createUIRoot` 默认以 **overlay 模式** 工作：UI 有自己的 `Scene`，在宿主场景之后用同一相机、共享深度缓冲渲染（世界层 Surface 仍被宿主几何遮挡、也遮挡宿主几何），灯光与环境贴图由 UI 场景独享，因此 §5.4 的"只在 Surface 内投影"自然成立；`mode: 'shared'` 把图层挂进宿主场景（宿主灯光生效，UI 阴影可能落到宿主的 receiveShadow 物体上；宿主场景没有 `environment` 时才设为棚拍环境图）。
+`createUIRoot` 默认以 **overlay 模式** 工作：UI 有自己的 `Scene`，在宿主场景之后用同一相机、共享深度缓冲渲染（世界层 Surface 仍被宿主几何遮挡、也遮挡宿主几何），灯光与环境贴图由 UI 场景独享，因此 §5.4 的"只在 Surface 内投影"自然成立；`mode: 'shared'` 把图层挂进宿主场景（宿主灯光生效，UI 阴影可能落到宿主的 receiveShadow 物体上；宿主场景没有 `environment` 时才设为 UI 所用的环境图：默认棚拍，或传入的 `Texture`）。
 
 实现（Plan 2，`packages/render/src/root.ts`）：`createUIRoot` 是 async（先 `await renderer.init()`，失败时 reject `GlassUIError`）。选项：`renderer, scene, camera, theme?, scheme?`（默认 `'light'`）`, quality?: QualityTier | 'auto'`（默认 `'auto'`）`, text?: TextEngine`（默认 `SystemFontEngine`）`, createCanvas?, environment?: 'studio' | Texture | null`（默认 `'studio'`）`, mode?: 'overlay' | 'shared'`（默认 `'overlay'`）`, pointer?, keyboard?`（默认 true）`, reducedMotion?, reducedTransparency?`（默认取媒体查询）。`UIRoot` 成员：`screen, world, uiScene, lights, theme, scheme, text, quality`（`QualityController`）`, anim`（`AnimationRuntime`）`, surfaces, pointer`（`PointerBridge | null`）`, backend`（`'webgpu' | 'webgl2' | 'unknown'`）；`createSurface({ layer?: 'screen' | 'world', fill?, left?, top?, ...SurfaceOptions })`（屏幕层 `fill` 跟随视口，否则左上角在 CSS px `left/top`；世界层 `ptPerUnit` 默认 244）、`removeSurface(s)`、`tick(dt)`（秒；布局、动画、内容 pass、绘制顺序、阴影拟合，不画）、`render()`（overlay：先宿主场景再叠 UI 场景；shared：宿主场景）、`renderUI()`（overlay：宿主已自己画过时只叠 UI）、`frame(nowMs?)`（钳制 dt 的 `tick` + `render`，`'auto'` 时顺带采样画质）、`autoTick(on)`（经 `renderer.setAnimationLoop` 每帧调 `frame`）、`on('quality' | 'error', fn)`（返回取消函数）、`dispose()`。指针与键盘由自带的 `PointerBridge`（canvas DOM 事件 → 射线 → Surface pt）处理；`@pmndrs/pointer-events` forwarder 与 `ImeBridge` 后置（§12）。
 
@@ -71,7 +71,7 @@ root.tick(dt) // 在宿主 render loop 里调用，或 root.autoTick(true) 自�
 - 有自己的 Yoga 根与节点树（根节点由 Vue mount 产生）。
 - 有自己的**内容层 RT**（RGBA8 或半浮点按质量档），尺寸 = 投影到屏幕的像素尺寸 × DPR（带上限与整数阶梯，避免抖动），只在脏时重绘；屏幕层静止时零开销。
 - 以一个 quad 画进场景（深度写入开，便于被世界几何遮挡与遮挡世界几何）；玻璃元素作为额外 quad 画在其上。
-- 屏幕层的 Surface 默认 `size` 跟随视口。
+- 屏幕层的 Surface 默认 `size` 跟随视口。（Plan 2：只有 `createSurface({ fill: true })` 才跟随视口；否则保持给定的 `width/height`，左上角放在 CSS px `left/top`，默认 0, 0。）
 
 ### 3.3 `Node`
 
@@ -332,13 +332,13 @@ app.mount(root.screen.createSurface({ fill: true }))  // 或 mount(someSurface)
 - 字体加载失败：回退到系统字体引擎并 `console.warn` 一次。
 - WebGPU 初始化失败：three 自动回落；若 WebGL2 也不可用，`createUIRoot` reject，带可读原因。
 - 质量档降级：触发 `root.on('quality', …)` 事件，可观察。
-- 渲染循环内的异常不吞：捕获后停止该 Surface 的渲染并发 `surface.on('error')`，其它 Surface 继续。
+- 渲染循环内的异常不吞：捕获后停止该 Surface 的渲染并发 `surface.on('error')`，其它 Surface 继续。（Plan 2：`Surface` 没有 `on`；错误经 `surface.addEventListener('error', …)` 派发，并由 root 转发为 `root.on('error', { surface, error })`。）
 
 ## 10. 测试
 
 - **core/text（Node，无 GPU）**：Vitest。样式解析与 tw 解析（含错误消息快照）、Yoga 布局结果、事件冒泡与命中测试（圆角、裁剪、elevation）、焦点顺序、滚动物理、spring 数值、文字测量与换行（中英混排）、manifest 生成。
 - **vue**：Vitest + 自定义渲染器挂到内存 Surface：`v-if/v-for/slots/Teleport/Transition` 的节点树快照；组件 props 校验。
-- **render（浏览器）**：Playwright 跑 `examples/visual`，WebGPU 与 `forceWebGL` 各一遍，像素比对（阈值）；覆盖每个组件各状态、屏幕层/世界层、玻璃四档、中文文本、IME 组合态截图。Plan 2 已有的部分：playground 的 `signup` 与 `world` 两个场景，1280×900、DPR 1、`high` 档，WebGPU 与 WebGL2（SwiftShader）各一遍，像素差预算 2 %（`maxDiffPixelRatio: 0.02`），另有控制台错误闸门（页面异常或 `console.error` 直接判失败）；基线在参考机上生成、与机器绑定（`examples/visual/README.md`）。
+- **render（浏览器）**：Playwright 跑 `examples/visual`，WebGPU 与 `forceWebGL` 各一遍，像素比对（阈值）；覆盖每个组件各状态、屏幕层/世界层、玻璃四档、中文文本、IME 组合态截图。Plan 2 已有的部分：playground 的 `signup` 与 `world` 两个场景，1280×900、DPR 1、`high` 档，WebGL2（SwiftShader）与 WebGPU 各一遍（three 回落到 WebGL2 时 WebGPU 一项跳过、不比对），像素差预算 2 %（`maxDiffPixelRatio: 0.02`），另有控制台错误闸门（页面异常或 `console.error` 直接判失败）；基线在参考机上生成、与机器绑定（`examples/visual/README.md`）。
 - **性能基线**：playground 内置 100 按钮 + 20 玻璃容器场景，记录帧时间与 draw call 数，CI 上只做回归阈值（Chrome headless，WebGL 路径）。
 - **IME**：Playwright 的 `keyboard.imeSetComposition` 做组合输入的自动化；真机手工检查清单（iOS Safari、Android Chrome、macOS 中文输入法）。
 
@@ -353,7 +353,32 @@ app.mount(root.screen.createSurface({ fill: true }))  // 或 mount(someSurface)
 
 无障碍语义树（Flutter/Babylon 式并行 ARIA DOM）；组件全集（Select、Tabs、Table、Menu、Slider、Segmented、Toast、Tooltip、DatePicker…）；Vite 编译期 `tw`；文档站；React 适配；Taffy（CSS Grid）；阴影投到任意世界几何；WebXR 手势与系统键盘。
 
-**Plan 2 后置**（细节见 Plan 2 的 Deferred 一节）：`physicalStacking`（玻璃看见玻璃，需按层把玻璃 pass 再捕获进第二张内容 RT）；`GlassContainer` 形状融合（§5.2，随组件进 Plan 3）；low/minimal 的解析高斯阴影贴片（目前 512 VSM）；各档的 `refraction` / `dispersion` 开关（low/minimal 的无折射与近不透明填充、medium 的 `dispersion: 'auto'` 即 ≥0.25 px 才色散；材质目前一律折射、色散）；自适应 luma → 文字颜色（§5.5，需要 `color: 'auto'`/vibrancy 样式信号）；`@pmndrs/pointer-events`（XR 射线，`hitSurfaces` 是唯一要替换的接缝）；`Surface.billboard`、`Surface.shadow`（§3.2，随 `<Surface>` 组件）与 `castToWorld` 生效；IME 桥（§7.3）、Vue 渲染器、组件、manifest（Plan 3）；悬停 `glint` 增强与 `focusVisible` 焦点环（§7.2，Plan 3 组件；按压的指尖内发光已接通）；媒体查询变化的实时响应；GPU 计时；`background: 'none'` 的 Surface 上元素玻璃在内容透明处折射为黑（拟仅在有玻璃实例时、在内容 quad 之前惰性捕获一次）；屏幕层与世界层共用一次阴影拟合（拟按层分别拟合或分贴图）；`high` 档金字塔裁剪到玻璃并集；mip 档的 `lod = roughness × 8` 与 Kawase 顶层（RMS 半径 ≈41 texel）在同一 roughness 下模糊宽度不一致；`high` 档每片元 15 次内容采样（3 个色散通道 × 清晰层 + 4 层金字塔）；视觉回归基线与机器绑定（系统字体栅格化、GPU 驱动），CI 需各自生成一次；`world` 场景的视觉回归不敏感（UI 只占画面约 350×230 px，2 % 预算约等于卡片的 30 %）；从 workspace 去掉 `spikes/*`（glyph spike 引入 React）。
+**Plan 2 后置。** 以下各项也列在 Plan 2 计划文件（`docs/superpowers/plans/2026-10-08-glassui-plan-2-render.md`）的 Deferred 一节：
+
+- `physicalStacking`（玻璃看见玻璃）：需按层把玻璃 pass 再捕获进第二张内容 RT。
+- `GlassContainer` 形状融合（§5.2）：随组件进 Plan 3。
+- low/minimal 的解析高斯阴影贴片：目前 512 VSM。
+- medium 的 `dispersion: 'auto'`（≥0.25 px 才色散）：材质目前一律色散。
+- 自适应 luma → 文字颜色（§5.5）：需要 `color: 'auto'`/vibrancy 样式信号。
+- `@pmndrs/pointer-events`（XR 射线）：`hitSurfaces` 是唯一要替换的接缝。
+- `Surface.billboard`、`Surface.shadow`（§3.2）：随 `<Surface>` 组件。
+- IME 桥（§7.3）、Vue 渲染器、组件、manifest：Plan 3。
+- 悬停 `glint` 增强与 `focusVisible` 焦点环（§7.2）：Plan 3 组件；按压的指尖内发光已接通。
+- 从 workspace 去掉 `spikes/*`（glyph spike 引入 React）：spike 归档时做。
+
+执行与评审中另外发现的：
+
+- low 的无折射、minimal 的近不透明磨砂填充 + 边框：`QualityProfile.refraction` 已定义但材质尚未读取，各档都折射。
+- `castToWorld` 生效：目前只有字段。
+- 媒体查询变化的实时响应：目前只在 `createUIRoot` 时读一次。
+- GPU 计时（画质控制目前只用帧时间）。
+- `background: 'none'` 的 Surface 上元素玻璃在内容透明处折射为黑：拟仅在有玻璃实例时、在内容 quad 之前惰性捕获一次。
+- 屏幕层与世界层共用一次阴影拟合（屏幕层纹素不足）：拟按层分别拟合或分贴图。
+- `high` 档金字塔裁剪到玻璃并集（目前覆盖整张内容 RT）。
+- mip 档的 `lod = roughness × 8` 与 Kawase 顶层（RMS 半径 ≈41 texel）在同一 roughness 下模糊宽度不一致。
+- `high` 档每片元 15 次折射采样（3 个色散通道 × 清晰层 + 4 层金字塔；平面反射另读 1 次）。
+- 视觉回归基线与机器绑定（系统字体栅格化、GPU 驱动）：CI 需各自生成一次。
+- `world` 场景的视觉回归不敏感：UI 只占画面约 350×230 px，2 % 预算约等于卡片的 30 %。
 
 ## 13. 参考
 
