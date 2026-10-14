@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { CustomBlending, DataTexture, FramebufferTexture, FrontSide, PerspectiveCamera, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material, type RenderTarget } from 'three'
+import { Color, CustomBlending, DataTexture, FramebufferTexture, FrontSide, PerspectiveCamera, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material, type RenderTarget } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial, type MeshBasicNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme, resolveColor } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
-import { Surface, createContentMaterial, CONTENT_ORDER, SLAB_FROST, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
+import { Surface, createContentMaterial, fillColors, CONTENT_ORDER, SLAB_FROST, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
+import { FILL } from '../src/glass/frost'
 import { AtlasPages } from '../src/text/pages'
 import { createMeasureFn } from '../src/text/measure'
 import { REFLECTION_STRENGTH } from '../src/glass/batch'
@@ -822,7 +823,7 @@ describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
       expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
     })
   }
-  it('fill: the slab and the element glass sample nothing and draw the theme\'s fill colour, linear; the luma never runs', () => {
+  it('fill: nothing sampled; the slab fills with the theme\'s fill, element glass a shade toward label with a tertiaryLabel border; no luma', () => {
     for (const scheme of ['light', 'dark'] as const) {
       const c: SurfaceContext = { ...ctx, scheme, quality: QUALITY.minimal }
       const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, c)
@@ -832,21 +833,31 @@ describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
       const draws = [...slabOf(s), ...elementGlass(s)]
       expect(draws).toHaveLength(2)                                   // minimal: front faces only
       expect(graph(draws).filter(n => n.isTextureNode)).toEqual([])
-      const fill = toColor(resolveColor('fill', theme, scheme))
-      const pinned = { vGlassMisc: [1, -1, -1, 1], vGlassTint: [1, 1, 1, 0], vGlassOptics: [1.5, 0, 0, 0], vGlassGlow2: [-1, 0.04, 0, 0], vGlassGeom: [0.1, 0.1, 0.5, 0.5] }
-      for (const m of draws) expect(evalNode((m.material as MeshPhysicalNodeMaterial).backdropNode, pinned).map(v => +v.toFixed(9))).toEqual([fill.r, fill.g, fill.b].map(v => +v.toFixed(9)))
+      // the colours from the tokens: the shade is fill moved 4 % toward label in sRGB, then linear
+      const [fill, label, border] = (['fill', 'label', 'tertiaryLabel'] as const).map(t => resolveColor(t, theme, scheme))
+      const shade = toColor([0, 1, 2, 3].map(i => fill![i]! + (label![i]! - fill![i]!) * FILL.labelMix) as [number, number, number, number])
+      expect(fillColors(theme, scheme)).toEqual({ slab: toColor(fill!), glass: shade, border: toColor(border!) })
+      // light: a shade darker than the white card; dark: lighter than the dark one
+      expect(scheme === 'light' ? shade.r < toColor(fill!).r : shade.r > toColor(fill!).r).toBe(true)
+      // the element glass's outline (120 × 60 pt) in its varying; at the centre the fill, ½ pt inside its edge the border
+      const pinned = (u: number) => ({ vGlassMisc: [1, -1, -1, 1], vGlassTint: [1, 1, 1, 0], vGlassGlow: [0, 0, 0, 0], vGlassGeom: [0.1, 0.1, u, 0.5], vGlassOutline: [0.6, 0.3, 0.12, 2] })
+      const rgb = (m: Mesh, u: number) => evalNode((m.material as MeshPhysicalNodeMaterial).backdropNode, pinned(u), undefined, 0.2).map(v => +v.toFixed(9))
+      const round = (k: Color) => [k.r, k.g, k.b].map(v => +v.toFixed(9))
+      expect(rgb(slabOf(s)[0]!, 0.5)).toEqual(round(toColor(fill!))); expect(rgb(slabOf(s)[0]!, 1)).toEqual(round(toColor(fill!)))   // no border
+      expect(rgb(elementGlass(s)[0]!, 0.5)).toEqual(round(shade))
+      expect(rgb(elementGlass(s)[0]!, 1 - 0.5 / 120)).toEqual(round(toColor(border!)))
       const camera = new PerspectiveCamera(40, 4 / 3, 0.1, 100); camera.position.z = 8; camera.updateMatrixWorld()
       const r = stubRenderer()
       for (let i = 0; i < 3; i++) { s.tick(1 / 60); s.prepare(r, { width: 400, height: 300 }, 1, camera) }
       expect(r.render).toHaveBeenCalledTimes(1)                       // the content once: no luma pass, no pyramid
     }
   })
-  it('fill: a theme without the fill token fills white instead of failing the Surface', () => {
-    const { fill: _, ...light } = theme.colors.light
+  it('fill: a theme missing the fill, label or tertiaryLabel token falls back to the default light values instead of failing the Surface', () => {
+    const { fill: _f, label: _l, tertiaryLabel: _t, ...light } = theme.colors.light
     const bare = { ...theme, colors: { ...theme.colors, light } }
+    expect(fillColors(bare, 'light')).toEqual(fillColors(theme, 'light'))
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx, theme: bare, quality: QUALITY.minimal })
-    const pinned = { vGlassMisc: [1, -1, -1, 1], vGlassTint: [1, 1, 1, 0], vGlassOptics: [1.5, 0, 0, 0], vGlassGlow2: [-1, 0.04, 0, 0], vGlassGeom: [0.1, 0.1, 0.5, 0.5] }
-    expect(evalNode((elementGlass(s)[0]!.material as MeshPhysicalNodeMaterial).backdropNode, pinned)).toEqual([1, 1, 1])
+    expect(s.error).toBeNull(); expect(elementGlass(s)).toHaveLength(1)
   })
   it('low (straight): the element glass sees the content RT and the slab capture unrefracted, with no depth copy even when asked', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })

@@ -346,19 +346,42 @@ describe('createGlassMaterial: quality modes (spec §5.6)', () => {
       g.dispose()
     }
   })
-  it('fill draws the fill colour, tinted and frosted as a backdrop is, at a near-opaque backdrop alpha', () => {
+  it('fill: the glow colour, else the tint, else the given fill — as is, not frosted or absorbed — near-opaque, the lit shell the same', () => {
     const fill = new Color(0.9, 0.8, 0.7)
     const m = createGlassMaterial({ ...panel(), mode: 'fill', fill }).material
     expect(evalNode(m.backdropAlphaNode, pins())[0]).toBeCloseTo(FILL.alpha, 12)
     const at = (p: Parameters<typeof pins>[0]) => evalNode(m.backdropNode, pins(p))
-    const frost = (c: number, r: number, l: number) => c + (1 - c) * (r * FROST.liftPerRoughness + l)
-    at({ roughness: 0, lift: 0 }).forEach((v, i) => expect(v).toBeCloseTo([0.9, 0.8, 0.7][i]!, 12))
-    at({ roughness: 0.5, lift: 0.1 }).forEach((v, i) => expect(v).toBeCloseTo(frost([0.9, 0.8, 0.7][i]!, 0.5, 0.1), 12))
-    // a tinted slab absorbs (1 − tint) · absorption over its thickness, straight down
-    const tinted = at({ roughness: 0, lift: 0, tint: [1, 0.5, 0], absorption: 2 })
-    tinted.forEach((v, i) => expect(v).toBeCloseTo([0.9, 0.8, 0.7][i]! * Math.exp(-[0, 0.5, 1][i]! * 2), 12))
-    // without a colour: white
-    evalNode(createGlassMaterial({ ...panel(), mode: 'fill' }).material.backdropNode, pins({ roughness: 0, lift: 0 })).forEach(v => expect(v).toBeCloseTo(1, 12))
+    const close = (got: number[], want: readonly number[]) => got.forEach((v, i) => expect(v).toBeCloseTo(want[i]!, 12))
+    close(at({}), [0.9, 0.8, 0.7])                                          // plain glass: the fill
+    close(at({ roughness: 0.5, lift: 0.3, absorption: 2 }), [0.9, 0.8, 0.7]) // its frost and absorption do not wash it out
+    close(at({ tint: [0.2, 0.5, 0.9], absorption: 0 }), [0.2, 0.5, 0.9])     // tinted: the tint
+    close(at({ tint: [0.2, 0.5, 0.9], glow: [0.15, 0.12, 0.9, 1.1] }), [0.15, 0.12, 0.9])   // glowing: the glow colour, tint or not
+    close(at({ glow: [0.15, 0.12, 0.9, 0] }), [0.9, 0.8, 0.7])                // a glow of strength 0 is none
+    close(evalNode(m.colorNode, pins({ glow: [0.15, 0.12, 0.9, 1.1] })), [0.15, 0.12, 0.9])   // the 8 % lit shell under it: the same colour
+    close(evalNode(createGlassMaterial({ ...panel(), mode: 'fill' }).material.backdropNode, pins()), [1, 1, 1])   // default: white
+  })
+  it('fill border: a FILL.borderPt band inside the outline in the border colour, the fill inside it; none without a border', () => {
+    const fill = new Color(0.96, 0.96, 0.96), border = new Color(0.25, 0.25, 0.3)
+    const m = createGlassMaterial({ ...panel(), mode: 'fill', fill, border }).material
+    // a 100 × 40 pt capsule-ish slab (radius 20 pt) at 100 pt per unit; the slab uv u = 1 − x/100 is x pt in from its right edge
+    const outline = { vGlassOutline: [0.5, 0.2, 0.2, 2] }
+    const at = (u: number, v = 0.5, p: Parameters<typeof pins>[0] = {}) =>
+      evalNode(m.backdropNode, { ...pins(p), vGlassGeom: [0.08, 0.08, u, v], ...outline }, undefined, 0.2)   // fwidth: 0.2 pt per pixel
+    const close = (got: number[], want: Color) => got.forEach((x, i) => expect(x).toBeCloseTo([want.r, want.g, want.b][i]!, 9))
+    close(at(1), border)                                                    // on the outline (the side wall)
+    close(at(1 - 0.5 / 100), border)                                        // ½ pt in: the band
+    close(at(1 - 2 / 100), fill)                                            // 2 pt in: past it
+    close(at(0.5), fill)                                                    // the centre
+    close(at(0.5, 1 - 0.5 / 40), border)                                    // ½ pt below the top edge
+    // the band's inner edge, 1 pt in, is its antialiasing midpoint
+    at(1 - FILL.borderPt / 100).forEach((x, i) => expect(x).toBeCloseTo(([fill.r, fill.g, fill.b][i]! + [border.r, border.g, border.b][i]!) / 2, 9))
+    close(at(1 - 0.5 / 100, 0.5, { glow: [0.15, 0.12, 0.9, 1.1] }), border)  // a glowing control keeps it
+    // ½ pt in from the rounded corner's diagonal: the band follows the corner
+    const r = 0.2, c = [0.5 - r + (r - 0.005) * Math.SQRT1_2, 0.2 - r + (r - 0.005) * Math.SQRT1_2]
+    close(at(c[0]! + 0.5, c[1]! / 0.4 + 0.5), border)
+    // the slab (no border): fill to the edge
+    const plain = createGlassMaterial({ ...panel(), mode: 'fill', fill }).material
+    close(evalNode(plain.backdropNode, { ...pins(), vGlassGeom: [0.08, 0.08, 1, 0.5] }), fill)
   })
   it('keeps the edge glow, the glow layer and the clip in every mode', () => {
     for (const mode of ['refract', 'straight', 'fill'] as const) {
@@ -406,7 +429,7 @@ describe('glass material shaders (generated under Node)', () => {
         type Mode = 'refract' | 'straight' | 'fill'
         const make = (backdrop: 'panel' | 'screen', side: 'front' | 'back', behind = false, reject = false, pyramid = false, mode: Mode = 'refract', dispersion = true) =>
           createGlassMaterial({
-            geometry: b.geometry, K: b.K, backdrop, side, surface, mode, dispersion, fill: new Color(0.9, 0.9, 0.92),
+            geometry: b.geometry, K: b.K, backdrop, side, surface, mode, dispersion, fill: new Color(0.9, 0.9, 0.92), ...(backdrop === 'panel' ? { border: new Color(0.27, 0.27, 0.31) } : {}),
             ...(backdrop === 'panel'
               ? { content: new Texture(), ...(pyramid ? { pyramid: [1, 2, 3, 4].map(() => new Texture()) } : {}), ...(behind ? { screen: new ScreenCapture(), screenLevel: 3.2, screenLift: 0.1, ...(reject ? { depthReject: true, depth: new DepthCapture() } : {}) } : {}) }
               : { depthReject: true }),
@@ -427,6 +450,8 @@ describe('glass material shaders (generated under Node)', () => {
           // WebGL2 15 varying vectors, and three's runtime extras (fog, log depth…) need room
           expect(out.varyings.length, `${label}: ${out.varyings.join(' ')}`).toBeLessThanOrEqual(11)
           expect(out.fragment, label).toContain('discard')   // the clip mask
+          // element glass on minimal: its outline's shape for the border band, in the varying the view position left
+          expect(out.varyings.includes('vGlassOutline'), label).toBe(mode === 'fill' && backdrop === 'panel')
           // the refraction offset (slab units) is scaled to view units by the packed slab-z-to-view factor
           if (side === 'front' && mode === 'refract') expect(out.fragment, label).toContain('vGlassMisc.w')
           // what the renderer copies before the draw: the framebuffer with a capture (never on fill), the depth buffer

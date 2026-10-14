@@ -17,6 +17,8 @@ export const SLAB_BEHIND = {
 /**
  * The `'fill'` glass mode (minimal tier, reduced transparency; spec §5.6 "近不透明磨砂填充 + 边框"): the glass draws a
  * fill colour instead of a backdrop, mixed over the lit shell at `alpha` (the backdrop alpha), so it reads as near-opaque
- * frosted glass; the instance's own frost lift and tint still apply over it, and the edge glow keeps the border.
+ * glass. Element glass fills with its glow colour, else its tint, else the theme's `fill` moved `labelMix` toward
+ * `label` (sRGB; a shade off the card it sits on), and draws a `borderPt` band along its outline in `tertiaryLabel`
+ * (≥ 3:1 against the default theme's card, WCAG 1.4.11); a glass background slab fills with plain `fill`, no border.
  */
-export const FILL = { alpha: 0.92 } as const
+export const FILL = { alpha: 0.92, borderPt: 1, labelMix: 0.04 } as const

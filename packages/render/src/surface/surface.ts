@@ -3,12 +3,12 @@ import { MeshStandardNodeMaterial } from 'three/webgpu'
 import { texture, uniform, uv, vec2 } from 'three/tsl'
 import {
   apply, buildRenderList, createSurface, EventDispatcher, FocusManager, PointerTracker, resolveColor,
-  type AnimationRuntime, type ColorScheme, type GlassInstance, type LayoutEngine, type MeasureFn, type Node, type RenderList, type SurfaceModel, type Theme,
+  type AnimationRuntime, type ColorScheme, type GlassInstance, type LayoutEngine, type MeasureFn, type Node, type RenderList, type RGBA, type SurfaceModel, type Theme,
 } from '@glassui/core'
 import type { TextEngine } from '@glassui/text'
 import { GlassBatch, type TouchState } from '../glass/batch'
 import { createGlassMaterial, DepthCapture, ScreenCapture, type GlassMaterial, type GlassMode } from '../glass/material'
-import { SLAB_BEHIND, SLAB_FROST } from '../glass/frost'
+import { FILL, SLAB_BEHIND, SLAB_FROST } from '../glass/frost'
 import { PanelBatch, cornerExponentFor } from '../panel/batch'
 import { createPanelMaterial } from '../panel/material'
 import { DecorationBatch } from '../decoration/batch'
@@ -58,6 +58,24 @@ export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2
 export { SLAB_FROST } from '../glass/frost'
 /** `renderOrder` of each draw inside the content RT's scene. */
 export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as const
+
+/** The `'fill'` glass mode's colours, linear: the background slab's, the element glass's and its border's. */
+export interface FillColors { slab: Color; glass: Color; border: Color }
+
+/**
+ * The `'fill'` glass mode's colours from the theme's tokens for `scheme` (spec §5.6, minimal; see `FILL`): the slab
+ * fills with `fill` (the card is distinct from the host scene); element glass with `fill` moved `FILL.labelMix` toward
+ * `label` in sRGB (a shade darker on a light card, lighter on a dark one) and a `tertiaryLabel` border. A theme missing
+ * one of the tokens gets the default light theme's value for it instead of failing every Surface.
+ */
+export function fillColors(theme: Theme, scheme: ColorScheme): FillColors {
+  const table = theme.colors[scheme]
+  const token = (name: string, fallback: RGBA): RGBA => Object.hasOwn(table, name) ? resolveColor(name, theme, scheme) : fallback
+  const fill = token('fill', [1, 1, 1, 1]), label = token('label', [28 / 255, 28 / 255, 34 / 255, 1]), border = token('tertiaryLabel', [138 / 255, 138 / 255, 152 / 255, 1])
+  const k = FILL.labelMix
+  const shade: RGBA = [fill[0] + (label[0] - fill[0]) * k, fill[1] + (label[1] - fill[1]) * k, fill[2] + (label[2] - fill[2]) * k, 1]
+  return { slab: toColor(fill), glass: toColor(shade), border: toColor(border) }
+}
 
 /**
  * The content quad's material: the content RT on the Surface plane, lit (it receives the glass's shadows) but not
@@ -135,8 +153,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The quality this Surface's draws were built for: `ctx.quality` at construction, then the last `setQuality`. */
   private quality: QualitySettings
   private readonly contentClear: { color: Color; alpha: number } = { color: new Color(0, 0, 0), alpha: 0 }
-  /** The `'fill'` glass mode's colour: the theme's `fill` (panel) token, linear; white without one. */
-  private readonly glassFill: Color
+  /** The `'fill'` glass mode's colours (`fillColors`). */
+  private readonly fills: FillColors
   private readonly glassMaterials: GlassMaterial[] = []
   /** The meshes `buildGlass` made (slab and element glass), replaced on a quality change. */
   private readonly glassMeshes: Mesh[] = []
@@ -174,8 +192,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.focus = new FocusManager(this.model.root, this.events)
     this.su = { size: uniform(new Vector2()), ptPerUnit: uniform(this.model.ptPerUnit) }
     this.quality = ctx.quality
-    // a theme without the `fill` token (the default theme has it) fills its glass white
-    this.glassFill = Object.hasOwn(ctx.theme.colors[ctx.scheme], 'fill') ? toColor(resolveColor('fill', ctx.theme, ctx.scheme)) : new Color(1, 1, 1)
+    this.fills = fillColors(ctx.theme, ctx.scheme)
     this.contentPass = new ContentPass({ type: this.quality.contentType })
     this.seenEpoch = ctx.text.atlas.epoch
 
@@ -238,14 +255,14 @@ export class Surface extends Object3D<SurfaceEventMap> {
     for (const gm of this.glassMaterials) gm.dispose()
     this.glassMeshes.length = 0; this.glassMaterials.length = 0
     const slab = this.backgroundGlass, screen = this.screen, mode = q.glassMode
-    const optics = { mode, dispersion: q.dispersion !== 'never', fill: this.glassFill }
+    const optics = { mode, dispersion: q.dispersion !== 'never' }
     const reject = q.depthReject && mode === 'refract'
     const depth = slab && screen && reject ? (this.depth ??= new DepthCapture()) : undefined
     if (slab && screen) {
       for (const [side, on] of [['back', q.backFaces], ['front', true]] as const) {
         if (!on) continue
         const backdrop = mode === 'fill' ? {} : { screen, depthReject: reject, depth }
-        const gm = createGlassMaterial({ geometry: slab.geometry, K: slab.K, backdrop: 'screen', side, surface: this.su, ...backdrop, ...optics })
+        const gm = createGlassMaterial({ geometry: slab.geometry, K: slab.K, backdrop: 'screen', side, surface: this.su, ...backdrop, ...optics, fill: this.fills.slab })
         const mesh = new Mesh(slab.geometry, gm.material)
         mesh.renderOrder = SURFACE_ORDER.slab; mesh.frustumCulled = false   // at z = 0: its top face is the content plane
         this.layer.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
@@ -256,7 +273,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     const element: GlassMaterial[] = []
     for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
       if (!on) continue
-      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture, pyramid: this.pyramid?.textures, ...behind, ...optics })
+      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture, pyramid: this.pyramid?.textures, ...behind, ...optics, fill: this.fills.glass, border: this.fills.border })
       const mesh = new Mesh(this.glass.geometry, gm.material)
       mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = false
       this.plane.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm); element.push(gm)

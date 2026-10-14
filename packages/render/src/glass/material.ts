@@ -3,21 +3,24 @@ import { MeshPhysicalNodeMaterial, ViewportDepthTextureNode, ViewportTextureNode
 import {
   attribute, float, vec2, vec3, vec4, uniform, texture, varying, positionView, positionViewDirection, normalView,
   transformNormalToView, negateOnBackSide, modelViewMatrix, cameraProjectionMatrix, viewportMipTexture,
-  linearDepth, screenUV, refract, reflect, normalize, dot, max, min, abs, exp, mix, clamp, pow, smoothstep, step, select, length,
+  linearDepth, screenUV, refract, reflect, normalize, dot, max, min, abs, exp, mix, clamp, pow, smoothstep, step, select, length, fwidth,
 } from 'three/tsl'
 import { GlassUIError } from '@glassui/core'
 import { GLASS_ATTRS } from './batch'
 import { FILL, FROST } from './frost'
 import { slabVertex } from './vertex'
+import { sdfNode } from '../panel/sdf'
 
 /**
  * How glass sees its backdrop (the quality tiers' "玻璃" column, spec §5.6):
  * - `'refract'` (high, medium): along the ray refracted through the slab, per colour channel (dispersion);
  * - `'straight'` (low): no refraction — straight through, no ray offset and no dispersion: the content RT at the
  *   content-plane point behind the fragment along the view ray, a screen backdrop at the fragment's own `screenUV`;
- * - `'fill'` (minimal, reduced transparency): no backdrop at all — a near-opaque frosted fill colour (`FILL`); the
- *   material then samples no texture (no content, pyramid, screen, depth or luma), so no capture is ever copied for it.
- * Every mode keeps the lit shell, the edge glow, the glow layer, the clip and the transmitted shadow.
+ * - `'fill'` (minimal, reduced transparency): no backdrop at all — a near-opaque fill (`FILL.alpha`) of the glass's
+ *   glow colour, else its tint, else the given `fill`, with an optional `border` band along the outline; the material
+ *   then samples no texture (no content, pyramid, screen, depth or luma), so no capture is ever copied for it.
+ * Every mode keeps the lit shell, the edge glow, the glow layer (in 'fill' its Fresnel rim only: the fill carries the
+ * colour), the clip and the transmitted shadow.
  */
 export type GlassMode = 'refract' | 'straight' | 'fill'
 
@@ -67,8 +70,14 @@ export interface GlassMaterialOptions {
   mode?: GlassMode | undefined
   /** `'refract'` only: refract per colour channel by the instance's dispersion (default true); false refracts once. */
   dispersion?: boolean | undefined
-  /** `'fill'` only: the fill colour, linear (default white). */
+  /** `'fill'` only: the fill of glass with neither glow nor tint, linear (default white). */
   fill?: Color | undefined
+  /**
+   * `'fill'` only: the colour (linear) of a `FILL.borderPt` band inside the glass's outline (its outer contour, from the
+   * slab-local position and the instance's rect, radius and corner exponent), so the shape reads against what is
+   * behind it; none without. It costs a varying (`vGlassOutline`), which the fill mode has room for.
+   */
+  border?: Color | undefined
 }
 
 export interface GlassMaterial {
@@ -163,7 +172,8 @@ function blackTexture(): DataTexture {
  * them plus three's own exceed WebGPU's default 16 (`maxInterStageShaderVariables`) and WebGL2's guaranteed 15
  * (`MAX_VARYING_VECTORS`). The vertex stage packs what the fragment needs into 8 vec4 varyings (+ the slab normal);
  * the position-dependent ones (depth, slab uv, clip coordinates) are affine in the slab-local position, so their
- * interpolation is exact.
+ * interpolation is exact. The 'fill' mode needs no view position (one varying fewer) and spends it on the outline's
+ * shape (`vGlassOutline`) for its border: 11 either way.
  *
  * Units: the refraction depth is measured in the slab's own frame (slab-local z, the height above its back face, in
  * the units of its thickness), so a tilted, scaled or elevated slab refracts as it would flat; the path inside is
@@ -324,12 +334,25 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
       c = behind ? content.rgb.add(mix(behind.sample(screenUV).level(behindLevel).rgb, vec3(1), behindLift).mul(float(1).sub(content.a))) : content.rgb
     } else c = screen!.sample(screenUV).level(lod).rgb
   } else {
-    const f = o.fill
-    c = f ? vec3(f.r, f.g, f.b) : vec3(1, 1, 1)
-    path = thickness                                                     // straight down through the slab
+    // the fill is the colour itself (no tint absorption or frost over it): the glow colour, else a tint, else `fill`
+    const f = o.fill, plain = f ? vec3(f.r, f.g, f.b) : vec3(1, 1, 1)
+    const tinted = min(tint.x, min(tint.y, tint.z)).lessThan(0.999)        // an untinted slab packs white
+    c = select(glowStrength.greaterThan(0), glowColor, select(tinted, tint, plain))
+    if (o.border) {
+      // the outline band: the slab-local position (affine in the slab uv) against the outer contour, in pt
+      const outline = varying(vec4(iRect.zw.mul(0.5), iShape.x, iCorner.x), 'vGlassOutline')
+      const half = outline.xy
+      const d = sdfNode(slabUV.sub(0.5).mul(half.mul(2)), half, outline.z, outline.w).mul(ptPerUnit)   // < 0 inside
+      const aa = max(fwidth(d), 1e-6).mul(0.75)                          // about a pixel; floored: smoothstep needs edge0 < edge1
+      const b = o.border
+      c = mix(c, vec3(b.r, b.g, b.b), smoothstep(aa.negate(), aa, d.add(FILL.borderPt)))
+    }
+    path = thickness
   }
-  c = c.mul(exp(float(1).sub(tint).mul(absorption).mul(path.div(thickness)).negate()))    // Beer–Lambert
-  c = mix(c, vec3(1), roughness.mul(FROST.liftPerRoughness).add(lift))                    // frost + lift
+  if (!fill) {
+    c = c.mul(exp(float(1).sub(tint).mul(absorption).mul(path.div(thickness)).negate()))  // Beer–Lambert
+    c = mix(c, vec3(1), roughness.mul(FROST.liftPerRoughness).add(lift))                  // frost + lift
+  }
   if (contentTex) {
     // planar reflection (spec §5.4): mirror the reflected ray below the plane and sample the content where it lands
     const Rr = reflect(V.negate(), N)
@@ -347,7 +370,8 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   }
   m.backdropNode = c
   m.backdropAlphaNode = fill ? float(FILL.alpha) : float(1).sub(roughness.mul(scatter))
-  m.colorNode = tint.mul(tint).mul(0.6)
+  // 'fill': the lit shell is the fill too, so the (1 − FILL.alpha) of it that shows does not wash the colour out
+  m.colorNode = fill ? c : tint.mul(tint).mul(0.6)
   m.opacityNode = opacity
 
   // press glow around the touch point (centred slab uv), light leaking at the steep rims, and the inner glow layer
@@ -357,7 +381,7 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const mask = select(split.lessThan(0), float(1), float(1).sub(smoothstep(split.sub(soft), split.add(soft), slabUV.x)))
   m.emissiveNode = vec3(pressGlow.mul(0.45)).add(tint.mul(pressGlow.mul(0.25)))
     .add(mix(vec3(1), tint, 0.5).mul(fresnel.mul(edgeGlow)))
-    .add(glowColor.mul(float(0.55).add(fresnel.mul(1.2))).mul(glowStrength).mul(mask))
+    .add(glowColor.mul(float(fill ? 0 : 0.55).add(fresnel.mul(1.2))).mul(glowStrength).mul(mask))   // 'fill' already is the glow
 
   // coloured transmitted shadow (spec §5.4): a glowing slab casts its glow colour, a tinted one what it lets through
   const neutral = vec3(...NEUTRAL_SHADOW)
