@@ -6,7 +6,8 @@
 import { Color, PerspectiveCamera, Raycaster, Scene, Vector2 } from 'three'
 import { WebGPURenderer } from 'three/webgpu'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { createUIRoot, hitSurfaces, QUALITY, type QualityTier, type Surface, type UIRoot } from '@glassui/render'
+import { createUIRoot, QUALITY, type QualityTier, type Surface, type UIRoot } from '@glassui/render'
+import { hitSurfaces } from '@glassui/render/internal'   // the orbit guard's own raycast: no public equivalent
 import { createHostLights, createWall } from './wall'
 import { buildSignup, SIGNUP } from './signup'
 import { buildWorld } from './world'

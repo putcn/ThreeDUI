@@ -2,7 +2,7 @@
   "name": "@glassui/render",
   "version": "0.0.0",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": { ".": "./src/index.ts", "./internal": "./src/internal.ts" },
   "dependencies": { "@glassui/core": "workspace:*", "@glassui/text": "workspace:*" },
   "peerDependencies": { "three": "^0.186.1" },
   "devDependencies": { "three": "^0.186.1", "@types/three": "^0.186.0", "@napi-rs/canvas": "^1.0.10" }
