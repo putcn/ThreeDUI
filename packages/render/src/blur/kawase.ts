@@ -39,6 +39,8 @@ function pass(kind: 'down' | 'up'): Pass {
  * `render` (2·levels + 1 passes): down-samples the source through every level into one more, then up-samples each level,
  * finest first, from the next one's down-sample before that one is overwritten. (Up-sampling coarsest first, as the
  * classic chain does, would leave every level holding the deepest level's blur: one blur width, not a pyramid.)
+ * Every pass is a full-screen triangle drawn with `NoBlending`, so it writes every texel of its target: none needs a
+ * clear, whatever the host's `renderer.autoClear`.
  */
 export class KawasePyramid {
   readonly levels: RenderTarget[] = []

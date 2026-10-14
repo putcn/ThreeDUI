@@ -79,6 +79,24 @@ describe('ContentPass', () => {
     expect(renderer.setRenderTarget.mock.calls).toEqual([[p.target], [null]])
     expect(renderer.setClearColor).toHaveBeenLastCalledWith(expect.objectContaining({ r: 0.2 }), 1)
   })
+  it('clears its target whatever the host\'s autoClear, and restores the host\'s flags (also when rendering throws)', () => {
+    const p = new ContentPass()
+    const seen: [boolean | undefined, boolean | undefined][] = []
+    const renderer = {
+      autoClear: false, autoClearColor: false,
+      setRenderTarget: vi.fn(), render: vi.fn(() => { seen.push([renderer.autoClear, renderer.autoClearColor]) }),
+    }
+    p.render(renderer, { color: new Color(0, 0, 0), alpha: 0 })
+    expect(seen).toEqual([[true, true]])                       // three clears a target only with autoClear (and autoClearColor)
+    expect([renderer.autoClear, renderer.autoClearColor]).toEqual([false, false])
+    renderer.render.mockImplementation(() => { throw new Error('lost device') })
+    expect(() => p.render(renderer, { color: new Color(0, 0, 0), alpha: 0 })).toThrow('lost device')
+    expect([renderer.autoClear, renderer.autoClearColor]).toEqual([false, false])
+    // a renderer without the flags (a stub) is left without them
+    const bare: { setRenderTarget(): void; render(): void; autoClear?: boolean } = { setRenderTarget: vi.fn(), render: vi.fn() }
+    p.render(bare, { color: new Color(0, 0, 0), alpha: 0 })
+    expect('autoClear' in bare).toBe(false)
+  })
   it('restores the previously bound target rather than the canvas', () => {
     const p = new ContentPass()
     const prev = new RenderTarget(8, 8)

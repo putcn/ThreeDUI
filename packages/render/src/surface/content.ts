@@ -16,6 +16,20 @@ export interface RendererLike {
   setClearColor?(color: Color | number, alpha?: number): void
   getClearColor?(target: Color): Color
   getClearAlpha?(): number
+  /** three clears a target at the start of a `render` only while these are true (`ContentPass` sets them for its own call). */
+  autoClear?: boolean
+  autoClearColor?: boolean
+}
+
+type AutoClear = Pick<RendererLike, 'autoClear' | 'autoClearColor'>
+/** Sets `renderer`'s colour auto-clear for one call and puts the host's flags back (a flag it lacked stays absent). */
+function withAutoClear<T>(renderer: AutoClear, fn: () => T): T {
+  const had = { clear: renderer.autoClear, color: renderer.autoClearColor }
+  renderer.autoClear = true; renderer.autoClearColor = true
+  try { return fn() } finally {
+    if (had.clear === undefined) delete renderer.autoClear; else renderer.autoClear = had.clear
+    if (had.color === undefined) delete renderer.autoClearColor; else renderer.autoClearColor = had.color
+  }
 }
 
 /**
@@ -66,7 +80,12 @@ export class ContentPass {
     this.camera.updateProjectionMatrix()
   }
 
-  /** Restores the previous target and clear colour/alpha even when `render` throws (e.g. before the backend is initialised). */
+  /**
+   * Clears the target to `clear` and draws the content. The clear does not depend on the host: three clears a target
+   * only while `renderer.autoClear` (and `autoClearColor`) is true, so both are forced on for this call and put back
+   * after. Restores the previous target, clear colour/alpha and those flags even when `render` throws (e.g. before the
+   * backend is initialised).
+   */
   render(renderer: RendererLike, clear: { color: Color; alpha: number }): void {
     const prevTarget = renderer.getRenderTarget?.() ?? null
     const prevAlpha = renderer.getClearAlpha?.() ?? 1
@@ -74,7 +93,7 @@ export class ContentPass {
     renderer.setClearColor?.(clear.color, clear.alpha)
     try {
       renderer.setRenderTarget(this.target)
-      renderer.render(this.scene, this.camera)
+      withAutoClear(renderer, () => renderer.render(this.scene, this.camera))
     } finally {
       renderer.setRenderTarget(prevTarget)
       renderer.setClearColor?.(this.prevColor, prevAlpha)

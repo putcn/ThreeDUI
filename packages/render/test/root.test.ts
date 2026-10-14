@@ -106,6 +106,19 @@ describe('createUIRoot', () => {
     expect(o.renderer.render).toHaveBeenLastCalledWith(root.uiScene, o.camera); expect(autoClear).toEqual([true, false, false])
     expect(o.renderer.autoClear).toBe(true)
   })
+  it('render and renderUI leave the host\'s autoClear as they found it', async () => {
+    const o = base(); const root = await createUIRoot(o)
+    const seen: boolean[] = []
+    o.renderer.render.mockImplementation(() => { seen.push(o.renderer.autoClear) })
+    o.renderer.autoClear = false                               // a host that clears by hand
+    root.renderUI()
+    expect(seen).toEqual([false]); expect(o.renderer.autoClear).toBe(false)
+    root.render()
+    expect(seen).toEqual([false, true, false]); expect(o.renderer.autoClear).toBe(false)
+    o.renderer.render.mockImplementation(() => { throw new Error('lost device') })
+    expect(() => root.render()).toThrow('lost device'); expect(o.renderer.autoClear).toBe(false)
+    expect(() => root.renderUI()).toThrow('lost device'); expect(o.renderer.autoClear).toBe(false)
+  })
   it('shared mode puts the layers into the host scene and renders once', async () => {
     const o = { ...base(), mode: 'shared' as const }; const root = await createUIRoot(o)
     expect(o.scene.children).toContain(root.screen); expect(o.scene.children).toContain(root.world); expect(o.scene.children).toContain(root.lights.group)

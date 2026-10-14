@@ -63,12 +63,15 @@ export interface UIRoot {
   /** Layout, animation, content passes, draw order and the shadow fit; `dt` in seconds. */
   tick(dt: number): void
   /**
-   * Overlay: the host scene (cleared: `autoClear = true`), then the UI scene over it without clearing (shared depth);
-   * `renderer.autoClear` is true again afterwards, whatever it was — a host must not rely on it being false. Shared:
-   * the host scene, the UI being in it.
+   * Overlay: the host scene (cleared: `autoClear` true for that draw), then the UI scene over it without clearing
+   * (shared depth); `renderer.autoClear` is put back to the host's value afterwards, also when a draw throws. Shared:
+   * the host scene, the UI being in it, with the host's own `autoClear`.
    */
   render(): void
-  /** Overlay: the UI scene alone, over what the host drew this frame (`autoClear` false for the call, then true); a no-op when shared. */
+  /**
+   * Overlay: the UI scene alone, over what the host drew this frame (`autoClear` false for the call, then the host's
+   * value again); a no-op when shared.
+   */
   renderUI(): void
   /**
    * `tick` (dt from the scheduler, clamped) + `render`. `nowMs` (default `performance.now()`): the same clock on every
@@ -254,14 +257,18 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     },
     render() {
       if (mode === 'shared') { renderer.render(scene, camera); return }
+      const hostAutoClear = renderer.autoClear
       renderer.autoClear = true
-      renderer.render(scene, camera)
-      root.renderUI()
+      try {
+        renderer.render(scene, camera)
+        root.renderUI()
+      } finally { renderer.autoClear = hostAutoClear }
     },
     renderUI() {
       if (mode === 'shared') return
+      const hostAutoClear = renderer.autoClear
       renderer.autoClear = false   // over the host's colour and depth
-      try { renderer.render(uiScene, camera) } finally { renderer.autoClear = true }
+      try { renderer.render(uiScene, camera) } finally { renderer.autoClear = hostAutoClear }
     },
     frame(nowMs) {
       const now = nowMs ?? performance.now()

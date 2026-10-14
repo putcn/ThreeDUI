@@ -42,7 +42,9 @@ function gridLevel(rect: Node<'vec4'>, size: UniformNode<'vec2', Vector2>): Node
  * capture (`render`'s `screen`), each tap adds it the same way, sampled at the matching tap of screen rect `i` (the
  * element's projected bbox, `setScreenRects`) at its grid level, never finer than the frost's. Without one the term is 0.
  *
- * The rects ride in one `maxCount × 2` float `DataTexture`: row 0 the content rects, row 1 the screen rects.
+ * The rects ride in one `maxCount × 2` float `DataTexture`: row 0 the content rects, row 1 the screen rects. The pass is
+ * a full-screen triangle drawn with `NoBlending`: it writes every texel of its target, so it needs no clear, whatever
+ * the host's `renderer.autoClear`.
  */
 export class LumaPass {
   readonly rectTexture: DataTexture
