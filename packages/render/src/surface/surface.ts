@@ -292,18 +292,20 @@ export class Surface extends Object3D<SurfaceEventMap> {
   }
 
   /**
-   * A quality change for this Surface: rebuilds the glass draws for `q` (and the blur pyramid for `q.blur`), switches
-   * the content RT's texel type and marks the content dirty (the RT's size follows `q.contentScale` at the next
-   * `prepare`). A throw fails the Surface instead of propagating. It leaves the shared `ctx.quality` alone: the root
+   * A quality change for this Surface: rebuilds the glass draws for `q` (and the blur pyramid for `q.blur`; the rims
+   * when it enters or leaves the 'fill' glass mode), switches the content RT's texel type and marks the content dirty
+   * (the RT's size follows `q.contentScale` at the next `prepare`). A throw fails the Surface instead of propagating. It leaves the shared `ctx.quality` alone: the root
    * owns that (it is what new Surfaces start from), replaces it on a tier change and then calls this on every Surface.
    */
   setQuality(q: QualitySettings): void {
+    const wasFill = this.quality.glassMode === 'fill'
     this.quality = q
     if (this.error) return
     try {
       this.syncPyramid(q)
       this.buildGlass(q)
       this.contentPass.setType(q.contentType)
+      if (this.parts && wasFill !== (q.glassMode === 'fill')) this.fillRims(this.parts)
       this.contentDirty = true
     } catch (e) { this.fail(e) }
   }
@@ -386,10 +388,18 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.glass.update(list.glass, s, this.touch)
     this.panels.update(p.content.panels, s)
     this.pools.update(p.content.pools, s)
-    this.rims.update(p.foreground.rims, s, d => liftFor(p, d.node))
+    this.fillRims(p)
     this.foregroundImages.update(p.foreground.images, s, i => liftFor(p, i.node), SURFACE_ORDER.images)
     this.contentImages.update(p.content.images, s, undefined, CONTENT_ORDER.images)
     this.fillText(p)
+  }
+
+  /**
+   * The rim decorations: the glass's bright outline and edge bands, drawn over it — none in the 'fill' glass mode,
+   * whose border band replaces them (white over it would wash the border out). Pools stay: they are content.
+   */
+  private fillRims(p: Partition): void {
+    this.rims.update(this.quality.glassMode === 'fill' ? [] : p.foreground.rims, this.model, d => liftFor(p, d.node))
   }
 
   /**

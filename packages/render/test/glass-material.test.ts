@@ -383,6 +383,47 @@ describe('createGlassMaterial: quality modes (spec §5.6)', () => {
     const plain = createGlassMaterial({ ...panel(), mode: 'fill', fill }).material
     close(evalNode(plain.backdropNode, { ...pins(), vGlassGeom: [0.08, 0.08, 1, 0.5] }), fill)
   })
+  it('fill border is the last word on its band: the border colour, opaque, with no specular, env or glow over it', () => {
+    const fill = new Color(0.96, 0.96, 0.96), border = new Color(0.25, 0.25, 0.3)
+    const m = createGlassMaterial({ ...panel(), mode: 'fill', fill, border }).material
+    const at = (u: number, p: Parameters<typeof pins>[0] = {}) => ({ ...pins(p), vGlassGeom: [0.08, 0.08, u, 0.5], vGlassOutline: [0.5, 0.2, 0.2, 2] })
+    const ev = (n: unknown, u: number, p: Parameters<typeof pins>[0] = {}) => evalNode(n, at(u, p), undefined, 0.2)
+    // the output is totalDiffuse (the backdrop, at backdrop alpha 1) + specular (× specularIntensity) + emissive: so with
+    // alpha 1, intensity 0 and the emissive scaled to 0 the band is exactly its colour, glowing control or not
+    const emissive = unwrap(m.emissiveNode as unknown as GraphNode) as GraphNode & { op?: string }
+    expect(emissive.op).toBe('*')                                           // the whole emissive, scaled by what the band keeps
+    for (const glow of [[0, 0, 0, 0], [0.15, 0.12, 0.9, 1.1]] as const) {
+      const p = { glow: [...glow] as [number, number, number, number], tint: [0.6, 0.6, 1] as [number, number, number] }
+      for (const u of [1, 1 - 0.5 / 100]) {                                 // on the outline, ½ pt in
+        ev(m.backdropNode, u, p).forEach((x, i) => expect(x).toBeCloseTo([border.r, border.g, border.b][i]!, 12))
+        expect(ev(m.backdropAlphaNode, u, p)[0]).toBe(1)
+        expect(ev(m.specularIntensityNode, u, p)[0]).toBe(0)
+        expect(ev(emissive.bNode, u, p)[0]).toBe(0)
+      }
+      // inside: the fill as before, near-opaque, with its specular and glow
+      expect(ev(m.backdropAlphaNode, 0.5, p)[0]).toBeCloseTo(FILL.alpha, 12)
+      expect(ev(m.specularIntensityNode, 0.5, p)[0]).toBe(1); expect(ev(emissive.bNode, 0.5, p)[0]).toBe(1)
+    }
+    // the slab (no border) keeps the material's own specular intensity and an unscaled emissive
+    const plain = createGlassMaterial({ ...panel(), mode: 'fill', fill }).material
+    expect(plain.specularIntensityNode).toBeNull()
+    expect(evalNode(plain.backdropAlphaNode, pins())[0]).toBeCloseTo(FILL.alpha, 12)
+  })
+  it('fill border is 1 pt on a screen Surface (1 pt per unit) and a world one (244), and never under FILL.borderMinPx pixels', () => {
+    const border = new Color(0.25, 0.25, 0.3), fill = new Color(1, 1, 1)
+    const b = new GlassBatch(); b.update([inst], s)
+    for (const ppu of [1, 244]) {
+      const m = createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface: { size: uniform(new Vector2(4, 3)), ptPerUnit: uniform(ppu) }, content: new Texture(), mode: 'fill', fill, border }).material
+      // a 100 × 40 pt slab, radius 20 pt, in this Surface's units; u = 1 − x/100 is x pt in from its right edge
+      const outline = [50 / ppu, 20 / ppu, 20 / ppu, 2]
+      const band = (xPt: number, ptPerPx: number) => evalNode(m.backdropNode, { ...pins(), vGlassGeom: [0.08, 0.08, 1 - xPt / 100, 0.5], vGlassOutline: outline }, undefined, ptPerPx)[0]!
+      const t = (x: number) => (1 - x) / (1 - border.r)                      // the red channel → band coverage
+      // a sharp view (5 px per pt): exactly 1 pt
+      expect(t(band(0.5, 0.2))).toBeCloseTo(1, 9); expect(t(band(1, 0.2))).toBeCloseTo(0.5, 9); expect(t(band(1.5, 0.2))).toBeCloseTo(0, 9)
+      // a Surface drawn at 0.8 px per pt (1.25 pt per px): 2 px = 2.5 pt, so one pixel is solid border whatever its phase
+      expect(t(band(2, 1.25))).toBeCloseTo(1, 9); expect(t(band(2.5, 1.25))).toBeCloseTo(0.5, 9); expect(t(band(3, 1.25))).toBeCloseTo(0, 9)
+    }
+  })
   it('keeps the edge glow, the glow layer and the clip in every mode', () => {
     for (const mode of ['refract', 'straight', 'fill'] as const) {
       const m = createGlassMaterial({ ...panel(), mode }).material

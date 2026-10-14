@@ -19,6 +19,9 @@ export const SLAB_BEHIND = {
  * fill colour instead of a backdrop, mixed over the lit shell at `alpha` (the backdrop alpha), so it reads as near-opaque
  * glass. Element glass fills with its glow colour, else its tint, else the theme's `fill` moved `labelMix` toward
  * `label` (sRGB; a shade off the card it sits on), and draws a `borderPt` band along its outline in `tertiaryLabel`
- * (≥ 3:1 against the default theme's card, WCAG 1.4.11); a glass background slab fills with plain `fill`, no border.
+ * (≥ 3:1 against the default theme's card, WCAG 1.4.11) — at least `borderMinPx` device pixels wide, the least that
+ * leaves one solid border pixel on every edge whatever the outline's phase against the pixel grid (a 1 pt band on a
+ * Surface drawn at 0.8 px per pt smears to a few percent). The band is final: no specular, glow or rim over it. A glass
+ * background slab fills with plain `fill`, no border.
  */
-export const FILL = { alpha: 0.92, borderPt: 1, labelMix: 0.04 } as const
+export const FILL = { alpha: 0.92, borderPt: 1, borderMinPx: 2, labelMix: 0.04 } as const

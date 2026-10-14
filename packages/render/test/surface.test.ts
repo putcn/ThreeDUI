@@ -852,6 +852,22 @@ describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
       expect(r.render).toHaveBeenCalledTimes(1)                       // the content once: no luma pass, no pyramid
     }
   })
+  it('fill: no rim decorations over the glass (its border replaces them), pools kept; back on a refracting tier the rims return', () => {
+    const { s } = signup({ ...ctx })
+    s.tick(1 / 60)
+    expect(s.rims.buffer.count).toBe(1); expect(s.pools.buffer.count).toBe(1)
+    s.setQuality(QUALITY.minimal)
+    expect(s.rims.buffer.count).toBe(0); expect(s.pools.buffer.count).toBe(1); expect(s.contentDirty).toBe(true)
+    const btn2 = new Node('glass', 'btn2'); btn2.setStyle({ position: 'absolute', left: 20, top: 120, width: 120, height: 48 })
+    s.root.children[0]!.appendChild(btn2); s.tick(1 / 60)               // a rebuilt render list on minimal: still none
+    expect(s.glass.buffer.count).toBe(2); expect(s.rims.buffer.count).toBe(0); expect(s.pools.buffer.count).toBe(2)
+    s.setQuality(QUALITY.low)
+    expect(s.rims.buffer.count).toBe(2)
+    // a Surface made on minimal never gets them
+    const fresh = signup({ ...ctx, quality: QUALITY.minimal }).s
+    fresh.tick(1 / 60)
+    expect(fresh.rims.buffer.count).toBe(0); expect(fresh.pools.buffer.count).toBe(1)
+  })
   it('fill: a theme missing the fill, label or tertiaryLabel token falls back to the default light values instead of failing the Surface', () => {
     const { fill: _f, label: _l, tertiaryLabel: _t, ...light } = theme.colors.light
     const bare = { ...theme, colors: { ...theme.colors, light } }

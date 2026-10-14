@@ -317,6 +317,8 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   }
   // the backdrop colour and the path through the slab (slab units) its light travelled, by mode (JS-time branches)
   let c: Node<'vec3'>, path: Node<'float'>
+  /** 'fill' with a border: 1 on the border band, 0 inside it (with its antialiasing ramp between). */
+  let band: Node<'float'> | null = null
   if (mode === 'refract') {
     if (o.dispersion === false) { const g = channel(float(1)); c = g.c; path = g.t1 }
     else {
@@ -339,13 +341,18 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     const tinted = min(tint.x, min(tint.y, tint.z)).lessThan(0.999)        // an untinted slab packs white
     c = select(glowStrength.greaterThan(0), glowColor, select(tinted, tint, plain))
     if (o.border) {
-      // the outline band: the slab-local position (affine in the slab uv) against the outer contour, in pt
+      // the outline band: the slab-local position (affine in the slab uv; slab units, as the packed rect and radius)
+      // against the outer contour, × pt per unit: pt on any Surface (1 pt per unit on screen ones, 244 on world ones)
       const outline = varying(vec4(iRect.zw.mul(0.5), iShape.x, iCorner.x), 'vGlassOutline')
       const half = outline.xy
-      const d = sdfNode(slabUV.sub(0.5).mul(half.mul(2)), half, outline.z, outline.w).mul(ptPerUnit)   // < 0 inside
-      const aa = max(fwidth(d), 1e-6).mul(0.75)                          // about a pixel; floored: smoothstep needs edge0 < edge1
+      const d = sdfNode(slabUV.sub(0.5).mul(half.mul(2)), half, outline.z, outline.w).mul(ptPerUnit)   // pt, < 0 inside
+      const px = max(fwidth(d), 1e-6)                                   // pt per pixel; floored: smoothstep needs edge0 < edge1
+      // FILL.borderPt, but never under FILL.borderMinPx pixels: a thinner band cannot put a solid pixel on every edge
+      // (its phase against the pixel grid, and the silhouette's MSAA coverage, smear it to a few percent of contrast)
+      const width = max(float(FILL.borderPt), px.mul(FILL.borderMinPx))
+      band = smoothstep(px.mul(-0.25), px.mul(0.25), d.add(width))      // a ½-pixel ramp at its inner edge
       const b = o.border
-      c = mix(c, vec3(b.r, b.g, b.b), smoothstep(aa.negate(), aa, d.add(FILL.borderPt)))
+      c = mix(c, vec3(b.r, b.g, b.b), band)
     }
     path = thickness
   }
@@ -369,7 +376,10 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     c = c.mul(mix(float(1), float(0.65), step(float(0), lumaIndex).mul(step(float(0.6), luma))))
   }
   m.backdropNode = c
-  m.backdropAlphaNode = fill ? float(FILL.alpha) : float(1).sub(roughness.mul(scatter))
+  // the border band is the last word on its pixels: its colour, opaque over the lit shell, no specular or glow over it
+  const keep = band ? float(1).sub(band) : null
+  m.backdropAlphaNode = band ? mix(float(FILL.alpha), float(1), band) : fill ? float(FILL.alpha) : float(1).sub(roughness.mul(scatter))
+  if (keep) m.specularIntensityNode = keep                               // F0 and F90 both scale by it: no specular, no env
   // 'fill': the lit shell is the fill too, so the (1 − FILL.alpha) of it that shows does not wash the colour out
   m.colorNode = fill ? c : tint.mul(tint).mul(0.6)
   m.opacityNode = opacity
@@ -379,9 +389,10 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const pressGlow = exp(dot(dt, dt).negate().div(0.36)).mul(press)
   // lit left of the split; `1 − smoothstep` keeps edge0 < edge1 (a reversed smoothstep is undefined in GLSL)
   const mask = select(split.lessThan(0), float(1), float(1).sub(smoothstep(split.sub(soft), split.add(soft), slabUV.x)))
-  m.emissiveNode = vec3(pressGlow.mul(0.45)).add(tint.mul(pressGlow.mul(0.25)))
+  const emissive = vec3(pressGlow.mul(0.45)).add(tint.mul(pressGlow.mul(0.25)))
     .add(mix(vec3(1), tint, 0.5).mul(fresnel.mul(edgeGlow)))
     .add(glowColor.mul(float(fill ? 0 : 0.55).add(fresnel.mul(1.2))).mul(glowStrength).mul(mask))   // 'fill' already is the glow
+  m.emissiveNode = keep ? emissive.mul(keep) : emissive
 
   // coloured transmitted shadow (spec §5.4): a glowing slab casts its glow colour, a tinted one what it lets through
   const neutral = vec3(...NEUTRAL_SHADOW)
