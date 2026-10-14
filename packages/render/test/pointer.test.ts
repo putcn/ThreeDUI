@@ -471,6 +471,19 @@ describe('PointerBridge.handle', () => {
     bridge.handle('pointermove', { clientX: 120, clientY: 100, pointerId: 1 })        // no capture held: moves hover again
     expect(bridge.hovered).toBe(a)
   })
+  it('a pointerdown listener that moves activity elsewhere (a dialog opening) ends that press: no focus, no capture, no click', () => {
+    const { a, b, ab, canvas, bridge } = two()
+    ab.setProp('tabIndex', 0)
+    const cancel = vi.fn(), click = vi.fn()
+    a.events.on(ab, 'pointerdown', () => bridge.setActive(b)); a.events.on(ab, 'pointercancel', cancel); a.events.on(ab, 'click', click)
+    bridge.handle('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 })
+    expect(bridge.active).toBe(b); expect(cancel).toHaveBeenCalledTimes(1)
+    expect(ab.state.pressed).toBe(false); expect(a.focus.current).toBeNull(); expect(ab.state.focused).toBe(false)
+    expect(canvas.setPointerCapture).not.toHaveBeenCalled()
+    bridge.handle('pointerup', { clientX: 100, clientY: 100, pointerId: 1 })
+    expect(click).not.toHaveBeenCalled(); expect(canvas.releasePointerCapture).not.toHaveBeenCalled()
+    expect(bridge.active).toBe(b)                                                    // the keys stay with the dialog
+  })
   it('attach wires the DOM events and sets tabIndex', () => {
     const { bridge, canvas } = scene()
     bridge.attach()

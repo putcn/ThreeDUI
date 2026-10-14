@@ -182,7 +182,8 @@ export class PointerBridge {
   /**
    * Makes `s` the Surface that receives the keys (a dialog that opens takes them), as a press on it would. Moving to
    * another Surface (or none) blurs the old one's focus: one focused node per canvas. A press the old one holds is
-   * cancelled (`pointercancel`), since the capture is `active`'s and the rest of that press would reach `s`.
+   * cancelled (`pointercancel`), since the capture is `active`'s and the rest of that press would reach `s`; so is
+   * the press being dispatched when a `pointerdown` listener calls this (no focus, no capture for it).
    */
   setActive(s: Surface | null): void {
     if (this.active === s) return
@@ -230,6 +231,9 @@ export class PointerBridge {
         this.hover(hit?.surface ?? null, ptype)
         if (!hit) break
         hit.surface.setPointer([hit.x, hit.y]); hit.surface.pointer.down(hit.x, hit.y, ptype)
+        // a pointerdown listener moved the keys elsewhere (`setActive`: a dialog opened): the press is over, nothing
+        // to focus or capture here
+        if (this.active !== hit.surface) { hit.surface.pointer.cancel(); hit.surface.setPointer(null); break }
         hit.surface.focus.focusFromPointer(hit.surface.pointer.pressed)
         this.pressing = true
         if (e.pointerId !== undefined) this.opts.canvas.setPointerCapture?.(e.pointerId)

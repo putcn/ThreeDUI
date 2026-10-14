@@ -16,9 +16,10 @@ import { sdfNode } from '../panel/sdf'
  * - `'refract'` (high, medium): along the ray refracted through the slab, per colour channel (dispersion);
  * - `'straight'` (low): no refraction — straight through, no ray offset and no dispersion: the content RT at the
  *   content-plane point behind the fragment along the view ray, a screen backdrop at the fragment's own `screenUV`;
- * - `'fill'` (minimal, reduced transparency): no backdrop at all — a near-opaque fill (`FILL.alpha`) of the glass's
- *   glow colour, else its tint, else the given `fill`, with an optional `border` band along the outline; the material
- *   then samples no texture (no content, pyramid, screen, depth or luma), so no capture is ever copied for it.
+ * - `'fill'` (minimal, reduced transparency): no backdrop at all — a near-opaque fill (`FILL.alpha`, or `fillAlpha`:
+ *   solid under increased contrast) of the glass's glow colour, else its tint, else the given `fill`, with an optional
+ *   `border` band along the outline; the material then samples no texture (no content, pyramid, screen, depth or luma),
+ *   so no capture is ever copied for it.
  * Every mode keeps the lit shell, the edge glow, the glow layer (in 'fill' its Fresnel rim only: the fill carries the
  * colour), the clip and the transmitted shadow.
  */
@@ -72,6 +73,11 @@ export interface GlassMaterialOptions {
   dispersion?: boolean | undefined
   /** `'fill'` only: the fill of glass with neither glow nor tint, linear (default white). */
   fill?: Color | undefined
+  /**
+   * `'fill'` only: the fill's alpha over the lit shell (default `FILL.alpha`, near-opaque); 1 is solid (increased
+   * contrast, spec §8.3). The border band is opaque either way.
+   */
+  fillAlpha?: number | undefined
   /**
    * `'fill'` only: the colour (linear) of a `FILL.borderPt` band inside the glass's outline (its outer contour, from the
    * slab-local position and the instance's rect, radius and corner exponent), so the shape reads against what is
@@ -378,7 +384,8 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   m.backdropNode = c
   // the border band is the last word on its pixels: its colour, opaque over the lit shell, no specular or glow over it
   const keep = band ? float(1).sub(band) : null
-  m.backdropAlphaNode = band ? mix(float(FILL.alpha), float(1), band) : fill ? float(FILL.alpha) : float(1).sub(roughness.mul(scatter))
+  const fillAlpha = float(o.fillAlpha ?? FILL.alpha)
+  m.backdropAlphaNode = band ? mix(fillAlpha, float(1), band) : fill ? fillAlpha : float(1).sub(roughness.mul(scatter))
   if (keep) m.specularIntensityNode = keep                               // F0 and F90 both scale by it: no specular, no env
   // 'fill': the lit shell is the fill too, so the (1 − FILL.alpha) of it that shows does not wash the colour out
   m.colorNode = fill ? c : tint.mul(tint).mul(0.6)

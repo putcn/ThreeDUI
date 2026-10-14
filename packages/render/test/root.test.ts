@@ -489,10 +489,10 @@ describe('the root API for the Vue layer', () => {
     const { root } = await createRoot()
     const s = root.createSurface({ width: 100, height: 100 })
     const theme: Theme = { ...defaultTheme, colors: { light: { ...defaultTheme.colors.light, label: '#102030' }, dark: defaultTheme.colors.dark } }
-    const seen: { theme: Theme; scheme: string }[] = []; root.on('theme', e => seen.push(e))
+    const seen: { theme: Theme; scheme: string; contrast: boolean }[] = []; root.on('theme', e => seen.push(e))
     const restyle = vi.spyOn(s, 'restyle'), anim = vi.spyOn(root.anim, 'setTheme')
     root.setTheme(theme)
-    expect(root.theme).toBe(theme); expect(seen).toEqual([{ theme, scheme: 'light' }])
+    expect(root.theme).toBe(theme); expect(seen).toEqual([{ theme, scheme: 'light', contrast: false }])
     expect(restyle).toHaveBeenCalledTimes(1); expect(anim).toHaveBeenCalledWith(theme, 'light')
     expect(s.pointer.theme).toBe(theme)                      // the tracker's hit test resolves radius tokens against it
     const later = root.createSurface({ width: 100, height: 100 })
@@ -520,10 +520,9 @@ describe('the root API for the Vue layer', () => {
     try {
       const { root } = await createRoot({ quality: 'auto' })
       const s = root.createSurface({ width: 10, height: 10, fill: true })
-      const restyle = vi.spyOn(s, 'restyle')
       expect(root.contrast).toBe(false); expect(media.listening(CONTRAST)).toBe(1)
       media.change(CONTRAST, true)
-      expect(root.contrast).toBe(true); expect(root.quality.tier).toBe('minimal'); expect(restyle).toHaveBeenCalledTimes(1)
+      expect(root.contrast).toBe(true); expect(root.quality.tier).toBe('minimal'); expect(s.error).toBeNull()
       media.change(TRANSPARENCY, true); media.change(CONTRAST, false)
       expect(root.contrast).toBe(false); expect(root.quality.tier).toBe('minimal')   // reduced transparency still pins
       media.change(TRANSPARENCY, false)
@@ -538,6 +537,41 @@ describe('the root API for the Vue layer', () => {
       expect(fixed.contrast).toBe(false); expect(fixed.quality.tier).toBe('high'); expect(media.listening(CONTRAST)).toBe(0)
       fixed.dispose()
     } finally { vi.unstubAllGlobals() }
+  })
+  it('a live contrast change emits one theme event and rebuilds each Surface\'s glass once, whether or not the tier moves', async () => {
+    const media = fakeMedia()
+    vi.stubGlobal('matchMedia', media.matchMedia)
+    try {
+      const { root } = await createRoot({ quality: 'auto' })
+      const s = root.createSurface({ width: 10, height: 10, fill: true })
+      const seen: { scheme: string; contrast: boolean }[] = []; root.on('theme', e => seen.push({ scheme: e.scheme, contrast: e.contrast }))
+      const build = vi.spyOn(s as unknown as { buildGlass(q: unknown): void }, 'buildGlass')
+      media.change(CONTRAST, true)                           // high → minimal: the tier change rebuilds (setQuality)
+      expect(seen).toEqual([{ scheme: 'light', contrast: true }]); expect(build).toHaveBeenCalledTimes(1)
+      media.change(TRANSPARENCY, true)                       // pinned already: nothing rebuilds
+      expect(build).toHaveBeenCalledTimes(1)
+      media.change(CONTRAST, false)                          // still pinned: the tier stays, restyle rebuilds
+      expect(seen).toEqual([{ scheme: 'light', contrast: true }, { scheme: 'light', contrast: false }]); expect(build).toHaveBeenCalledTimes(2)
+      root.setScheme('dark')
+      expect(seen[2]).toEqual({ scheme: 'dark', contrast: false })
+      root.dispose()
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('setScheme, setTheme and createUIRoot\'s scheme and theme reject bad input readably, changing nothing', async () => {
+    const { root } = await createRoot()
+    const s = root.createSurface({ width: 100, height: 100 })
+    const restyle = vi.spyOn(s, 'restyle'), seen = vi.fn(); root.on('theme', seen)
+    expect(() => root.setScheme('drak' as never)).toThrow(GlassUIError)
+    expect(() => root.setScheme('drak' as never)).toThrow(/\[UIRoot\.setScheme\] 未知的配色方案 "drak"。允许值：light, dark。你可能想要：dark/)
+    expect(root.scheme).toBe('light')
+    const bare = { ...defaultTheme, colors: { light: defaultTheme.colors.light } } as unknown as Theme
+    expect(() => root.setTheme(bare)).toThrow(/\[UIRoot\.setTheme\] 主题缺少颜色表/)
+    expect(() => root.setTheme(null as never)).toThrow(GlassUIError)
+    expect(root.theme).toBe(defaultTheme); expect(restyle).not.toHaveBeenCalled(); expect(seen).not.toHaveBeenCalled()
+    const o = { ...base(), scheme: 'Dark' as never }
+    await expect(createUIRoot(o)).rejects.toThrow(/\[createUIRoot\.scheme\] 未知的配色方案 "Dark"。允许值：light, dark。你可能想要：dark/)
+    expect(o.renderer.shadowMap.enabled).toBe(false)         // before touching the renderer
+    await expect(createUIRoot({ ...base(), theme: bare })).rejects.toThrow(/\[createUIRoot\.theme\] 主题缺少颜色表/)
   })
   it('afterTick resolves after the next tick', async () => {
     const { root } = await createRoot(); let done = false
@@ -556,6 +590,9 @@ describe('the root API for the Vue layer', () => {
     void root.afterTick().then(() => { settled = true })
     root.dispose(); await Promise.resolve()
     expect(settled).toBe(true)                               // no tick will ever come: an await must not hang
+    let late = false
+    void root.afterTick().then(() => { late = true })        // after dispose: at once
+    await Promise.resolve(); expect(late).toBe(true)
   })
   it('a billboard world Surface faces the camera after a tick', async () => {
     const { root, camera } = await createRoot()
@@ -589,6 +626,20 @@ describe('the root API for the Vue layer', () => {
     expect(tl.x).toBeCloseTo((v.x + 1) / 2 * 800, 3); expect(tl.y).toBeCloseTo((1 - v.y) / 2 * 600, 3)
     w.position.set(0, 0, 5); root.tick(0)
     expect(root.screenFromPoint(w, 244, 122)).toBeNull()
+    w.position.set(0.5, 0, 0.05); root.tick(0)               // just behind the eye, still in front of nothing
+    expect(root.screenFromPoint(w, 244, 122)).toBeNull()
+  })
+  it('screenFromPoint: a point past the far plane still projects (a caret there keeps its place)', async () => {
+    const { root, camera } = await createRoot()             // far = 100
+    const w = root.createSurface({ layer: 'world', width: 488, height: 244 }); w.position.set(0, 0, -150)
+    root.tick(0)
+    const c = root.screenFromPoint(w, 244, 122)!
+    expect(c).not.toBeNull(); expect(c.x).toBeCloseTo(400, 3); expect(c.y).toBeCloseTo(300, 3)
+    const v = new Vector3(-1, 0.5, -150).project(camera)
+    const tl = root.screenFromPoint(w, 0, 0)!
+    expect(tl.x).toBeCloseTo((v.x + 1) / 2 * 800, 3); expect(tl.y).toBeCloseTo((1 - v.y) / 2 * 600, 3)
+    w.position.set(0, 0, -0.05); root.tick(0)               // nearer than the near plane (0.1), in front: projects too
+    expect(root.screenFromPoint(w, 244, 122)).not.toBeNull()
   })
   it('createSurface centres a { center: true } screen Surface; fill wins over center, center over left/top', async () => {
     const { root } = await createRoot()

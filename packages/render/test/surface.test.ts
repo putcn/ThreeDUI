@@ -1045,7 +1045,7 @@ describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
       // the colours from the tokens: the shade is fill moved 4 % toward label in sRGB, then linear
       const [fill, label, border] = (['fill', 'label', 'tertiaryLabel'] as const).map(t => resolveColor(t, theme, scheme))
       const shade = toColor([0, 1, 2, 3].map(i => fill![i]! + (label![i]! - fill![i]!) * FILL.labelMix) as [number, number, number, number])
-      expect(fillColors(theme, scheme)).toEqual({ slab: toColor(fill!), glass: shade, border: toColor(border!) })
+      expect(fillColors(theme, scheme)).toEqual({ slab: toColor(fill!), glass: shade, border: toColor(border!), alpha: FILL.alpha })
       // light: a shade darker than the white card; dark: lighter than the dark one
       expect(scheme === 'light' ? shade.r < toColor(fill!).r : shade.r > toColor(fill!).r).toBe(true)
       // the element glass's outline (120 × 60 pt) in its varying; at the centre the fill, ½ pt inside its edge the border
@@ -1061,9 +1061,10 @@ describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
       expect(r.render).toHaveBeenCalledTimes(1)                       // the content once: no luma pass, no pyramid
     }
   })
-  it('fill with increased contrast: black/white solid fills and a label border; a restyle switches them per scheme', () => {
-    const pinned = (u: number) => ({ vGlassMisc: [1, -1, -1, 1], vGlassTint: [1, 1, 1, 0], vGlassGlow: [0, 0, 0, 0], vGlassGeom: [0.1, 0.1, u, 0.5], vGlassOutline: [0.6, 0.3, 0.12, 2] })
-    const rgb = (m: Mesh, u: number) => evalNode((m.material as MeshPhysicalNodeMaterial).backdropNode, pinned(u), undefined, 0.2).map(v => +v.toFixed(9))
+  it('fill with increased contrast: solid black/white fills and a label border; a restyle switches them per scheme', () => {
+    const pinned = (u: number, glow = [0, 0, 0, 0]) => ({ vGlassMisc: [1, -1, -1, 1], vGlassTint: [1, 1, 1, 0], vGlassGlow: glow, vGlassGeom: [0.1, 0.1, u, 0.5], vGlassOutline: [0.6, 0.3, 0.12, 2] })
+    const rgb = (m: Mesh, u: number, glow?: number[]) => evalNode((m.material as MeshPhysicalNodeMaterial).backdropNode, pinned(u, glow), undefined, 0.2).map(v => +v.toFixed(9))
+    const alpha = (m: Mesh, u: number) => +evalNode((m.material as MeshPhysicalNodeMaterial).backdropAlphaNode, pinned(u), undefined, 0.2)[0]!.toFixed(9)
     const round = (k: Color) => [k.r, k.g, k.b].map(v => +v.toFixed(9))
     const c: SurfaceContext = { ...ctx, quality: QUALITY.minimal, contrast: true }
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, c)
@@ -1075,9 +1076,22 @@ describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
       expect(rgb(slabOf(s)[0]!, 0.5)).toEqual(solid)
       expect(rgb(elementGlass(s)[0]!, 0.5)).toEqual(solid)
       expect(rgb(elementGlass(s)[0]!, 1 - 0.5 / 120)).toEqual(label)
+      expect([alpha(slabOf(s)[0]!, 0.5), alpha(elementGlass(s)[0]!, 0.5)]).toEqual([1, 1])   // solid, not FILL.alpha
+      // a coloured control (glow) keeps its colour, solid too
+      expect(rgb(elementGlass(s)[0]!, 0.5, [0.2, 0.1, 0.9, 1.1])).toEqual([0.2, 0.1, 0.9])
     }
-    c.contrast = false; s.restyle()                                 // contrast off: the theme's fill colours again
+    c.contrast = false; s.restyle()                                 // contrast off: the theme's fill colours, near-opaque again
     expect(rgb(elementGlass(s)[0]!, 1 - 0.5 / 120)).toEqual(round(fillColors(theme, 'dark').border))
+    expect([alpha(slabOf(s)[0]!, 0.5), alpha(elementGlass(s)[0]!, 0.5)]).toEqual([FILL.alpha, FILL.alpha])
+    expect(alpha(elementGlass(s)[0]!, 1 - 0.5 / 120)).toBe(1)       // the border band is opaque either way
+  })
+  it('a quality change after a contrast change builds the glass with the new fills (one rebuild, no restyle needed)', () => {
+    const alpha = (m: Mesh) => +evalNode((m.material as MeshPhysicalNodeMaterial).backdropAlphaNode, { vGlassMisc: [1, -1, -1, 1], vGlassTint: [1, 1, 1, 0], vGlassGlow: [0, 0, 0, 0], vGlassGeom: [0.1, 0.1, 0.5, 0.5], vGlassOutline: [0.6, 0.3, 0.12, 2] }, undefined, 0.2)[0]!.toFixed(9)
+    const c: SurfaceContext = { ...ctx, quality: QUALITY.high }
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, c)
+    c.contrast = true
+    s.setQuality(QUALITY.minimal)
+    expect(elementGlass(s).map(alpha)).toEqual([1])
   })
   it('fill: no rim decorations over the glass (its border replaces them), pools kept; back on a refracting tier the rims return', () => {
     const { s } = signup({ ...ctx })

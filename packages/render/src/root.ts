@@ -64,8 +64,11 @@ export interface UIRootEventMap {
   quality: { tier: QualityTier; prev: QualityTier; profile: Readonly<QualityProfile> }
   /** A Surface failed a frame (it stopped drawing). */
   error: { surface: Surface; error: Error }
-  /** `setTheme` / `setScheme` swapped the theme or scheme; every Surface has been restyled. */
-  theme: { theme: Theme; scheme: ColorScheme }
+  /**
+   * `setTheme` / `setScheme` swapped the theme or scheme, or increased contrast turned on or off (the media query, live);
+   * every Surface has been rebuilt for it.
+   */
+  theme: { theme: Theme; scheme: ColorScheme; contrast: boolean }
 }
 
 export interface UIRoot {
@@ -86,10 +89,14 @@ export interface UIRoot {
   removeSurface(surface: Surface): void
   /**
    * Swaps the theme: the shared context's theme and text measure, the animation runtime's theme, then every Surface
-   * restyled (`Surface.restyle`: fills, an opaque background, the glass, every node marked); emits `'theme'`.
+   * restyled (`Surface.restyle`: fills, an opaque background, the glass, every node marked); emits `'theme'`. A theme
+   * without `colors.light` / `colors.dark` tables throws a `GlassUIError` and changes nothing.
    */
   setTheme(theme: Theme): void
-  /** Swaps the colour scheme (dark mode) as `setTheme` swaps the theme; a no-op for the current scheme. */
+  /**
+   * Swaps the colour scheme (dark mode) as `setTheme` swaps the theme; a no-op for the current scheme. Anything but
+   * `'light'` / `'dark'` throws a `GlassUIError` and changes nothing.
+   */
   setScheme(scheme: ColorScheme): void
   /**
    * Layout, animation, content passes, draw order and the shadow fit; `dt` in seconds. Billboard world Surfaces turn to
@@ -98,13 +105,13 @@ export interface UIRoot {
   tick(dt: number): void
   /**
    * Resolves at the end of the next `tick` (after the content passes and the shadow fit): layout and the render list
-   * are current then (e.g. to place an IME proxy at a caret). `dispose` resolves any still pending.
+   * are current then (e.g. to place an IME proxy at a caret). `dispose` resolves any still pending; after it, at once.
    */
   afterTick(): Promise<void>
   /**
    * Surface pt (x, y) on its content plane (`Surface.worldFromPoint`), projected through the camera to CSS px from the
-   * canvas's top-left; null when the point is behind the camera (or outside its near/far range). Reads the matrices
-   * as the last `tick` left them.
+   * canvas's top-left; null when the point is behind the camera (view-space z ≥ 0). A point past the far plane (or
+   * nearer than the near one) still projects. Reads the matrices as the last `tick` left them.
    */
   screenFromPoint(surface: Surface, x: number, y: number): { x: number; y: number } | null
   /**
@@ -140,6 +147,17 @@ const CORNERS = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const
 const REDUCED_MOTION = '(prefers-reduced-motion: reduce)', REDUCED_TRANSPARENCY = '(prefers-reduced-transparency: reduce)', INCREASED_CONTRAST = '(prefers-contrast: more)'
 /** The media query's list where the environment has `matchMedia` (not under Node). */
 const media = (q: string): MediaQueryList | null => typeof matchMedia === 'function' ? matchMedia(q) : null
+const SCHEMES: readonly ColorScheme[] = ['light', 'dark']
+/** Throws a readable `GlassUIError` (scope `scope`) unless `s` is a colour scheme. */
+function checkScheme(scope: string, s: unknown): void {
+  if (!(SCHEMES as readonly unknown[]).includes(s)) throw new GlassUIError(scope, `未知的配色方案 "${String(s)}"`, { allowed: SCHEMES, got: String(s) })
+}
+/** Throws a readable `GlassUIError` (scope `scope`) unless `t` has `colors.light` and `colors.dark` tables (every token's home). */
+function checkTheme(scope: string, t: unknown): void {
+  const colors = (t as { colors?: unknown } | null | undefined)?.colors as { light?: unknown; dark?: unknown } | null | undefined
+  const table = (v: unknown): boolean => typeof v === 'object' && v !== null
+  if (!table(colors) || !table(colors!.light) || !table(colors!.dark)) throw new GlassUIError(scope, '主题缺少颜色表：需要 colors.light 与 colors.dark 两个对象（例如 { ...defaultTheme, colors: { light: {…}, dark: {…} } }）')
+}
 const domCanvas: CanvasFactory = (width, height) => Object.assign(document.createElement('canvas'), { width, height }) as unknown as ReturnType<CanvasFactory>
 
 /**
@@ -162,7 +180,10 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  */
 export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const { renderer, scene, camera } = opts
-  if (opts.quality !== undefined) checkQualityTier('createUIRoot.quality', opts.quality, true)   // before touching the renderer
+  // before touching the renderer
+  if (opts.quality !== undefined) checkQualityTier('createUIRoot.quality', opts.quality, true)
+  if (opts.scheme !== undefined) checkScheme('createUIRoot.scheme', opts.scheme)
+  if (opts.theme !== undefined) checkTheme('createUIRoot.theme', opts.theme)
   try { await renderer.init?.() } catch (e) {
     throw new GlassUIError('createUIRoot', `渲染后端初始化失败（WebGPU 与 WebGL2 都不可用）：${e instanceof Error ? e.message : String(e)}`)
   }
@@ -247,21 +268,28 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const pin = (): void => quality.setReducedTransparency(transparency || contrast)
   follow(transparencyQuery, on => { transparency = on; pin() })
   follow(motionQuery, on => { anim.reducedMotion = on })
-  follow(contrastQuery, on => { contrast = on; ctx.contrast = on; each(s => s.restyle()); pin() })
+  // one glass rebuild per Surface: a tier change (the pin) rebuilds them all with the new fills (`setQuality`); else restyle
+  follow(contrastQuery, on => {
+    contrast = on; ctx.contrast = on
+    const tier = quality.tier
+    pin()
+    if (quality.tier === tier) each(s => s.restyle())
+    emit('theme', { theme, scheme, contrast })
+  })
 
   /** The shared context and the animation runtime take the current theme and scheme; every Surface restyles; `'theme'`. */
   function restyleAll(): void {
     ctx.theme = theme; ctx.scheme = scheme; ctx.measure = createMeasureFn(text, theme, scheme)
     anim.setTheme(theme, scheme)
     each(s => s.restyle())
-    emit('theme', { theme, scheme })
+    emit('theme', { theme, scheme, contrast })
   }
 
   /** Resolved (and dropped) at the end of every `tick`, and by `dispose`. */
   const afterTickWaiters: (() => void)[] = []
   function settleAfterTick(): void { for (const resolve of afterTickWaiters.splice(0)) resolve() }
 
-  const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3(), point = new Vector3()
+  const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3(), point = new Vector3(), view = new Vector3()
   const qCam = new Quaternion(), qParent = new Quaternion()
   const lastCamera = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
   let lastFitted = -1, looping = false, disposed = false
@@ -354,12 +382,18 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       fitShadows(changed)
       settleAfterTick()
     },
-    setTheme(t) { theme = t; restyleAll() },
-    setScheme(sc) { if (sc !== scheme) { scheme = sc; restyleAll() } },
-    afterTick() { return new Promise<void>(resolve => { afterTickWaiters.push(resolve) }) },
+    setTheme(t) { checkTheme('UIRoot.setTheme', t); theme = t; restyleAll() },
+    setScheme(sc) { checkScheme('UIRoot.setScheme', sc); if (sc !== scheme) { scheme = sc; restyleAll() } },
+    afterTick() {
+      if (disposed) return Promise.resolve()   // no tick will come
+      return new Promise<void>(resolve => { afterTickWaiters.push(resolve) })
+    },
     screenFromPoint(s, x, y) {
-      const p = s.worldFromPoint(x, y, point).project(camera)
-      if (!(p.z >= -1 && p.z <= 1)) return null   // behind the camera (or past its near/far); NaN too
+      s.worldFromPoint(x, y, point)
+      // behind the camera: view-space z ≥ 0 (the camera looks down −z), whatever the backend's depth convention; a
+      // point past the far plane still projects (a caret there still has a place on screen)
+      if (!(view.copy(point).applyMatrix4(camera.matrixWorldInverse).z < 0)) return null
+      const p = point.project(camera)
       const r = canvas.getBoundingClientRect()
       return { x: (p.x + 1) / 2 * r.width, y: (1 - p.y) / 2 * r.height }
     },
