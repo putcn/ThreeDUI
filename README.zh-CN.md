@@ -48,7 +48,7 @@ pnpm test:visual        # playground 的 Playwright 视觉回归：无头 Chromi
 
 查询参数：`?scene=signup|world|both`（默认 `both`）、`?quality=high|medium|low|minimal`（默认自适应）、`?webgl` 强制 WebGL2 后端。拖动背景可环绕观察（表单固定在屏幕上，世界层面板随场景移动）。HUD 显示后端、帧率、每帧 draw call 总数（整帧：内容 pass、阴影贴图、宿主场景和 UI）、质量档位和 Surface 数。`pnpm playground:build` 把静态构建输出到 `examples/playground/dist`。
 
-`pnpm test:visual` 在两个后端上把 `signup` 和 `world` 场景（1280 × 900，`high` 档）与 `examples/visual/tests/visual.spec.ts-snapshots/` 里的基线比对。基线与机器绑定（系统字体栅格化、GPU 驱动）：换一台机器时，先装一次 Playwright 的 Chromium（`pnpm --filter visual exec playwright install chromium`），再用 `pnpm test:visual:update` 生成自己的基线，详见 `examples/visual/README.md`。
+`pnpm test:visual` 在两个后端上把 `signup` 和 `world` 场景（1280 × 900，`high` 档）以及 `medium`、`minimal` 档的 `signup` 与 `examples/visual/tests/visual.spec.ts-snapshots/` 里的基线比对。基线与机器绑定（系统字体栅格化、GPU 驱动）：换一台机器时，先装一次 Playwright 的 Chromium（`pnpm --filter visual exec playwright install chromium`），再用 `pnpm test:visual:update` 生成自己的基线，详见 `examples/visual/README.md`。
 
 原来的 spike 仍保留作对比：
 

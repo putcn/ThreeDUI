@@ -2,10 +2,15 @@
 
 Screenshots of the playground compared against committed baselines:
 
-| scene | URL | projects |
+| baseline | URL | projects |
 | --- | --- | --- |
 | `signup` | `/?scene=signup&quality=high[&webgl]&hud=0` | `webgl2`, `webgpu` |
 | `world` | `/?scene=world&quality=high[&webgl]&hud=0` | `webgl2`, `webgpu` |
+| `signup-medium` | `/?scene=signup&quality=medium[&webgl]&hud=0` | `webgl2`, `webgpu` |
+| `signup-minimal` | `/?scene=signup&quality=minimal[&webgl]&hud=0` | `webgl2`, `webgpu` |
+
+`signup-medium` is the touch default (refraction, mip blur; at DPR 1 the content RT keeps one texel per CSS px) and
+`signup-minimal` the reduced-transparency tier (a near-opaque frosted fill instead of refraction, no screen copy).
 
 - Viewport 1280 × 900, DPR 1; a test fails when more than 2 % of the pixels differ (`maxDiffPixelRatio: 0.02`).
 - `webgl2`: the headless shell with SwiftShader, `&webgl` forces three's WebGL2 backend; it must report `webgl2`.
@@ -14,10 +19,10 @@ Screenshots of the playground compared against committed baselines:
 - The backend is checked before the screenshot, so a fallback never writes or matches a baseline.
 - An uncaught page error or a `console.error` from navigation on fails the test before the screenshot (it may change
   too few pixels to trip the 2 % budget).
-- Determinism: `quality=high` fixes the tier; `hud=0` hides the HUD's live fps text. After `__glassui.ready` the test
+- Determinism: `quality=…` fixes the tier (no adaptation); `hud=0` hides the HUD's live fps text. After `__glassui.ready` the test
   waits 1000 ms and at least 1 s of the UI's frame time (the root clamps a frame to 50 ms, so a slow SwiftShader frame
   rate stretches the wait) for the backdrop luma's smoothing to settle. Nothing else in the scenes moves without input.
-- Baselines: `tests/visual.spec.ts-snapshots/<scene>-<project>.png` (the same names on every platform).
+- Baselines: `tests/visual.spec.ts-snapshots/<baseline>-<project>.png` (the same names on every platform).
 
 ## Run
 
@@ -48,8 +53,11 @@ pnpm test:visual:update        # writes tests/visual.spec.ts-snapshots/*.png
 ```
 
 Inspect every PNG (and, on the reference machine only, commit it). `signup` has reference renders in `docs/images/`
-(`signup-front.jpg`). `world` has none and is judged by eye: the glass card stands to the right, tipped back, and the
-wall occludes its lower-left corner and the left end of the Cancel pill.
+(`signup-front.jpg`). `signup-medium` and `signup-minimal` have none and are judged by eye: medium is the same form
+drawn without back faces, depth reject or the blur pyramid (text as sharp as at `high`); minimal shows the controls as
+near-opaque frosted fills whose rims, edge glow and the primary button's glow still read. `world` has none either and
+is judged by eye: the glass card stands to the right, tipped back, and the wall occludes its lower-left corner and the
+left end of the Cancel pill.
 
 ## On a diff
 

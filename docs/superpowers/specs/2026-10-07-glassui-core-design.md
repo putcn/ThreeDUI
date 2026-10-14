@@ -338,7 +338,7 @@ app.mount(root.screen.createSurface({ fill: true }))  // 或 mount(someSurface)
 
 - **core/text（Node，无 GPU）**：Vitest。样式解析与 tw 解析（含错误消息快照）、Yoga 布局结果、事件冒泡与命中测试（圆角、裁剪、elevation）、焦点顺序、滚动物理、spring 数值、文字测量与换行（中英混排）、manifest 生成。
 - **vue**：Vitest + 自定义渲染器挂到内存 Surface：`v-if/v-for/slots/Teleport/Transition` 的节点树快照；组件 props 校验。
-- **render（浏览器）**：Playwright 跑 `examples/visual`，WebGPU 与 `forceWebGL` 各一遍，像素比对（阈值）；覆盖每个组件各状态、屏幕层/世界层、玻璃四档、中文文本、IME 组合态截图。Plan 2 已有的部分：playground 的 `signup` 与 `world` 两个场景，1280×900、DPR 1、`high` 档，WebGL2（SwiftShader）与 WebGPU 各一遍（three 回落到 WebGL2 时 WebGPU 一项跳过、不比对），像素差预算 2 %（`maxDiffPixelRatio: 0.02`），另有控制台错误闸门（页面异常或 `console.error` 直接判失败）；基线在参考机上生成、与机器绑定（`examples/visual/README.md`）。
+- **render（浏览器）**：Playwright 跑 `examples/visual`，WebGPU 与 `forceWebGL` 各一遍，像素比对（阈值）；覆盖每个组件各状态、屏幕层/世界层、玻璃四档、中文文本、IME 组合态截图。Plan 2 已有的部分：playground 的 `signup` 与 `world` 两个场景（`high` 档），以及 `medium`、`minimal` 档的 `signup`，1280×900、DPR 1，WebGL2（SwiftShader）与 WebGPU 各一遍（three 回落到 WebGL2 时 WebGPU 一项跳过、不比对），像素差预算 2 %（`maxDiffPixelRatio: 0.02`），另有控制台错误闸门（页面异常或 `console.error` 直接判失败）；基线在参考机上生成、与机器绑定（`examples/visual/README.md`）。
 - **性能基线**：playground 内置 100 按钮 + 20 玻璃容器场景，记录帧时间与 draw call 数，CI 上只做回归阈值（Chrome headless，WebGL 路径）。
 - **IME**：Playwright 的 `keyboard.imeSetComposition` 做组合输入的自动化；真机手工检查清单（iOS Safari、Android Chrome、macOS 中文输入法）。
 

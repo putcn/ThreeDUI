@@ -16,9 +16,19 @@ const SETTLE_UI_S = 1
 /** The root's per-frame dt clamp: `FrameScheduler`'s default `maxDt` (packages/render/src/scheduler.ts); keep in step. */
 const MAX_DT_S = 1 / 20
 
-const scenes = ['signup', 'world'] as const
-for (const scene of scenes) {
-  test(`${scene} renders the same`, async ({ page }, info) => {
+/**
+ * What is compared, each at a fixed tier (`quality=…`: no adaptation) and DPR 1 (the config): both scenes at `high`,
+ * and the sign-up form at the lower tiers too — `medium` (refraction; the content RT at one texel per CSS px) and
+ * `minimal` (a near-opaque frosted fill, no screen copy). `name` is the baseline's: `<name>-<project>.png`.
+ */
+const cases = [
+  { name: 'signup', scene: 'signup', quality: 'high' },
+  { name: 'world', scene: 'world', quality: 'high' },
+  { name: 'signup-medium', scene: 'signup', quality: 'medium' },
+  { name: 'signup-minimal', scene: 'signup', quality: 'minimal' },
+] as const
+for (const { name, scene, quality } of cases) {
+  test(`${name} renders the same`, async ({ page }, info) => {
     const webgl = info.project.name === 'webgl2'
     // from navigation on: an uncaught throw or a console error after `ready` may change only a few pixels (a stopped
     // loop, the HUD's small error box), under the diff budget, so they fail the test on their own
@@ -26,7 +36,7 @@ for (const scene of scenes) {
     page.on('pageerror', e => errors.push(`pageerror: ${e.message}`))
     page.on('console', m => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`) })
     // `hud=0`: no live fps text in the frame
-    await page.goto(`/?scene=${scene}&quality=high${webgl ? '&webgl' : ''}&hud=0`)
+    await page.goto(`/?scene=${scene}&quality=${quality}${webgl ? '&webgl' : ''}&hud=0`)
     // only the backend crosses back: the root itself is not serialisable
     const backend = await page.evaluate(async () => {
       const handle = window.__glassui
@@ -41,7 +51,7 @@ for (const scene of scenes) {
     }
     await settle(page)
     expect(errors, 'page errors and console errors since navigation').toEqual([])
-    await expect(page).toHaveScreenshot(`${scene}.png`)
+    await expect(page).toHaveScreenshot(`${name}.png`)
   })
 }
 

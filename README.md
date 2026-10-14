@@ -48,7 +48,7 @@ pnpm test:visual        # Playwright visual regression of the playground: WebGL2
 
 Query parameters: `?scene=signup|world|both` (default `both`), `?quality=high|medium|low|minimal` (default: adaptive), `?webgl` to force the WebGL2 backend. Drag the background to orbit (the form stays put; the world-layer panel moves with the scene). The HUD shows the backend, fps, draw calls per frame (the whole frame: content passes, shadow map, host scene and UI), quality tier and Surface count. `pnpm playground:build` writes a static build to `examples/playground/dist`.
 
-`pnpm test:visual` compares the `signup` and `world` scenes (1280 × 900, `high` tier) on both backends with the baselines in `examples/visual/tests/visual.spec.ts-snapshots/`. Baselines are machine-specific (system-font rasterisation, GPU driver): on another machine install Playwright's Chromium once (`pnpm --filter visual exec playwright install chromium`) and generate your own with `pnpm test:visual:update` — see `examples/visual/README.md`.
+`pnpm test:visual` compares the `signup` and `world` scenes (1280 × 900, `high` tier) and `signup` at the `medium` and `minimal` tiers on both backends with the baselines in `examples/visual/tests/visual.spec.ts-snapshots/`. Baselines are machine-specific (system-font rasterisation, GPU driver): on another machine install Playwright's Chromium once (`pnpm --filter visual exec playwright install chromium`) and generate your own with `pnpm test:visual:update` — see `examples/visual/README.md`.
 
 The original spike is still there for comparison:
 

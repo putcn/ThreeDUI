@@ -1,8 +1,8 @@
 import { defineConfig } from '@playwright/test'
 
-// Visual regression for the playground (Task 24): `signup` and `world` at 1280 × 900, DPR 1, on WebGL2 (SwiftShader,
-// required) and WebGPU (full Chromium in new headless; skipped when three falls back to WebGL2). Baselines are
-// machine-specific: see README.md.
+// Visual regression for the playground (Task 24): `signup` and `world` at the high tier, and `signup` at medium and
+// minimal, at 1280 × 900, DPR 1, on WebGL2 (SwiftShader, required) and WebGPU (full Chromium in new headless; skipped
+// when three falls back to WebGL2). Baselines are machine-specific: see README.md.
 export default defineConfig({
   testDir: './tests',
   // SwiftShader (webgl2) needs up to ~55 s per test when workers run in parallel
