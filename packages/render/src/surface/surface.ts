@@ -7,7 +7,7 @@ import {
 } from '@glassui/core'
 import type { TextEngine } from '@glassui/text'
 import { GlassBatch, type TouchState } from '../glass/batch'
-import { createGlassMaterial, DepthCapture, ScreenCapture, type GlassMaterial } from '../glass/material'
+import { createGlassMaterial, DepthCapture, ScreenCapture, type GlassMaterial, type GlassMode } from '../glass/material'
 import { SLAB_BEHIND, SLAB_FROST } from '../glass/frost'
 import { PanelBatch, cornerExponentFor } from '../panel/batch'
 import { createPanelMaterial } from '../panel/material'
@@ -38,6 +38,14 @@ export interface QualitySettings {
    */
   contentScale: number
   backFaces: boolean; depthReject: boolean; blur: 'kawase' | 'mip'
+  /**
+   * How the glass sees its backdrop (`GlassMode`): `'refract'` (high, medium), `'straight'` (low: no refraction, no
+   * dispersion, no depth reject), `'fill'` (minimal: a near-opaque frosted fill of the theme's `fill` colour; no
+   * content, screen or depth sample, no luma pass, no blur pyramid, so a glass Surface copies no framebuffer).
+   */
+  glassMode: GlassMode
+  /** `'refract'` only: `'never'` refracts once instead of per colour channel; `'auto'` (medium: disperse only above 0.25 px) is not implemented yet and disperses as `'always'`. */
+  dispersion: 'always' | 'auto' | 'never'
 }
 /** What every Surface of one root shares; `quality` is the root's current tier, the one new Surfaces start from. */
 export interface SurfaceContext { theme: Theme; scheme: ColorScheme; layout: LayoutEngine; measure: MeasureFn; anim: AnimationRuntime; text: TextEngine; pages: AtlasPages; quality: QualitySettings }
@@ -80,6 +88,8 @@ export function createContentMaterial(content: Texture): MeshStandardNodeMateria
  * orthographically with the same Surface-local instance matrices: panels, pools, images, glyphs (one mesh per page).
  * With `quality.blur === 'kawase'` the content RT also feeds a `KawasePyramid`, which the element glass samples by
  * roughness instead of the RT's mips; with clear + adaptive glass, a luma pass (`SurfaceLuma`) for its darkening.
+ * `quality.glassMode` picks how all of this glass sees its backdrop (`GlassMode`): refracted, straight through, or not
+ * at all (the minimal tier's frosted fill: no luma, no pyramid, no capture copied).
  *
  * Every draw lives under `layer`, a `Group` whose `renderOrder` is `drawOrder`: three sorts by the nearest group's order
  * first, so Surfaces draw one after another (the root sets `drawOrder`, nearer = higher) instead of layer by layer
@@ -122,6 +132,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The quality this Surface's draws were built for: `ctx.quality` at construction, then the last `setQuality`. */
   private quality: QualitySettings
   private readonly contentClear: { color: Color; alpha: number } = { color: new Color(0, 0, 0), alpha: 0 }
+  /** The `'fill'` glass mode's colour: the theme's `fill` (panel) token, linear. */
+  private readonly glassFill: Color
   private readonly glassMaterials: GlassMaterial[] = []
   /** The meshes `buildGlass` made (slab and element glass), replaced on a quality change. */
   private readonly glassMeshes: Mesh[] = []
@@ -157,6 +169,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.focus = new FocusManager(this.model.root, this.events)
     this.su = { size: uniform(new Vector2()), ptPerUnit: uniform(this.model.ptPerUnit) }
     this.quality = ctx.quality
+    this.glassFill = toColor(resolveColor('fill', ctx.theme, ctx.scheme))
     this.contentPass = new ContentPass({ type: this.quality.contentType })
     this.seenEpoch = ctx.text.atlas.epoch
 
@@ -209,28 +222,35 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * through the slab's frost, where the content is transparent, and with `q.depthReject` reads the slab's depth capture
    * too (no further copy); on a 'none' Surface it refracts the content RT alone. The captures are owned by the Surface:
    * a rebuild never disposes them.
+   *
+   * `q.glassMode` (`GlassMode`): `'straight'` looks through the same backdrops unrefracted, with no depth reject (and no
+   * depth capture); `'fill'` hands no backdrop to any draw (the theme's fill colour instead), so while it lasts no draw
+   * references the captures and three copies nothing; the next rebuild to another mode references them again.
    */
   private buildGlass(q: QualitySettings): void {
     for (const m of this.glassMeshes) m.removeFromParent()
     for (const gm of this.glassMaterials) gm.dispose()
     this.glassMeshes.length = 0; this.glassMaterials.length = 0
-    const slab = this.backgroundGlass, screen = this.screen
-    const depth = slab && screen && q.depthReject ? (this.depth ??= new DepthCapture()) : undefined
+    const slab = this.backgroundGlass, screen = this.screen, mode = q.glassMode
+    const optics = { mode, dispersion: q.dispersion !== 'never', fill: this.glassFill }
+    const reject = q.depthReject && mode === 'refract'
+    const depth = slab && screen && reject ? (this.depth ??= new DepthCapture()) : undefined
     if (slab && screen) {
       for (const [side, on] of [['back', q.backFaces], ['front', true]] as const) {
         if (!on) continue
-        const gm = createGlassMaterial({ geometry: slab.geometry, K: slab.K, backdrop: 'screen', side, surface: this.su, screen, depthReject: q.depthReject, depth })
+        const backdrop = mode === 'fill' ? {} : { screen, depthReject: reject, depth }
+        const gm = createGlassMaterial({ geometry: slab.geometry, K: slab.K, backdrop: 'screen', side, surface: this.su, ...backdrop, ...optics })
         const mesh = new Mesh(slab.geometry, gm.material)
         mesh.renderOrder = SURFACE_ORDER.slab; mesh.frustumCulled = false   // at z = 0: its top face is the content plane
         this.layer.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
       }
     }
     // the slab's captures, which predate this Surface's draws: the slab is its first draw
-    const behind = slab && screen ? { screen, screenLevel: SLAB_BEHIND.level, screenLift: SLAB_BEHIND.lift, depthReject: q.depthReject, ...(depth ? { depth } : {}) } : {}
+    const behind = slab && screen && mode !== 'fill' ? { screen, screenLevel: SLAB_BEHIND.level, screenLift: SLAB_BEHIND.lift, depthReject: reject, ...(depth ? { depth } : {}) } : {}
     const element: GlassMaterial[] = []
     for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
       if (!on) continue
-      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture, pyramid: this.pyramid?.textures, ...behind })
+      const gm = createGlassMaterial({ geometry: this.glass.geometry, K: this.glass.K, backdrop: 'panel', side, surface: this.su, content: this.contentPass.texture, pyramid: this.pyramid?.textures, ...behind, ...optics })
       const mesh = new Mesh(this.glass.geometry, gm.material)
       mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = false
       this.plane.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm); element.push(gm)
@@ -238,9 +258,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.luma.attach(element)   // the slab's luma index is −1: only the element glass reads it
   }
 
-  /** Makes (on 'kawase', in the content's texel type) or drops the blur pyramid; before `buildGlass`, which hands it to the glass. */
+  /**
+   * Makes (on 'kawase', in the content's texel type) or drops the blur pyramid (also in the 'fill' glass mode, which
+   * samples no backdrop); before `buildGlass`, which hands it to the glass.
+   */
   private syncPyramid(q: QualitySettings): void {
-    if (q.blur !== 'kawase') { this.pyramid?.dispose(); this.pyramid = null }
+    if (q.blur !== 'kawase' || q.glassMode === 'fill') { this.pyramid?.dispose(); this.pyramid = null }
     else if (this.pyramid) this.pyramid.setType(q.contentType)
     else this.pyramid = new KawasePyramid(4, q.contentType)   // spec §5.6: 4 levels
   }
@@ -431,6 +454,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
         this.pyramid?.render(renderer, this.contentPass.texture)
         this.contentDirty = false
       }
+      // the 'fill' glass mode samples no backdrop: nothing reads the luma (and the slab capture's copy would be stale)
+      if (this.quality.glassMode === 'fill') return
       const behind = this.screen && camera ? { behind: { capture: this.screen, camera, plane: this.plane } } : {}
       this.luma.update({ renderer, glass: this.list?.glass ?? [], surface: this.model, content: this.contentPass.texture, dt: this.lastDt, redrawn, ...behind })
     } catch (e) { this.fail(e) }

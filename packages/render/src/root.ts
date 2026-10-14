@@ -47,7 +47,7 @@ export interface UIRootOptions {
 export type CreateSurfaceOptions = SurfaceOptions & { layer?: 'screen' | 'world'; fill?: boolean; left?: number; top?: number }
 
 export interface UIRootEventMap {
-  quality: { tier: QualityTier; prev: QualityTier; profile: QualityProfile }
+  quality: { tier: QualityTier; prev: QualityTier; profile: Readonly<QualityProfile> }
   /** A Surface failed a frame (it stopped drawing). */
   error: { surface: Surface; error: Error }
 }

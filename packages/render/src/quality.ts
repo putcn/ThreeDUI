@@ -1,20 +1,22 @@
 import type { QualitySettings } from './surface/surface'
 
 export type QualityTier = 'high' | 'medium' | 'low' | 'minimal'
-/** A full tier: what a Surface reads (`QualitySettings`, `blur` included) plus what the root and the glass read. */
-export interface QualityProfile extends QualitySettings { tier: QualityTier; shadowMap: number; refraction: boolean; dispersion: 'always' | 'auto' | 'never' }
+/** A full tier: what a Surface reads (`QualitySettings`: RT, blur, glass mode, dispersion) plus what the root reads. */
+export interface QualityProfile extends QualitySettings { tier: QualityTier; shadowMap: number }
 
 /**
- * Spec §5.6 table. Frozen: every root shares these rows, so copy one before changing it. `contentScale` caps the
- * content RT's supersampling above one texel per CSS px (see `QualitySettings.contentScale`): medium's ½ and low's ¼
- * reduce it only at DPR > 1, and never below one texel per CSS px.
+ * Spec §5.6 table. Frozen (the table and every row): every root shares them, so copy a row before changing it.
+ * `contentScale` caps the content RT's supersampling above one texel per CSS px (see `QualitySettings.contentScale`):
+ * medium's ½ and low's ¼ reduce it only at DPR > 1, never below one texel per CSS px. Glass: high and medium refract
+ * (medium's `dispersion: 'auto'` threshold is not implemented yet: it disperses as high does), low looks straight
+ * through (no refraction, no dispersion), minimal draws a near-opaque frosted fill and copies no screen.
  */
-export const QUALITY: Record<QualityTier, QualityProfile> = {
-  high: Object.freeze({ tier: 'high', contentType: 'half', contentScale: 1, backFaces: true, depthReject: true, shadowMap: 2048, blur: 'kawase', refraction: true, dispersion: 'always' }),
-  medium: Object.freeze({ tier: 'medium', contentType: 'byte', contentScale: 0.5, backFaces: false, depthReject: false, shadowMap: 1024, blur: 'mip', refraction: true, dispersion: 'auto' }),
-  low: Object.freeze({ tier: 'low', contentType: 'byte', contentScale: 0.25, backFaces: false, depthReject: false, shadowMap: 512, blur: 'mip', refraction: false, dispersion: 'never' }),
-  minimal: Object.freeze({ tier: 'minimal', contentType: 'byte', contentScale: 0.25, backFaces: false, depthReject: false, shadowMap: 512, blur: 'mip', refraction: false, dispersion: 'never' }),
-}
+export const QUALITY: Readonly<Record<QualityTier, Readonly<QualityProfile>>> = Object.freeze({
+  high: Object.freeze({ tier: 'high', contentType: 'half', contentScale: 1, backFaces: true, depthReject: true, shadowMap: 2048, blur: 'kawase', glassMode: 'refract', dispersion: 'always' }),
+  medium: Object.freeze({ tier: 'medium', contentType: 'byte', contentScale: 0.5, backFaces: false, depthReject: false, shadowMap: 1024, blur: 'mip', glassMode: 'refract', dispersion: 'auto' }),
+  low: Object.freeze({ tier: 'low', contentType: 'byte', contentScale: 0.25, backFaces: false, depthReject: false, shadowMap: 512, blur: 'mip', glassMode: 'straight', dispersion: 'never' }),
+  minimal: Object.freeze({ tier: 'minimal', contentType: 'byte', contentScale: 0.25, backFaces: false, depthReject: false, shadowMap: 512, blur: 'mip', glassMode: 'fill', dispersion: 'never' }),
+})
 const ORDER: QualityTier[] = ['minimal', 'low', 'medium', 'high']
 
 export function defaultTier(env: { touch: boolean; reducedTransparency: boolean }): QualityTier {
@@ -53,7 +55,7 @@ export class QualityController {
     this.current = this.reduced ? 'minimal' : opts.initial ?? this.cap
   }
   get tier(): QualityTier { return this.current }
-  get profile(): QualityProfile { return QUALITY[this.current] }
+  get profile(): Readonly<QualityProfile> { return QUALITY[this.current] }
   onChange(fn: (tier: QualityTier, prev: QualityTier) => void): () => void { this.listeners.add(fn); return () => this.listeners.delete(fn) }
 
   /** Switches to `tier`; while pinned, records it (at most the cap) as where clearing the pin returns instead. */

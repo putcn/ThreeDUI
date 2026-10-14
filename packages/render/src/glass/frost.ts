@@ -13,3 +13,10 @@ export const SLAB_BEHIND = {
   level: SLAB_FROST.roughness * FROST.levelPerRoughness,
   lift: SLAB_FROST.roughness * FROST.liftPerRoughness + SLAB_FROST.lift,
 } as const
+
+/**
+ * The `'fill'` glass mode (minimal tier, reduced transparency; spec §5.6 "近不透明磨砂填充 + 边框"): the glass draws a
+ * fill colour instead of a backdrop, mixed over the lit shell at `alpha` (the backdrop alpha), so it reads as near-opaque
+ * frosted glass; the instance's own frost lift and tint still apply over it, and the edge glow keeps the border.
+ */
+export const FILL = { alpha: 0.92 } as const

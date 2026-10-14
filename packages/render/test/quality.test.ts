@@ -3,13 +3,14 @@ import { QualityController, QUALITY, defaultTier, type QualityTier } from '../sr
 
 describe('QUALITY tiers', () => {
   it('follow the spec table', () => {
-    expect(QUALITY.high).toMatchObject({ contentType: 'half', contentScale: 1, backFaces: true, shadowMap: 2048, blur: 'kawase', refraction: true, dispersion: 'always' })
-    expect(QUALITY.medium).toMatchObject({ contentType: 'byte', contentScale: 0.5, shadowMap: 1024, blur: 'mip', dispersion: 'auto' })
-    expect(QUALITY.low).toMatchObject({ contentScale: 0.25, refraction: false })
-    expect(QUALITY.minimal.refraction).toBe(false)
+    expect(QUALITY.high).toMatchObject({ contentType: 'half', contentScale: 1, backFaces: true, shadowMap: 2048, blur: 'kawase', glassMode: 'refract', dispersion: 'always' })
+    expect(QUALITY.medium).toMatchObject({ contentType: 'byte', contentScale: 0.5, shadowMap: 1024, blur: 'mip', glassMode: 'refract', dispersion: 'auto' })
+    expect(QUALITY.low).toMatchObject({ contentScale: 0.25, glassMode: 'straight', dispersion: 'never' })   // no refraction
+    expect(QUALITY.minimal).toMatchObject({ glassMode: 'fill', dispersion: 'never' })                     // near-opaque frosted fill
   })
-  it('each profile names its own tier and is frozen (every root shares the table)', () => {
+  it('each profile names its own tier and is frozen, as is the table (every root shares them)', () => {
     for (const t of ['high', 'medium', 'low', 'minimal'] as const) { expect(QUALITY[t].tier).toBe(t); expect(Object.isFrozen(QUALITY[t])).toBe(true) }
+    expect(Object.isFrozen(QUALITY)).toBe(true)
   })
 })
 

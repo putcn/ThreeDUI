@@ -33,7 +33,8 @@ const UNARY: Record<string, (x: number) => number> = {
 }
 
 /**
- * Evaluates `node` for one vertex (or fragment); `attributes` maps attribute names to their (vec4) values. Only taken
+ * Evaluates `node` for one vertex (or fragment); `attributes` maps attribute names to their (vec4) values, and may pin a
+ * varying by its name (a fragment-stage test then skips its vertex expression, e.g. one reading the camera). Only taken
  * `select` branches run, as in the if/else three emits; `onPow` sees the base of every `pow` that runs. A fragment
  * graph's `fwidth(x)` evaluates to `fwidth` (the screen footprint of x, which a single point cannot know); without it,
  * `fwidth` throws. A texture sample evaluates to `sample(texture, uv, level)` (its uv evaluated, and its level when it has
@@ -50,7 +51,8 @@ export function evalNode(node: unknown, attributes: Record<string, readonly numb
   const compute = (n: AnyNode): Vec => {
     const type = n.constructor.type
     switch (type) {
-      case 'VaryingNode': case 'VarNode': case 'SubBuild': return ev(n.node)
+      case 'VaryingNode': { const pinned = n.name ? attributes[n.name] : undefined; return pinned ? [...pinned] : ev(n.node) }
+      case 'VarNode': case 'SubBuild': return ev(n.node)
       case 'ConstNode': case 'UniformNode': {   // a uniform evaluates to its current value
         const v = n.value
         if (typeof v === 'number') return [v]

@@ -1,4 +1,4 @@
-import { BackSide, DataTexture, FrontSide, RGBAFormat, UnsignedByteType, type InstancedBufferGeometry, type Texture, type Vector2 } from 'three'
+import { BackSide, DataTexture, FrontSide, RGBAFormat, UnsignedByteType, type Color, type InstancedBufferGeometry, type Texture, type Vector2 } from 'three'
 import { MeshPhysicalNodeMaterial, ViewportDepthTextureNode, ViewportTextureNode, type Node, type NodeFrame, type TextureNode, type UniformNode } from 'three/webgpu'
 import {
   attribute, float, vec2, vec3, vec4, uniform, texture, varying, positionView, positionViewDirection, normalView,
@@ -7,8 +7,19 @@ import {
 } from 'three/tsl'
 import { GlassUIError } from '@glassui/core'
 import { GLASS_ATTRS } from './batch'
-import { FROST } from './frost'
+import { FILL, FROST } from './frost'
 import { slabVertex } from './vertex'
+
+/**
+ * How glass sees its backdrop (the quality tiers' "玻璃" column, spec §5.6):
+ * - `'refract'` (high, medium): along the ray refracted through the slab, per colour channel (dispersion);
+ * - `'straight'` (low): no refraction — straight through, no ray offset and no dispersion: the content RT at the
+ *   content-plane point behind the fragment along the view ray, a screen backdrop at the fragment's own `screenUV`;
+ * - `'fill'` (minimal, reduced transparency): no backdrop at all — a near-opaque frosted fill colour (`FILL`); the
+ *   material then samples no texture (no content, pyramid, screen, depth or luma), so no capture is ever copied for it.
+ * Every mode keeps the lit shell, the edge glow, the glow layer, the clip and the transmitted shadow.
+ */
+export type GlassMode = 'refract' | 'straight' | 'fill'
 
 export interface GlassMaterialOptions {
   /** The batch geometry (`GlassBatch.geometry`); its instance attributes are read by name. */
@@ -52,6 +63,12 @@ export interface GlassMaterialOptions {
    * material owns.
    */
   depth?: DepthCapture | undefined
+  /** Default `'refract'`; see `GlassMode`. In `'fill'` the backdrop options (`content` aside, still required for a panel) are ignored. */
+  mode?: GlassMode | undefined
+  /** `'refract'` only: refract per colour channel by the instance's dispersion (default true); false refracts once. */
+  dispersion?: boolean | undefined
+  /** `'fill'` only: the fill colour, linear (default white). */
+  fill?: Color | undefined
 }
 
 export interface GlassMaterial {
@@ -137,9 +154,10 @@ function blackTexture(): DataTexture {
 /**
  * The glass slab material (spec §5.3, ported from the spike's `glass.ts` onto the batch's instance attributes): lights,
  * environment reflections and Fresnel come from `MeshPhysicalNodeMaterial`; the transmitted term is the backdrop
- * refracted per colour channel through the real slab thickness, with Beer–Lambert tint, frost lift, a planar
- * reflection of the content (panel), adaptive darkening (clear variant), press/edge/inner glow and a coloured
- * transmitted shadow.
+ * refracted per colour channel through the real slab thickness (`mode`: or seen straight through, or replaced by a
+ * frosted fill — see `GlassMode`), with Beer–Lambert tint, frost lift, a planar reflection of the content (panel, not
+ * in 'fill'), adaptive darkening (clear variant, not in 'fill'), press/edge/inner glow and a coloured transmitted
+ * shadow that fades with the instance's opacity (none at all at ≤ 0.01: `maskShadowNode`).
  *
  * Varyings: the fragment stage never reads an instance attribute. Each would cost one inter-stage variable, and 14 of
  * them plus three's own exceed WebGPU's default 16 (`maxInterStageShaderVariables`) and WebGL2's guaranteed 15
@@ -153,9 +171,10 @@ function blackTexture(): DataTexture {
  * screen-layer Surface is scaled by units per px).
  */
 export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
-  if (o.backdrop === 'panel' && !o.content) throw new Error('[render] createGlassMaterial: backdrop "panel" needs a content texture')
+  if (o.backdrop === 'panel' && !o.content) throw new GlassUIError('createGlassMaterial', 'backdrop "panel" 需要 content 纹理（Surface 的内容 RT）')
   // three compiles a missing attribute to zeros (opacity 0: invisible glass), so fail here instead
-  for (const name of GLASS_ATTRS) if (!o.geometry.hasAttribute(name)) throw new Error(`[render] createGlassMaterial: geometry has no "${name}" attribute`)
+  for (const name of GLASS_ATTRS) if (!o.geometry.hasAttribute(name)) throw new GlassUIError('createGlassMaterial', `几何体缺少实例属性 "${name}"（应为 GlassBatch.geometry）`)
+  const mode = o.mode ?? 'refract', fill = mode === 'fill'
   const v = slabVertex(o.geometry, o.K)
   const { size, ptPerUnit } = o.surface
 
@@ -195,18 +214,20 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const opacity = vMisc.x, lumaIndex = vMisc.y, clipR = vMisc.z          // clipR < 0: no clip
   const slabToView = vMisc.w                                             // view units per slab unit
 
-  const black = o.luma ? null : blackTexture()
-  const contentTex = o.backdrop === 'panel' && o.content ? texture(o.content) : null   // non-null exactly for 'panel'
+  // what the backdrop samples: nothing at all in 'fill'
+  const black = o.luma || fill ? null : blackTexture()
+  const contentTex = !fill && o.backdrop === 'panel' && o.content ? texture(o.content) : null   // non-null exactly for a sampled 'panel'
   const pyramid = contentTex ? (o.pyramid ?? []).map(t => texture(t)) : []
-  const lumaTex = texture(o.luma ?? black!)
+  const lumaTex = fill ? null : texture(o.luma ?? black!)
   const lumaCount = uniform(1)
-  const ownScreen = o.backdrop === 'screen' && !o.screen ? new ScreenCapture() : null
+  const ownScreen = !fill && o.backdrop === 'screen' && !o.screen ? new ScreenCapture() : null
   // @types/three declares viewportMipTexture as returning a plain Node; it is a ViewportTextureNode (a TextureNode)
-  const screen = o.backdrop === 'screen' ? (o.screen ?? ownScreen) as TextureNode : null
+  const screen = !fill && o.backdrop === 'screen' ? (o.screen ?? ownScreen) as TextureNode : null
   /** Panel: the capture behind the content plane, composited under the content RT's transparent texels. */
-  const behind = o.backdrop === 'panel' && o.screen ? o.screen as TextureNode : null
-  // one base node for every depth sample: its clones share one captured depth texture (one copy per target)
-  const rejects = o.depthReject === true && (o.backdrop === 'screen' || behind !== null)
+  const behind = !fill && o.backdrop === 'panel' && o.screen ? o.screen as TextureNode : null
+  // one base node for every depth sample: its clones share one captured depth texture (one copy per target). Only a
+  // refracted sample can land on something nearer than the glass: straight through is what the reject falls back to
+  const rejects = mode === 'refract' && o.depthReject === true && (o.backdrop === 'screen' || behind !== null)
   const ownDepth = rejects && !o.depth ? new DepthCapture() : null
   const sceneDepth = rejects ? o.depth ?? ownDepth : null
 
@@ -221,10 +242,11 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   // three flips geometry normals on back faces itself, but not a normalNode: flip here so the back pass faces the eye
   m.normalNode = negateOnBackSide(transformNormalToView(v.normal))
 
-  // clip: the material discards where the mask is false, and the shadow pass reuses the mask
+  // clip: the material discards where the mask is false; the shadow pass's mask adds the opacity (below)
   const q = abs(vClip.xy).sub(vClip.zw)
   const clipDist = length(max(q, 0)).add(min(max(q.x, q.y), 0)).sub(clipR)
-  m.maskNode = clipR.lessThan(0).or(clipDist.lessThanEqual(0))
+  const clipMask = clipR.lessThan(0).or(clipDist.lessThanEqual(0))
+  m.maskNode = clipMask
 
   const lod = roughness.mul(FROST.levelPerRoughness)
   const V = positionViewDirection, N = normalView
@@ -283,10 +305,30 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     if (sceneDepth) c = select(linearDepth(sceneDepth.sample(suv)).lessThan(linearDepth()), screen!.sample(screenUV).level(lod).rgb, c)
     return { c, t1 }
   }
-  const k = dispersion.mul(0.03)
-  const r = channel(float(1).sub(k)), g = channel(float(1)), b = channel(float(1).add(k))
-  let c: Node<'vec3'> = vec3(r.c.r, g.c.g, b.c.b)
-  c = c.mul(exp(float(1).sub(tint).mul(absorption).mul(g.t1.div(thickness)).negate()))   // Beer–Lambert
+  // the backdrop colour and the path through the slab (slab units) its light travelled, by mode (JS-time branches)
+  let c: Node<'vec3'>, path: Node<'float'>
+  if (mode === 'refract') {
+    if (o.dispersion === false) { const g = channel(float(1)); c = g.c; path = g.t1 }
+    else {
+      const k = dispersion.mul(0.03)
+      const r = channel(float(1).sub(k)), g = channel(float(1)), b = channel(float(1).add(k))
+      c = vec3(r.c.r, g.c.g, b.c.b); path = g.t1
+    }
+  } else if (mode === 'straight') {
+    path = min(depth.div(max(dot(V, nb), 0.15)), thickness.mul(4))      // the undeviated ray's
+    if (contentTex) {
+      // along the view ray to the content plane: no ray offset. That point lies on the fragment's own pixel, so the
+      // capture behind the plane is read at screenUV (and nothing nearer can be in the way: no depth reject)
+      const t = max(dot(origin.sub(positionView), nb).div(min(dot(V.negate(), nb), -0.05)), 0)
+      const content = frosted(contentTex, planeUV(positionView.sub(V.mul(t))))
+      c = behind ? content.rgb.add(mix(behind.sample(screenUV).level(behindLevel).rgb, vec3(1), behindLift).mul(float(1).sub(content.a))) : content.rgb
+    } else c = screen!.sample(screenUV).level(lod).rgb
+  } else {
+    const f = o.fill
+    c = f ? vec3(f.r, f.g, f.b) : vec3(1, 1, 1)
+    path = thickness                                                     // straight down through the slab
+  }
+  c = c.mul(exp(float(1).sub(tint).mul(absorption).mul(path.div(thickness)).negate()))    // Beer–Lambert
   c = mix(c, vec3(1), roughness.mul(FROST.liftPerRoughness).add(lift))                    // frost + lift
   if (contentTex) {
     // planar reflection (spec §5.4): mirror the reflected ray below the plane and sample the content where it lands
@@ -299,10 +341,12 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
     c = c.mul(float(1).sub(w.mul(mirrored.a))).add(mirrored.rgb.mul(w))
   }
   // adaptive darkening (spec §4.1, clear variant): only instances with a luma index (≥ 0), over a bright backdrop
-  const luma = lumaTex.sample(vec2(lumaIndex.add(0.5).div(lumaCount), 0.5)).level(float(0)).r
-  c = c.mul(mix(float(1), float(0.65), step(float(0), lumaIndex).mul(step(float(0.6), luma))))
+  if (lumaTex) {
+    const luma = lumaTex.sample(vec2(lumaIndex.add(0.5).div(lumaCount), 0.5)).level(float(0)).r
+    c = c.mul(mix(float(1), float(0.65), step(float(0), lumaIndex).mul(step(float(0.6), luma))))
+  }
   m.backdropNode = c
-  m.backdropAlphaNode = float(1).sub(roughness.mul(scatter))
+  m.backdropAlphaNode = fill ? float(FILL.alpha) : float(1).sub(roughness.mul(scatter))
   m.colorNode = tint.mul(tint).mul(0.6)
   m.opacityNode = opacity
 
@@ -319,12 +363,14 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const neutral = vec3(...NEUTRAL_SHADOW)
   const absorbed = exp(float(1).sub(tint).mul(absorption).mul(0.9).negate()).mul(0.9)
   const shadow = select(glowStrength.greaterThan(0), mix(neutral, glowColor, 0.6), select(absorption.lessThan(1e-4), neutral, absorbed))
-  m.castShadowNode = vec4(shadow, 1)
+  // a fading glass lets more light through (white transmits all), and one faded out writes nothing to the map at all
+  m.castShadowNode = vec4(mix(vec3(1), shadow, clamp(opacity, 0, 1)), 1)
+  m.maskShadowNode = clipMask.and(opacity.greaterThan(0.01))
 
   return {
     material: m,
     setContent(tex) { if (contentTex) contentTex.value = tex },
-    setLuma(tex, count) { lumaTex.value = tex; lumaCount.value = Math.max(1, count) },
+    setLuma(tex, count) { if (lumaTex) { lumaTex.value = tex; lumaCount.value = Math.max(1, count) } },
     setPyramid(textures) {
       if (textures.length !== pyramid.length) throw new GlassUIError('GlassMaterial.setPyramid', `金字塔层数不匹配：材质有 ${pyramid.length} 层，传入 ${textures.length} 层`)
       textures.forEach((t, i) => { pyramid[i]!.value = t })

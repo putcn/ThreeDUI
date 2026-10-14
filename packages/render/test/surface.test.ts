@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
 import { CustomBlending, DataTexture, FramebufferTexture, FrontSide, PerspectiveCamera, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material, type RenderTarget } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial, type MeshBasicNodeMaterial } from 'three/webgpu'
-import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
+import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme, resolveColor } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
 import { Surface, createContentMaterial, CONTENT_ORDER, SLAB_FROST, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
 import { AtlasPages } from '../src/text/pages'
@@ -12,12 +12,14 @@ import { srgbToLinear } from '../src/color'
 import { surfaceToLocal } from '../src/units'
 import { ScreenCapture } from '../src/glass/material'
 import { buildShaders } from './fixtures/build-shaders'
+import { QUALITY } from '../src/quality'
+import { toColor } from '../src/color'
 import { evalNode } from './fixtures/tsl-eval'
 
 let ctx: SurfaceContext
 beforeAll(async () => {
   const text = new SystemFontEngine({ createCanvas: ((w: number, h: number) => createCanvas(w, h)) as never, pageSize: 512, maxPages: 2 })
-  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), quality: { contentType: 'byte', contentScale: 1, backFaces: true, depthReject: true, blur: 'mip' } }
+  ctx = { theme, scheme: 'light', layout: await createYogaLayout(), measure: createMeasureFn(text, theme, 'light'), anim: new AnimationRuntime(theme, 'light'), text, pages: new AtlasPages(text.atlas), quality: { contentType: 'byte', contentScale: 1, backFaces: true, depthReject: true, blur: 'mip', glassMode: 'refract', dispersion: 'always' } }
 })
 
 function signup(c: SurfaceContext = ctx) {
@@ -773,6 +775,71 @@ describe('background slab shaders (generated under Node)', () => {
       expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
     })
   }
+})
+
+describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
+  const graph = (ms: Mesh[]) => ms.flatMap(m => materialGraph(m.material as Material))
+  const slabOf = (s: Surface) => meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab)
+  const refractions = (ms: Mesh[]) => graph(ms).filter(n => n.constructor.type === 'MathNode' && (n as { method?: string }).method === 'refract').length
+  for (const forceWebGL of [false, true]) {
+    it(`${forceWebGL ? 'GLSL' : 'WGSL'}: on minimal (fill) no draw copies the framebuffer or the depth buffer; back on high the slab takes its captures again`, () => {
+      const warnings: string[] = []
+      const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
+      const copies = (m: Mesh) => buildShaders(m.material as MeshPhysicalNodeMaterial, m.geometry, forceWebGL).updateBefore
+        .filter(n => CAPTURES.includes(n.constructor.type!)).map(n => n.getBase!())
+      try {
+        const { s } = signup({ ...ctx })
+        const glass = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
+        glass.root.appendChild(s.root.children[0]!)                  // the sign-up card on a glass Surface
+        glass.tick(1 / 60)
+        const draws = () => [...meshes(glass), ...meshes(glass.contentPass.scene)]
+        const before = new Set(slabOf(glass).flatMap(copies))
+        expect(before.size).toBe(2)                                   // one framebuffer and one depth capture
+        glass.setQuality(QUALITY.minimal)
+        expect(draws().length).toBeGreaterThanOrEqual(8)
+        for (const m of draws()) expect(copies(m)).toEqual([])
+        glass.setQuality(QUALITY.high)
+        const after = new Set(slabOf(glass).flatMap(copies))
+        expect(after).toEqual(before)                                 // the Surface's own captures, resumed
+        for (const m of elementGlass(glass)) expect(new Set(copies(m))).toEqual(after)
+      } finally { spy.mockRestore() }
+      expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
+    })
+  }
+  it('fill: the slab and the element glass sample nothing and draw the theme\'s fill colour, linear; the luma never runs', () => {
+    for (const scheme of ['light', 'dark'] as const) {
+      const c: SurfaceContext = { ...ctx, scheme, quality: QUALITY.minimal }
+      const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, c)
+      const el = new Node('glass', 'el'); el.setStyle({ position: 'absolute', left: 40, top: 30, width: 120, height: 60, glass: { variant: 'clear', adaptive: true } })
+      s.root.appendChild(el)
+      s.updateMatrixWorld(true); s.tick(1 / 60)
+      const draws = [...slabOf(s), ...elementGlass(s)]
+      expect(draws).toHaveLength(2)                                   // minimal: front faces only
+      expect(graph(draws).filter(n => n.isTextureNode)).toEqual([])
+      const fill = toColor(resolveColor('fill', theme, scheme))
+      const pinned = { vGlassMisc: [1, -1, -1, 1], vGlassTint: [1, 1, 1, 0], vGlassOptics: [1.5, 0, 0, 0], vGlassGlow2: [-1, 0.04, 0, 0], vGlassGeom: [0.1, 0.1, 0.5, 0.5] }
+      for (const m of draws) expect(evalNode((m.material as MeshPhysicalNodeMaterial).backdropNode, pinned).map(v => +v.toFixed(9))).toEqual([fill.r, fill.g, fill.b].map(v => +v.toFixed(9)))
+      const camera = new PerspectiveCamera(40, 4 / 3, 0.1, 100); camera.position.z = 8; camera.updateMatrixWorld()
+      const r = stubRenderer()
+      for (let i = 0; i < 3; i++) { s.tick(1 / 60); s.prepare(r, { width: 400, height: 300 }, 1, camera) }
+      expect(r.render).toHaveBeenCalledTimes(1)                       // the content once: no luma pass, no pyramid
+    }
+  })
+  it('low (straight): the element glass sees the content RT and the slab capture unrefracted, with no depth copy even when asked', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
+    s.setQuality({ ...QUALITY.low, depthReject: true })
+    const g = graph(elementGlass(s))
+    expect(refractions(elementGlass(s))).toBe(0); expect(refractions(slabOf(s))).toBe(0)
+    expect(g.filter(n => n.isTextureNode).map(n => n.value)).toContain(s.contentPass.texture)
+    expect(new Set(g.filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!()))).toEqual(new Set(graph(slabOf(s)).filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!())))
+    expect(graph([...slabOf(s), ...elementGlass(s)]).some(n => n.constructor.type === 'ViewportDepthTextureNode')).toBe(false)
+  })
+  it('refract per colour channel unless the quality\'s dispersion is \'never\' (medium\'s \'auto\' disperses for now)', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx, quality: QUALITY.medium })
+    expect(elementGlass(s)).toHaveLength(1); expect(refractions(elementGlass(s))).toBe(3)
+    s.setQuality({ ...QUALITY.medium, dispersion: 'never' })
+    expect(refractions(elementGlass(s))).toBe(1)
+  })
 })
 
 describe('content quad material shaders (generated under Node)', () => {

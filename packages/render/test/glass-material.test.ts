@@ -1,12 +1,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import { uniform, vec2, vec4 } from 'three/tsl'
-import { Vector2, Texture, DataTexture, BackSide, FrontSide } from 'three'
+import { Vector2, Texture, DataTexture, BackSide, Color, FrontSide } from 'three'
 import { Node, IDENTITY, scaleAbout, GlassUIError, type GlassInstance, type ResolvedGlass } from '@glassui/core'
 import { GlassBatch, GLASS_ATTRS } from '../src/glass/batch'
 import { createGlassMaterial, pyramidMix, DepthCapture, ScreenCapture } from '../src/glass/material'
 import { evalSlabVertex, type SlabInstanceParams } from '../src/glass/slab9'
 import { evalNode } from './fixtures/tsl-eval'
 import { buildShaders } from './fixtures/build-shaders'
+import { FILL, FROST } from '../src/glass/frost'
 
 const s = { width: 400, height: 300, ptPerUnit: 100 }
 const params: ResolvedGlass = { thickness: 8, fillet: 2.4, filletBottom: 1.6, profile: 'fillet', scatter: 0.05, lift: 0.1, edgeGlow: 0.8, ior: 1.5, dispersion: 0.8, roughness: 0.06, tint: null, absorption: 0, glow: null, cornerExponent: 2, envIntensity: 1, specularIntensity: 1, innerGlow: 0, adaptive: true, variant: 'regular' }
@@ -292,6 +293,106 @@ describe('createGlassMaterial: what lies behind the content plane (panel)', () =
   })
 })
 
+/** Every node any of `m`'s node slots (`backdropNode`, `castShadowNode`, `maskShadowNode`…) reaches. */
+function materialGraph(m: object): GraphNode[] {
+  return Object.entries(m).filter(([k, v]) => k.endsWith('Node') && typeof (v as { getChildren?: unknown } | null)?.getChildren === 'function').flatMap(([, v]) => nodesOf(v))
+}
+const refractions = (m: object) => materialGraph(m).filter(n => n.constructor.type === 'MathNode' && n.method === 'refract').length
+/** The fragment-stage varyings pinned for one instance: what the fill, the shadow and its mask read. */
+const pins = (o: { opacity?: number; tint?: [number, number, number]; absorption?: number; glow?: [number, number, number, number]; roughness?: number; lift?: number } = {}) => ({
+  vGlassMisc: [o.opacity ?? 1, -1, -1, 1],                         // opacity, luma index, clip radius (−1: none), slab → view
+  vGlassTint: [...(o.tint ?? [1, 1, 1]), o.absorption ?? 0],
+  vGlassGlow: o.glow ?? [0, 0, 0, 0],
+  vGlassOptics: [1.5, 0.8, o.roughness ?? 0.06, 0.05],
+  vGlassGlow2: [-1, 0.04, o.lift ?? 0.1, 0.8],
+  vGlassClip: [0, 0, 10, 10],                                       // well inside a (here absent) clip
+  vGlassGeom: [0.08, 0.08, 0.5, 0.5],                               // on the top face of a 0.08-unit slab, at its centre
+})
+
+describe('createGlassMaterial: quality modes (spec §5.6)', () => {
+  const panel = () => { const b = new GlassBatch(); b.update([inst], s); return { geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface, content: new Texture() } as const }
+  const screenOpts = () => { const b = new GlassBatch(); b.update([inst], s); return { geometry: b.geometry, K: b.K, backdrop: 'screen', side: 'front', surface } as const }
+  it('refract (default) bends the ray per colour channel; without dispersion once', () => {
+    expect(refractions(createGlassMaterial(panel()).material)).toBe(3)
+    expect(refractions(createGlassMaterial({ ...panel(), mode: 'refract' }).material)).toBe(3)
+    expect(refractions(createGlassMaterial({ ...panel(), dispersion: false }).material)).toBe(1)
+    expect(refractions(createGlassMaterial({ ...screenOpts(), dispersion: false }).material)).toBe(1)
+  })
+  it('straight (low) never refracts: the content RT (and a glass Surface\'s capture) straight behind the fragment; no depth copy', () => {
+    const content = new Texture(), capture = new ScreenCapture()
+    const g = createGlassMaterial({ ...panel(), content, mode: 'straight', screen: capture, depthReject: true, depth: new DepthCapture() })
+    const graph = materialGraph(g.material)
+    expect(refractions(g.material)).toBe(0)
+    expect(graph.filter(n => n.isTextureNode).map(n => n.value)).toContain(content)
+    expect(new Set(graph.filter(n => n.constructor.type === 'ViewportTextureNode').map(n => (n as unknown as Capture).getBase()))).toEqual(new Set([capture]))
+    expect(graph.some(n => n.constructor.type === 'ViewportDepthTextureNode')).toBe(false)   // straight through is what the reject falls back to
+    const scr = createGlassMaterial({ ...screenOpts(), mode: 'straight', depthReject: true })
+    expect(refractions(scr.material)).toBe(0)
+    expect(materialGraph(scr.material).some(n => n.constructor.type === 'ViewportTextureNode')).toBe(true)
+    expect(materialGraph(scr.material).some(n => n.constructor.type === 'ViewportDepthTextureNode')).toBe(false)
+  })
+  it('fill (minimal) samples nothing — no content, pyramid, screen, depth or luma — and owns no capture', () => {
+    const content = new Texture(), levels = [new Texture(), new Texture()]
+    const variants = [
+      createGlassMaterial({ ...panel(), content, pyramid: levels, mode: 'fill', screen: new ScreenCapture(), depthReject: true, depth: new DepthCapture(), luma: new Texture() }),
+      createGlassMaterial({ ...screenOpts(), mode: 'fill', depthReject: true }),
+    ]
+    for (const g of variants) {
+      const graph = materialGraph(g.material)
+      expect(graph.filter(n => n.isTextureNode)).toEqual([])
+      expect(refractions(g.material)).toBe(0)
+      g.setContent(new Texture()); g.setLuma(new Texture(), 4); g.setPyramid([])   // no-ops
+      expect(materialGraph(g.material).filter(n => n.isTextureNode)).toEqual([])
+      g.dispose()
+    }
+  })
+  it('fill draws the fill colour, tinted and frosted as a backdrop is, at a near-opaque backdrop alpha', () => {
+    const fill = new Color(0.9, 0.8, 0.7)
+    const m = createGlassMaterial({ ...panel(), mode: 'fill', fill }).material
+    expect(evalNode(m.backdropAlphaNode, pins())[0]).toBeCloseTo(FILL.alpha, 12)
+    const at = (p: Parameters<typeof pins>[0]) => evalNode(m.backdropNode, pins(p))
+    const frost = (c: number, r: number, l: number) => c + (1 - c) * (r * FROST.liftPerRoughness + l)
+    at({ roughness: 0, lift: 0 }).forEach((v, i) => expect(v).toBeCloseTo([0.9, 0.8, 0.7][i]!, 12))
+    at({ roughness: 0.5, lift: 0.1 }).forEach((v, i) => expect(v).toBeCloseTo(frost([0.9, 0.8, 0.7][i]!, 0.5, 0.1), 12))
+    // a tinted slab absorbs (1 − tint) · absorption over its thickness, straight down
+    const tinted = at({ roughness: 0, lift: 0, tint: [1, 0.5, 0], absorption: 2 })
+    tinted.forEach((v, i) => expect(v).toBeCloseTo([0.9, 0.8, 0.7][i]! * Math.exp(-[0, 0.5, 1][i]! * 2), 12))
+    // without a colour: white
+    evalNode(createGlassMaterial({ ...panel(), mode: 'fill' }).material.backdropNode, pins({ roughness: 0, lift: 0 })).forEach(v => expect(v).toBeCloseTo(1, 12))
+  })
+  it('keeps the edge glow, the glow layer and the clip in every mode', () => {
+    for (const mode of ['refract', 'straight', 'fill'] as const) {
+      const m = createGlassMaterial({ ...panel(), mode }).material
+      expect(m.emissiveNode).toBeTruthy(); expect(m.maskNode).toBeTruthy(); expect(m.castShadowNode).toBeTruthy()
+    }
+  })
+})
+
+describe('createGlassMaterial: the transmitted shadow fades with the glass (I5)', () => {
+  const make = () => { const b = new GlassBatch(); b.update([inst], s); return createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface, content: new Texture() }).material }
+  it('casts its colour by opacity: white (nothing) at 0, the full transmitted colour at 1', () => {
+    const m = make()
+    const shadow = (p: Parameters<typeof pins>[0]) => evalNode(m.castShadowNode, pins(p))
+    const neutral = [0.78, 0.78, 0.84]
+    shadow({ opacity: 1 }).forEach((v, i) => expect(v).toBeCloseTo([...neutral, 1][i]!, 6))
+    shadow({ opacity: 0 }).forEach(v => expect(v).toBeCloseTo(1, 12))
+    shadow({ opacity: 0.5 }).forEach((v, i) => expect(v).toBeCloseTo([...neutral.map(c => (1 + c) / 2), 1][i]!, 6))
+    // a glowing slab: its glow colour, faded the same way
+    const glow = [0.2, 0.4, 1] as const
+    shadow({ opacity: 0.5, glow: [...glow, 1] }).slice(0, 3).forEach((v, i) => expect(v).toBeCloseTo((1 + (neutral[i]! * 0.4 + glow[i]! * 0.6)) / 2, 6))
+  })
+  it('a glass faded to (almost) nothing writes no shadow: the shadow mask drops opacity ≤ 0.01, and still clips', () => {
+    const m = make()
+    expect(m.maskShadowNode).toBeTruthy()
+    const mask = (p: Parameters<typeof pins>[0], clip?: number[]) => evalNode(m.maskShadowNode, { ...pins(p), ...(clip ? { vGlassClip: clip } : {}) })[0]
+    expect(mask({ opacity: 1 })).toBe(1); expect(mask({ opacity: 0.02 })).toBe(1)
+    expect(mask({ opacity: 0.01 })).toBe(0); expect(mask({ opacity: 0 })).toBe(0)
+    // a clip (radius 2 here, via the pinned misc) outside of which nothing casts either
+    const clipped = (inside: boolean) => evalNode(m.maskShadowNode, { ...pins(), vGlassMisc: [1, -1, 2, 1], vGlassClip: [inside ? 0 : 50, 0, 10, 10] })[0]
+    expect(clipped(true)).toBe(1); expect(clipped(false)).toBe(0)
+  })
+})
+
 describe('glass material shaders (generated under Node)', () => {
   for (const forceWebGL of [false, true]) {
     it(`${forceWebGL ? 'GLSL' : 'WGSL'}: every variant and the shadow pass build within the inter-stage varying budget`, () => {
@@ -302,34 +403,41 @@ describe('glass material shaders (generated under Node)', () => {
         const b = new GlassBatch(); b.update([inst], s)
         // behind: a glass Surface's element glass (the slab's capture under the content), `reject` with its depth too
         // `pyramid`: the high tier's blur pyramid (4 levels) in place of the content's mips
-        const make = (backdrop: 'panel' | 'screen', side: 'front' | 'back', behind = false, reject = false, pyramid = false) =>
+        type Mode = 'refract' | 'straight' | 'fill'
+        const make = (backdrop: 'panel' | 'screen', side: 'front' | 'back', behind = false, reject = false, pyramid = false, mode: Mode = 'refract', dispersion = true) =>
           createGlassMaterial({
-            geometry: b.geometry, K: b.K, backdrop, side, surface,
+            geometry: b.geometry, K: b.K, backdrop, side, surface, mode, dispersion, fill: new Color(0.9, 0.9, 0.92),
             ...(backdrop === 'panel'
               ? { content: new Texture(), ...(pyramid ? { pyramid: [1, 2, 3, 4].map(() => new Texture()) } : {}), ...(behind ? { screen: new ScreenCapture(), screenLevel: 3.2, screenLift: 0.1, ...(reject ? { depthReject: true, depth: new DepthCapture() } : {}) } : {}) }
               : { depthReject: true }),
           }).material
-        const variants = [
+        const variants: [backdrop: 'panel' | 'screen', side: 'front' | 'back', behind: boolean, reject: boolean, pyramid: boolean, mode?: Mode, dispersion?: boolean][] = [
           ['panel', 'front', false, false, false], ['panel', 'back', false, false, false], ['screen', 'front', false, false, false],
           ['panel', 'front', true, false, false], ['panel', 'back', true, false, false], ['panel', 'front', true, true, false], ['panel', 'back', true, true, false],
           ['panel', 'front', false, false, true], ['panel', 'back', true, true, true],
-        ] as const
-        for (const [backdrop, side, behind, reject, pyramid] of variants) {
-          const out = buildShaders(make(backdrop, side, behind, reject, pyramid), b.geometry, forceWebGL)
+          // medium without dispersion, low (straight) and minimal (fill), with and without what lies behind the plane
+          ['panel', 'front', true, false, false, 'refract', false], ['screen', 'front', false, false, false, 'refract', false],
+          ['panel', 'front', false, false, false, 'straight'], ['panel', 'front', true, true, false, 'straight'], ['panel', 'back', true, false, false, 'straight'], ['screen', 'front', false, false, false, 'straight'],
+          ['panel', 'front', false, false, false, 'fill'], ['panel', 'front', true, true, true, 'fill'], ['panel', 'back', true, false, false, 'fill'], ['screen', 'front', false, false, false, 'fill'], ['screen', 'back', false, false, false, 'fill'],
+        ]
+        for (const [backdrop, side, behind, reject, pyramid, mode = 'refract', dispersion = true] of variants) {
+          const label = `${backdrop} ${side} ${mode}${behind ? ' behind' : ''}${reject ? ' reject' : ''}${pyramid ? ' pyramid' : ''}${dispersion ? '' : ' no-dispersion'}`
+          const out = buildShaders(make(backdrop, side, behind, reject, pyramid, mode, dispersion), b.geometry, forceWebGL)
           // 8 packs, the slab normal, three's view position and direction; WebGPU guarantees 16 inter-stage variables and
           // WebGL2 15 varying vectors, and three's runtime extras (fog, log depth…) need room
-          expect(out.varyings.length, out.varyings.join(' ')).toBeLessThanOrEqual(11)
-          expect(out.fragment).toContain('discard')   // the clip mask
+          expect(out.varyings.length, `${label}: ${out.varyings.join(' ')}`).toBeLessThanOrEqual(11)
+          expect(out.fragment, label).toContain('discard')   // the clip mask
           // the refraction offset (slab units) is scaled to view units by the packed slab-z-to-view factor
-          if (side === 'front') expect(out.fragment).toContain('vGlassMisc.w')
-          // what the renderer copies before the draw: the framebuffer with a capture, the depth buffer with the reject
+          if (side === 'front' && mode === 'refract') expect(out.fragment, label).toContain('vGlassMisc.w')
+          // what the renderer copies before the draw: the framebuffer with a capture (never on fill), the depth buffer
+          // with the reject (refract only: straight through is what the reject falls back to)
           const copies = out.updateBefore.map(n => n.constructor.type)
-          expect(copies.includes('ViewportTextureNode')).toBe(backdrop === 'screen' || behind)
-          expect(copies.includes('ViewportDepthTextureNode')).toBe(backdrop === 'screen' || reject)
+          expect(copies.includes('ViewportTextureNode'), label).toBe(mode !== 'fill' && (backdrop === 'screen' || behind))
+          expect(copies.includes('ViewportDepthTextureNode'), label).toBe(mode === 'refract' && (backdrop === 'screen' || reject))
         }
-        for (const [behind, reject] of [[false, false], [true, false], [true, true]] as const) {
-          const shadow = buildShaders(make('panel', 'front', behind, reject), b.geometry, forceWebGL, true)
-          expect(shadow.fragment).toContain('discard')  // clipped glass casts no shadow
+        for (const [behind, reject, mode] of [[false, false, 'refract'], [true, false, 'refract'], [true, true, 'refract'], [true, false, 'straight'], [false, false, 'fill']] as const) {
+          const shadow = buildShaders(make('panel', 'front', behind, reject, false, mode), b.geometry, forceWebGL, true)
+          expect(shadow.fragment).toContain('discard')  // clipped (or faded-out) glass casts no shadow
         }
       } finally { spy.mockRestore() }
       expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
