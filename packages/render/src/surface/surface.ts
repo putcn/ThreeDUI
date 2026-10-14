@@ -69,11 +69,12 @@ const NO_FROST = { level: 0, lift: 0 } as const
 const POINTER_HANDLERS = ['pointerdown', 'pointerup', 'pointermove', 'pointerenter', 'pointerleave', 'click', 'dblclick', 'contextmenu', 'wheel'] as const
 
 /**
- * Whether `n` paints (glass, text, an image, a background other than `'none'`, a border) or is interactive (a finite
- * `tabIndex`, read as the focus manager reads it, or an element handler for a pointer type).
+ * Whether `n` paints (glass, text, an image, a background other than `'none'`, a border) or is interactive (a `scroll`
+ * node, whose gaps still catch the wheel and drags; a finite `tabIndex`, read as the focus manager reads it; or an
+ * element handler for a pointer type).
  */
 function paintedOrInteractive(n: Node): boolean {
-  if (n.type === 'glass' || n.type === 'text' || n.type === 'image') return true
+  if (n.type === 'glass' || n.type === 'text' || n.type === 'image' || n.type === 'scroll') return true
   const s = effectiveStyle(n)
   if ((s.bg !== undefined && s.bg !== 'none') || s.border !== undefined) return true
   const t = n.props.tabIndex

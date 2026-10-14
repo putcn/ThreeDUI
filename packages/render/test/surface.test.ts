@@ -556,7 +556,9 @@ describe('Surface', () => {
     const chip = new Node('box', 'chip'); chip.setStyle({ position: 'absolute', left: 10, top: 10, width: 50, height: 50, bg: 'fill' })
     const label = new Node('text', 'label'); label.setProp('value', 'Hi'); label.setStyle({ position: 'absolute', left: 100, top: 10, width: 60, height: 20 })
     const inner = new Node('box', 'inner'); inner.setStyle({ position: 'absolute', left: 300, top: 200, width: 50, height: 50 })
-    for (const n of [chip, label, image('pic', new Texture(), 200, 10), inner]) wrap.appendChild(n)
+    const list = new Node('scroll', 'list'); list.setStyle({ position: 'absolute', left: 10, top: 100, width: 100, height: 100 })
+    const row = new Node('box', 'row'); row.setStyle({ height: 20, flexShrink: 0 }); list.appendChild(row)   // unpainted content
+    for (const n of [chip, label, image('pic', new Texture(), 200, 10), inner, list]) wrap.appendChild(n)
     s.root.appendChild(wrap); s.tick(0)
     expect(s.hitNode(300, 150)).toBe(wrap); expect(s.hitNode(310, 210)).toBe(inner)
     expect(s.takesPointer(20, 20)).toBe(true)                          // the chip's background
@@ -564,6 +566,8 @@ describe('Surface', () => {
     expect(s.takesPointer(210, 20)).toBe(true)                         // an image
     expect(s.takesPointer(300, 150)).toBe(false)                       // the wrapper's empty area: through to what is behind
     expect(s.takesPointer(310, 210)).toBe(false)                       // an unpainted box in it: through too
+    expect(s.hitNode(50, 150)).toBe(list); expect(s.takesPointer(50, 150)).toBe(true)   // a scroll node's empty area: it scrolls
+    expect(s.hitNode(50, 110)).toBe(row); expect(s.takesPointer(50, 110)).toBe(true)    // and its unpainted content
     wrap.setProp('tabIndex', 0)                                        // focusable: interactive, and so is all of it
     expect(s.takesPointer(300, 150)).toBe(true); expect(s.takesPointer(310, 210)).toBe(true)
     wrap.setProp('tabIndex', null)
