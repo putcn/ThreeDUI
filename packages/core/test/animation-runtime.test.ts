@@ -6,6 +6,7 @@ import { AnimationRuntime } from '../src/animation/runtime'
 import { ease } from '../src/animation/easing'
 import { defaultTheme as theme } from '../src/style/theme'
 import { buildRenderList } from '../src/renderlist'
+import type { Style } from '../src/style/schema'
 
 let engine: LayoutEngine
 beforeAll(async () => { engine = await createYogaLayout() })
@@ -222,5 +223,117 @@ describe('AnimationRuntime', () => {
     expect(rt.tick(b.s.root, 1 / 60)).toBe(true)
     expect(rt.tick(a.s.root, 1 / 60)).toBe(false) // first sight again: nothing animates from the dropped state
     expect(a.btn.visual).toBeNull()
+  })
+})
+
+describe('AnimationRuntime hooks', () => {
+  const box = (style: Style) => { const n = new Node('box'); n.setStyle(style); n.layout = { x: 0, y: 0, width: 100, height: 40 }; return n }
+  const tree = () => { const root = new Node('box'); root.layout = { x: 0, y: 0, width: 400, height: 400 }; return root }
+  const linear = { duration: 0.2, easing: 'linear' } as const
+  it('whenSettled resolves on the tick the node stops moving', async () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = new Node('box'); root.layout = { x: 0, y: 0, width: 400, height: 400 }
+    const n = box({ opacity: 1, transition: { opacity: { duration: 0.1, easing: 'linear' } } }); root.appendChild(n)
+    rt.tick(root, 0)                                         // first sight
+    n.setStyle({ opacity: 0 })
+    let done = false; void rt.whenSettled(n).then(() => { done = true })
+    rt.tick(root, 0.05); await Promise.resolve(); expect(done).toBe(false)
+    rt.tick(root, 0.06); await Promise.resolve(); expect(done).toBe(true)
+  })
+  it('whenSettled resolves for a node that never animates, and for one removed from the tree', async () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = new Node('box'); root.layout = { x: 0, y: 0, width: 400, height: 400 }
+    const still = box({}); root.appendChild(still)
+    const gone = box({ opacity: 1, transition: { opacity: 'smooth' } }); root.appendChild(gone)
+    rt.tick(root, 0); gone.setStyle({ opacity: 0 }); rt.tick(root, 0.01)
+    const a = rt.whenSettled(still), b = rt.whenSettled(gone)
+    gone.remove(); rt.tick(root, 0.01)
+    await expect(Promise.all([a, b])).resolves.toBeDefined()
+  })
+  it('seed makes the first sight animate from the seeded values', () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = new Node('box'); root.layout = { x: 0, y: 0, width: 400, height: 400 }
+    const n = box({ transition: { x: { duration: 0.2, easing: 'linear' }, width: { duration: 0.2, easing: 'linear' } } })
+    n.layout = { x: 200, y: 0, width: 100, height: 40 }; root.appendChild(n)
+    rt.seed(n, { x: 0, width: 50 })
+    rt.tick(root, 0.1)
+    expect(n.visual?.x).toBeCloseTo(100); expect(n.visual?.width).toBeCloseTo(75)
+  })
+  it('glowSplit animates like the other glass numbers', () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = new Node('box'); root.layout = { x: 0, y: 0, width: 400, height: 400 }
+    const g = new Node('glass'); g.layout = { x: 0, y: 0, width: 136, height: 62 }
+    g.setStyle({ glass: { glow: { color: 'accent', strength: 1, split: 0.2 } }, transition: { glass: { duration: 0.2, easing: 'linear' } } })
+    root.appendChild(g); rt.tick(root, 0)
+    g.setStyle({ glass: { glow: { color: 'accent', strength: 1, split: 0.8 } } })
+    rt.tick(root, 0.1)
+    expect(g.visual?.glass?.glowSplit).toBeCloseTo(0.5)
+  })
+  it('the animated split reaches the render list; a glow without a split stays unsplit while its glass animates', () => {
+    const rt = new AnimationRuntime(theme, 'light'), s = createSurface({ id: 'glow', width: 400, height: 400 })
+    s.root.layout = { x: 0, y: 0, width: 400, height: 400 }
+    const sw = new Node('glass'), btn = new Node('glass')
+    sw.layout = { x: 0, y: 0, width: 136, height: 62 }; btn.layout = { x: 0, y: 100, width: 136, height: 62 }
+    sw.setStyle({ glass: { glow: { color: 'accent', strength: 1, split: 0.2 } }, transition: { glass: linear } })
+    btn.setStyle({ glass: { glow: { color: 'accent', strength: 1 } }, transition: { glass: linear } })
+    s.root.appendChild(sw); s.root.appendChild(btn); rt.tick(s.root, 0)
+    sw.setStyle({ glass: { glow: { color: 'accent', strength: 1, split: 0.8 } } })
+    btn.setStyle({ glass: { glow: { color: 'accent', strength: 0.5 } } })
+    rt.tick(s.root, 0.1)
+    expect(btn.visual?.glass?.glowStrength).toBeCloseTo(0.75)
+    expect(btn.visual?.glass).not.toHaveProperty('glowSplit')   // render reads a missing split as "no split", not 0.5
+    const [a, b] = buildRenderList(s, theme, 'light').glass
+    expect(a!.params.glow?.split).toBeCloseTo(0.5)
+    expect(b!.params.glow).not.toHaveProperty('split')
+  })
+  it('a springing split stays in 0..1: render reads a negative split as "no split"', () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = tree()
+    const g = new Node('glass'); g.layout = { x: 0, y: 0, width: 136, height: 62 }
+    g.setStyle({ glass: { glow: { color: 'accent', strength: 1, split: 0.9 } }, transition: { glass: 'bouncy' } })
+    root.appendChild(g); rt.tick(root, 0)
+    g.setStyle({ glass: { glow: { color: 'accent', strength: 1, split: 0 } } })
+    let low = Infinity
+    for (let i = 0; i < 120; i++) { rt.tick(root, 1 / 60); low = Math.min(low, g.visual?.glass?.glowSplit ?? Infinity) }
+    expect(low).toBe(0)                         // it reached the target, and the overshoot below it was clamped
+  })
+  it('seed on a tracked node restarts the seeded keys and keeps its other channels', () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = tree()
+    const n = box({ opacity: 1, transition: { opacity: linear, x: linear } }); root.appendChild(n)
+    rt.tick(root, 0); n.setStyle({ opacity: 0 }); rt.tick(root, 0.05)   // opacity a quarter of the way
+    rt.seed(n, { x: 50 }); n.layout = { x: 250, y: 0, width: 100, height: 40 }
+    rt.tick(root, 0.05)
+    expect(n.visual?.opacity).toBeCloseTo(0.5); expect(n.visual?.x).toBeCloseTo(100)
+  })
+  it('a node seeded in a detached parent animates under the root it joins; its waiter waits for that root', async () => {
+    const rt = new AnimationRuntime(theme, 'light'), a = tree(), b = tree()
+    const wrap = box({}), n = box({ transition: { x: linear } }); n.layout = { x: 200, y: 0, width: 100, height: 40 }
+    wrap.appendChild(n); rt.seed(n, { x: 0 })   // Vue mounts children first: the parent is not in a tree yet
+    b.appendChild(wrap)
+    let done = false; void rt.whenSettled(n).then(() => { done = true })
+    rt.tick(a, 0.1); await Promise.resolve(); expect(done).toBe(false)   // another root's tick does not settle it
+    rt.tick(b, 0.1); expect(n.visual?.x).toBeCloseTo(100)
+    await Promise.resolve(); expect(done).toBe(false)
+    rt.tick(b, 0.1); await Promise.resolve(); expect(done).toBe(true)
+  })
+  it('a seeded node its root never visits is dropped there and settles', async () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = tree()
+    const hidden = box({ display: 'none' }), n = box({ transition: { x: linear } }); n.layout = { x: 200, y: 0, width: 100, height: 40 }
+    hidden.appendChild(n); rt.seed(n, { x: 0 }); root.appendChild(hidden)
+    let done = false; void rt.whenSettled(n).then(() => { done = true })
+    rt.tick(root, 0.1); await Promise.resolve(); expect(done).toBe(true)
+    hidden.setStyle({ display: 'flex' }); rt.tick(root, 0.1)
+    expect(n.visual).toBeNull()                 // first sight: the stale seed is gone
+  })
+  it('forget settles the waiters of the forgotten tree at once', async () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = tree()
+    const n = box({ opacity: 1, transition: { opacity: 'smooth' } }), still = box({}); root.appendChild(n); root.appendChild(still)
+    rt.tick(root, 0); n.setStyle({ opacity: 0 }); rt.tick(root, 0.01)
+    let done = 0; void rt.whenSettled(n).then(() => { done++ }); void rt.whenSettled(still).then(() => { done++ })
+    rt.forget(root); await Promise.resolve()
+    expect(done).toBe(2)                        // no tick: a disposed Surface's root is never ticked again
+  })
+  it('reset settles the node\'s waiters at once', async () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = tree()
+    const n = box({ opacity: 1, transition: { opacity: 'smooth' } }); root.appendChild(n)
+    rt.tick(root, 0); n.setStyle({ opacity: 0 }); rt.tick(root, 0.01)
+    let done = false; void rt.whenSettled(n).then(() => { done = true })
+    rt.reset(n); await Promise.resolve()
+    expect(done).toBe(true); expect(n.visual).toBeNull()
   })
 })

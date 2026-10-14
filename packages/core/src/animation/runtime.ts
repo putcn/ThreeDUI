@@ -17,7 +17,11 @@ interface NodeAnim {
   root: Node                            // the root the node was last seen under: only that root's tick may drop it
   targets: Map<string, number>          // channel id ("scale", "bg.0", "glass.thickness", …) → last seen target
   channels: Map<string, Channel>
+  seeded: boolean                       // `seed` wrote it and no tick has seen the node since: `root` is only its root then
 }
+
+/** The keys `AnimationRuntime.seed` takes: where a node's rect, opacity and scale start from. */
+type SeedKey = 'x' | 'y' | 'width' | 'height' | 'opacity' | 'scale'
 
 /** How far `layout` sits inside a `w × h` parent at its nearest edge (as `buildRenderList` computes it). */
 function inset(layout: Rect, w: number, h: number): number {
@@ -46,22 +50,54 @@ function transitionKeys(style: Style): Set<TransitionKey> {
  * in `pressed` animates the press, and the release (branch off) jumps.
  * Nodes are keyed by identity. One runtime can serve several surfaces (tick each root); a node that leaves its tree
  * loses its state on the next tick of the root it was last seen under.
+ * Hooks for transitions: `whenSettled(node)` resolves once the node stops moving; `seed(node, from)` makes its next
+ * sighting animate from `from` (an enter transition, a shape morph).
  */
 export class AnimationRuntime {
   /** `prefers-reduced-motion`: every change jumps, and channels in flight settle at once. */
   reducedMotion = false
   private state = new Map<Node, NodeAnim>()
+  private waiting = new Map<Node, (() => void)[]>()   // `whenSettled` resolvers by node
   constructor(private theme: Theme, private scheme: ColorScheme) {}
 
   setTheme(theme: Theme, scheme: ColorScheme): void { this.theme = theme; this.scheme = scheme }
   get active(): number { let n = 0; for (const a of this.state.values()) n += a.channels.size; return n }
-  reset(node: Node): void { this.state.delete(node); if (node.visual) node.setVisual(null) }
+  /** Drops `node`'s state and visual values (it jumps to its targets); its `whenSettled` promises resolve now. */
+  reset(node: Node): void { this.drop(node); this.settle(node) }
 
   /**
-   * Drops the state of every node last seen under `root` and clears their visual values (a disposed surface's tree).
+   * Resolves at the end of the first `tick` (of any root) after this call in which `node` has no live channel: it
+   * settled, never animated, or is no longer in a ticked tree. A node with animation state waits for the tick of the
+   * root it was last seen under (its own tick may be about to start a channel; another root's tick says nothing about
+   * it); one without resolves on the next tick of any root. `reset` and `forget` resolve it at once: a forgotten root
+   * is never ticked again. Never rejects.
+   */
+  whenSettled(node: Node): Promise<void> {
+    return new Promise(resolve => { const w = this.waiting.get(node); if (w) w.push(resolve); else this.waiting.set(node, [resolve]) })
+  }
+
+  /**
+   * Records `from` as `node`'s previous targets: the next tick that sees it animates those keys from `from` to its
+   * real targets, where its style has a transition for them (a key without one jumps, or is dropped when not tracked).
+   * Keys not in `from` are recorded on first sight as usual. On a node already tracked, only the seeded keys restart:
+   * its other targets and channels carry on. `node` may sit in a subtree not yet attached (Vue inserts children
+   * first); attach it before the next tick. A root that ticks with the node in its tree but does not visit it (a
+   * `display: 'none'` ancestor, no transition keys) drops the seed.
+   */
+  seed(node: Node, from: Partial<Record<SeedKey, number>>): void {
+    let a = this.state.get(node)
+    if (!a) this.state.set(node, a = { root: node.root, targets: new Map(), channels: new Map(), seeded: true })
+    else { a.root = node.root; a.seeded = true }
+    for (const [k, v] of Object.entries(from)) if (v !== undefined && Number.isFinite(v)) { a.targets.set(k, v); a.channels.delete(k) }
+  }
+
+  /**
+   * Drops the state of every node last seen under `root` and clears their visual values (a disposed surface's tree);
+   * the `whenSettled` promises of those nodes, and of every node still in `root`'s tree, resolve now.
    */
   forget(root: Node): void {
-    for (const [n, a] of [...this.state]) if (a.root === root) { this.state.delete(n); if (n.visual) n.setVisual(null) }
+    for (const [n, a] of [...this.state]) if (this.owned(root, n, a)) { this.drop(n); this.settle(n) }
+    for (const n of [...this.waiting.keys()]) if (n.root === root) this.settle(n)
   }
 
   /**
@@ -86,8 +122,26 @@ export class AnimationRuntime {
       for (const c of n.children) visit(c, radius, rect.width, rect.height)
     }
     visit(root, cornerRadius, root.layout.width, root.layout.height)
-    for (const [n, a] of [...this.state]) if (a.root === root && !seen.has(n)) { this.state.delete(n); if (n.visual) n.setVisual(null) }
+    for (const [n, a] of [...this.state]) if (!seen.has(n) && this.owned(root, n, a)) this.drop(n)
+    for (const n of [...this.waiting.keys()]) {
+      const a = this.state.get(n)
+      if (a && (a.root !== root || a.channels.size > 0)) continue   // moving here, or another root's tick decides it
+      this.settle(n)
+    }
     return moving
+  }
+
+  /**
+   * Whether `root` decides `n`'s state: `n` was last seen under it, or `n` was seeded and sits in its tree now (it
+   * may have been seeded in a detached subtree, whose top is no root anyone ticks).
+   */
+  private owned(root: Node, n: Node, a: NodeAnim): boolean { return a.root === root || (a.seeded && n.root === root) }
+
+  private drop(n: Node): void { this.state.delete(n); if (n.visual) n.setVisual(null) }
+
+  private settle(n: Node): void {
+    const fns = this.waiting.get(n)
+    if (fns) { this.waiting.delete(n); for (const f of fns) f() }
   }
 
   /** The scalar targets of `n` for the tracked keys, flattened to channel ids. */
@@ -110,12 +164,14 @@ export class AnimationRuntime {
         case 'glass': {
           if (!(n.type === 'glass' || s.bg === 'glass' || s.bg === 'glass-clear')) break
           const g = resolveGlass(s, n.layout, this.theme, this.scheme)
-          const nums: Record<GlassNumericKey, number> = {
+          const nums: Record<Exclude<GlassNumericKey, 'glowSplit'>, number> = {
             thickness: g.thickness, fillet: g.fillet, filletBottom: g.filletBottom, scatter: g.scatter, lift: g.lift, edgeGlow: g.edgeGlow,
             ior: g.ior, dispersion: g.dispersion, roughness: g.roughness, absorption: g.absorption, glowStrength: g.glow?.strength ?? 0,
             envIntensity: g.envIntensity, specularIntensity: g.specularIntensity, innerGlow: g.innerGlow,
           }
           for (const [key, v] of Object.entries(nums)) t.set(`glass.${key}`, v)
+          // Only a split glow has a split to animate: render reads a missing one as "lit all across", which no 0..1 value is.
+          if (g.glow?.split !== undefined) t.set('glass.glowSplit', g.glow.split)
           if (g.glow) rgba('glass.glowColor', g.glow.color)
           if (g.tint) rgba('glass.tint', g.tint)
           break
@@ -128,8 +184,8 @@ export class AnimationRuntime {
   private step(root: Node, n: Node, s: Style, keys: Set<TransitionKey>, radius: number, dt: number): boolean {
     const targets = this.targets(n, s, keys, radius)
     let anim = this.state.get(n)
-    if (!anim) { this.state.set(n, { root, targets, channels: new Map() }); return false }   // first sight: record, no animation
-    anim.root = root
+    if (!anim) { this.state.set(n, { root, targets, channels: new Map(), seeded: false }); return false }   // first sight: record, no animation
+    anim.root = root; anim.seeded = false
     for (const [id, to] of targets) {
       const prev = anim.targets.get(id)
       anim.targets.set(id, to)
@@ -167,7 +223,8 @@ export class AnimationRuntime {
 
   /**
    * Visual values from the live channels (settled keys fall back to their targets so colours stay consistent).
-   * Opacity and colour channels are clamped to 0..1: an underdamped spring overshoots, materials must not see it.
+   * Opacity, colour and glow-split channels are clamped to 0..1: an underdamped spring overshoots, materials must not
+   * see it (a split below 0 would read as "no split" and light the whole glow).
    */
   private compose(anim: NodeAnim): VisualValues {
     const v: VisualValues = {}
@@ -188,6 +245,7 @@ export class AnimationRuntime {
         else if (key.startsWith('tint')) g.tint = rgba('glass.tint')
         else g[key as GlassNumericKey] = get(id)
       }
+      if (g.glowSplit !== undefined) g.glowSplit = unit(g.glowSplit)
       v.glass = g
     }
     return v

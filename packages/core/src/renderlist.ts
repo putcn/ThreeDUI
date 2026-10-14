@@ -110,7 +110,7 @@ export function resolveGlass(s: Style, rect: Rect, theme: Theme, scheme: ColorSc
     scatter: o.scatter ?? g.scatter ?? (variant === 'clear' ? 0.02 : d.scatter), lift: o.lift ?? g.lift ?? d.lift, edgeGlow: o.edgeGlow ?? g.edgeGlow ?? d.edgeGlow,
     ior: o.ior ?? g.ior ?? d.ior, dispersion: o.dispersion ?? g.dispersion ?? d.dispersion, roughness: o.roughness ?? g.roughness ?? d.roughness,
     tint: o.tint !== undefined ? o.tint : g.tint ? resolveColor(g.tint, theme, scheme) : null, absorption: o.absorption ?? g.absorption ?? 0,
-    glow: glowColor && glowStrength !== undefined ? { color: glowColor, strength: glowStrength, ...defined({ split: g.glow?.split }) } : null,
+    glow: glowColor && glowStrength !== undefined ? { color: glowColor, strength: glowStrength, ...defined({ split: o.glowSplit ?? g.glow?.split }) } : null,
     // Spec §5.2: 4–5 approximates Apple's continuous corners; a capsule is circular (2).
     cornerExponent: g.cornerExponent ?? (s.radius === 'capsule' ? 2 : 4.5),
     envIntensity: o.envIntensity ?? g.envIntensity ?? d.envIntensity, specularIntensity: o.specularIntensity ?? g.specularIntensity ?? d.specularIntensity,

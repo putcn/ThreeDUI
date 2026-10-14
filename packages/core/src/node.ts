@@ -14,8 +14,8 @@ export interface NodeState { hover: boolean; pressed: boolean; focused: boolean;
 /** The states that are style branches. */
 type StateBranch = Exclude<keyof NodeState, 'focusVisible'>
 
-/** Glass numbers the animation runtime can drive (`glow.strength` as `glowStrength`). */
-export type GlassNumericKey = 'thickness' | 'fillet' | 'filletBottom' | 'scatter' | 'lift' | 'edgeGlow' | 'ior' | 'dispersion' | 'roughness' | 'absorption' | 'glowStrength' | 'envIntensity' | 'specularIntensity' | 'innerGlow'
+/** Glass numbers the animation runtime can drive (`glow.strength` as `glowStrength`, `glow.split` as `glowSplit`). */
+export type GlassNumericKey = 'thickness' | 'fillet' | 'filletBottom' | 'scatter' | 'lift' | 'edgeGlow' | 'ior' | 'dispersion' | 'roughness' | 'absorption' | 'glowStrength' | 'glowSplit' | 'envIntensity' | 'specularIntensity' | 'innerGlow'
 
 /**
  * Animated "visual values" (spec §4.4): what the render list draws instead of the node's layout/style targets while a
