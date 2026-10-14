@@ -108,9 +108,15 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
 /**
  * Spec §3.1: the UI on top of a host three.js app. `'overlay'` (default) keeps the UI in its own `uiScene` — screen
  * layer, world layer, the UI lights and environment — drawn after the host scene with the host's camera (its near/far
- * apply) into the same depth buffer, so world Surfaces and host geometry occlude each other, and the UI's lights and
- * shadows touch only the UI. `'shared'` puts the layers and lights into the host scene (its environment is set only if
- * it has none). Rejects with a readable `GlassUIError` when the renderer cannot initialise.
+ * apply) into the same depth buffer, so world Surfaces and host geometry occlude each other; the UI's lights, in that
+ * scene, light and shadow only the UI. `'shared'` puts the layers and lights into the host scene (its environment is set
+ * only if it has none). Rejects with a readable `GlassUIError` when the renderer cannot initialise, or on an unknown
+ * `quality`.
+ *
+ * The renderer is shared, though: in either mode the root switches its shadow map to VSM with transmitted shadows
+ * (`shadowMap.enabled = true`, `type = VSMShadowMap`, `transmitted = true`). three keeps these per renderer, not per
+ * scene, so the host's own shadows are affected too (they become VSM, transmitted). Saving and restoring the host's
+ * settings is planned; `dispose` leaves them as the root set them.
  *
  * Each `tick`: the screen layer and the lights follow the camera; every Surface ticks; glyphs evicted by a later
  * Surface's are re-laid out; draw orders are assigned (screen Surfaces above world ones, nearer above farther); the
