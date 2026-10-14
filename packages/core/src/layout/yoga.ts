@@ -63,22 +63,40 @@ interface Entry {
   kids: YNode[]
   /** Whether a measure callback is attached (yoga cannot be asked). */
   measured: boolean
+  /** The root whose compute last synced the node: only that root's next compute may free it (`sweep`). */
+  owner: Node
 }
 
 class YogaLayout implements LayoutEngine {
   private readonly entries = new WeakMap<Node, Entry>()
+  /**
+   * Per compute root, the nodes its last compute synced: what its next compute frees when they are gone from its tree
+   * (`sweep`). Weak like `entries`, so a root dropped without `dispose` leaves no JS behind (its yoga nodes leak).
+   */
+  private readonly synced = new WeakMap<Node, Set<Node>>()
+  private live = 0
   /** The measure function of the compute in progress; yoga calls measure callbacks only inside calculateLayout. */
   private measure: MeasureFn | undefined
 
   constructor(private readonly yoga: Yoga) {}
 
+  get liveNodes(): number { return this.live }
+
   compute(root: Node, width: number, height: number, measure?: MeasureFn): void {
+    const visited = new Set<Node>()
     this.measure = measure
     try {
-      this.sync(root).calculateLayout(available(width), available(height), Direction.LTR)
+      this.sync(root, root, visited).calculateLayout(available(width), available(height), Direction.LTR)
+    } catch (e) {
+      // a partial sync frees nothing, but what it reached (new entries included) stays tracked for the next sweep
+      const prev = this.synced.get(root)
+      if (prev) for (const n of visited) prev.add(n)
+      else this.synced.set(root, visited)
+      throw e
     } finally {
       this.measure = undefined
     }
+    this.sweep(root, visited)
     root.walk(n => {
       const l = this.entries.get(n)!.y.getComputedLayout()   // sync() created an entry for every node
       n.layout = { x: finite(l.left), y: finite(l.top), width: extent(l.width), height: extent(l.height) }
@@ -88,14 +106,33 @@ class YogaLayout implements LayoutEngine {
 
   dispose(root: Node): void {
     // Freeing a yoga node detaches it from its yoga parent; that parent's next sync sees the changed kids and re-attaches.
-    root.walk(n => {
-      const e = this.entries.get(n)
-      if (e) { e.y.free(); this.entries.delete(n) }
-    })
+    root.walk(n => this.free(n))
+    // a compute root: also what its last compute synced that has left its tree since (no sweep came for it)
+    const prev = this.synced.get(root)
+    if (prev) { this.synced.delete(root); for (const n of prev) if (this.entries.get(n)?.owner === root) this.free(n) }
   }
 
-  private sync(n: Node): YNode {
-    const e = this.entries.get(n) ?? this.create(n)
+  /**
+   * Frees the yoga nodes of the nodes `root`'s previous compute synced and this one (`visited`) did not reach: removed
+   * subtrees. A node another root's compute synced since (a subtree moved between roots) is that root's now: kept.
+   */
+  private sweep(root: Node, visited: Set<Node>): void {
+    const prev = this.synced.get(root)
+    this.synced.set(root, visited)
+    if (prev) for (const n of prev) if (!visited.has(n) && this.entries.get(n)?.owner === root) this.free(n)
+  }
+
+  /** Frees `n`'s yoga node, if it has one. A later sync of `n` makes a new one. */
+  private free(n: Node): void {
+    const e = this.entries.get(n)
+    if (!e) return
+    e.y.free(); this.entries.delete(n); this.live--
+  }
+
+  /** Brings `n`'s yoga node (and its subtree's) up to date for `root`'s compute, recording each node in `visited`. */
+  private sync(n: Node, root: Node, visited: Set<Node>): YNode {
+    const e = this.entries.get(n) ?? this.create(n, root)
+    e.owner = root; visited.add(n)
     const { y } = e
     applyStyle(y, effectiveStyle(n))   // state branches included: Node.setState marks layout when one sets a layout key
     const wantsMeasure = n.type === 'text' && n.children.length === 0 && this.measure !== undefined
@@ -103,7 +140,7 @@ class YogaLayout implements LayoutEngine {
     if (e.measured && !wantsMeasure) { y.markDirty(); y.unsetMeasureFunc(); e.measured = false }
 
     // Reconcile by identity rather than dirty.tree: that also catches moves between parents and disposed children.
-    const kids = n.children.map(c => this.sync(c))
+    const kids = n.children.map(c => this.sync(c, root, visited))
     if (kids.length !== e.kids.length || kids.some((k, i) => k !== e.kids[i])) {
       while (y.getChildCount() > 0) y.removeChild(y.getChild(0))
       kids.forEach((k, i) => {
@@ -121,9 +158,9 @@ class YogaLayout implements LayoutEngine {
     return y
   }
 
-  private create(n: Node): Entry {
-    const e: Entry = { y: this.yoga.Node.create(), kids: [], measured: false }
-    this.entries.set(n, e)
+  private create(n: Node, owner: Node): Entry {
+    const e: Entry = { y: this.yoga.Node.create(), kids: [], measured: false, owner }
+    this.entries.set(n, e); this.live++
     return e
   }
 
