@@ -1,4 +1,5 @@
 import { DynamicDrawUsage, InstancedBufferGeometry, InstancedInterleavedBuffer, InterleavedBufferAttribute } from 'three'
+import { GlassUIError } from '@glassui/core'
 
 /**
  * Growable per-instance vec4 attributes on one `InstancedBufferGeometry`; `begin(n)` then `set` then `commit`.
@@ -48,7 +49,7 @@ export class InstanceBuffer {
 
   private offset(name: string): number {
     const o = this.offsets.get(name)
-    if (o === undefined) throw new Error(`[render] unknown instance attribute ${name}; known: ${this.names.join(', ')}`)
+    if (o === undefined) throw new GlassUIError('InstanceBuffer', `未知的实例属性 "${name}"`, { allowed: this.names, got: name })
     return o
   }
 

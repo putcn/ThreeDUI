@@ -43,7 +43,11 @@ export interface UIRootOptions {
   mode?: 'overlay' | 'shared'
   /** Default true: DOM pointer/wheel (and, with `keyboard`, key) events on the canvas. */
   pointer?: boolean; keyboard?: boolean
-  /** Default: the `prefers-reduced-motion` / `prefers-reduced-transparency` media queries, where available. */
+  /**
+   * Default: the `prefers-reduced-motion` / `prefers-reduced-transparency` media queries, where available, followed
+   * live (their `change` events, until `dispose`): reduced transparency pins `minimal` (`quality.setReducedTransparency`),
+   * reduced motion sets `anim.reducedMotion`. An explicit value is fixed: its query is not read or followed.
+   */
   reducedMotion?: boolean; reducedTransparency?: boolean
 }
 
@@ -85,6 +89,7 @@ export interface UIRoot {
    * tier never samples.
    */
   frame(nowMs?: number): void
+  /** `true`: `renderer.setAnimationLoop(t => root.frame(t))`; `false`: clears the loop if (and only if) this installed it. */
   autoTick(on: boolean): void
   on<K extends keyof UIRootEventMap>(type: K, fn: (e: UIRootEventMap[K]) => void): () => void
   dispose(): void
@@ -95,7 +100,9 @@ const SCREEN_ORDER = 1000
 /** The content quad's corners (a unit `PlaneGeometry`, scaled to the Surface), in polygon order. */
 const CORNERS = [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]] as const
 
-const media = (q: string): boolean => typeof matchMedia === 'function' && matchMedia(q).matches
+const REDUCED_MOTION = '(prefers-reduced-motion: reduce)', REDUCED_TRANSPARENCY = '(prefers-reduced-transparency: reduce)'
+/** The media query's list where the environment has `matchMedia` (not under Node). */
+const media = (q: string): MediaQueryList | null => typeof matchMedia === 'function' ? matchMedia(q) : null
 const domCanvas: CanvasFactory = (width, height) => Object.assign(document.createElement('canvas'), { width, height }) as unknown as ReturnType<CanvasFactory>
 
 /**
@@ -120,7 +127,10 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = VSMShadowMap; renderer.shadowMap.transmitted = true
 
   const theme = opts.theme ?? defaultTheme, scheme = opts.scheme ?? 'light'
-  const reducedTransparency = opts.reducedTransparency ?? media('(prefers-reduced-transparency: reduce)')
+  // an explicit option is fixed; without one the media query decides, and keeps deciding (subscribed below)
+  const transparencyQuery = opts.reducedTransparency === undefined ? media(REDUCED_TRANSPARENCY) : null
+  const motionQuery = opts.reducedMotion === undefined ? media(REDUCED_MOTION) : null
+  const reducedTransparency = opts.reducedTransparency ?? transparencyQuery?.matches ?? false
   const touch = typeof navigator !== 'undefined' && (navigator.maxTouchPoints ?? 0) > 0
   const tier = opts.quality ?? 'auto', adaptive = tier === 'auto'
   // auto: the cap ignores the pin, so clearing reduced transparency can raise quality again; a fixed tier is its own cap
@@ -130,7 +140,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
 
   const text = opts.text ?? new SystemFontEngine({ createCanvas: opts.createCanvas ?? domCanvas })
   const anim = new AnimationRuntime(theme, scheme)
-  anim.reducedMotion = opts.reducedMotion ?? media('(prefers-reduced-motion: reduce)')
+  anim.reducedMotion = opts.reducedMotion ?? motionQuery?.matches ?? false
   const pages = new AtlasPages(text.atlas)
   const ctx: SurfaceContext = { theme, scheme, layout: await createYogaLayout(), measure: createMeasureFn(text, theme, scheme), anim, text, pages, quality: quality.profile }
 
@@ -178,6 +188,17 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     lights.key.shadow.needsUpdate = true
     emit('quality', { tier, prev, profile })
   })
+
+  // the media queries, live: a user toggling the OS setting pins/unpins minimal or stops/starts the springs
+  const stopMedia: (() => void)[] = []
+  function follow(list: MediaQueryList | null, apply: (matches: boolean) => void): void {
+    if (!list?.addEventListener) return
+    const onChange = (e: { matches: boolean }): void => apply(e.matches)
+    list.addEventListener('change', onChange)
+    stopMedia.push(() => list.removeEventListener('change', onChange))
+  }
+  follow(transparencyQuery, on => quality.setReducedTransparency(on))
+  follow(motionQuery, on => { anim.reducedMotion = on })
 
   const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3()
   const lastCamera = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
@@ -287,8 +308,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     },
     autoTick(on) {
       if (!renderer.setAnimationLoop) throw new GlassUIError('UIRoot.autoTick', '渲染器没有 setAnimationLoop：请在宿主的渲染循环里调用 root.frame()')
-      looping = on
-      renderer.setAnimationLoop(on ? t => root.frame(t) : null)
+      if (on) { looping = true; renderer.setAnimationLoop(t => root.frame(t)) }
+      else if (looping) { looping = false; renderer.setAnimationLoop(null) }   // never the host's own loop
     },
     on(type, fn) {
       const set = listeners[type] as Set<typeof fn>
@@ -300,6 +321,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       disposed = true
       if (looping) renderer.setAnimationLoop?.(null)   // only a loop `autoTick` installed: the host may run its own
       pointer?.detach()
+      for (const stop of stopMedia) stop()
       if (pointer && canvas.style && touchAction !== undefined) canvas.style.touchAction = touchAction
       for (const s of [...surfaces]) root.removeSurface(s)
       offQuality()

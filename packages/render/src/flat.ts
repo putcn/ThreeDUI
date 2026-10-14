@@ -1,6 +1,7 @@
 import type { InstancedBufferGeometry, Vector2 } from 'three'
 import type { Node, UniformNode } from 'three/webgpu'
 import { attribute, varying, vec2, vec3, vec4, float, dot, abs, max, min, length, select } from 'three/tsl'
+import { GlassUIError } from '@glassui/core'
 
 /** The Surface's size in units (W, H) and its pt per unit, as uniforms the Surface owns. */
 export interface SurfaceUniforms { size: UniformNode<'vec2', Vector2>; ptPerUnit: UniformNode<'float', number> }
@@ -53,7 +54,7 @@ export interface FlatVertex {
  */
 export function flatVertex(g: InstancedBufferGeometry, su: SurfaceUniforms, { marginPt = 0 }: FlatVertexOptions = {}): FlatVertex {
   // three compiles a missing attribute to zeros (zero size, no matrix: an invisible element), so fail here instead
-  const need = (name: string) => { if (!g.hasAttribute(name)) throw new Error(`[render] flatVertex: geometry has no "${name}" attribute`) }
+  const need = (name: string) => { if (!g.hasAttribute(name)) throw new GlassUIError('flatVertex', `几何体缺少实例属性 "${name}"`) }
   for (const name of FLAT_ATTRS) need(name)
   const A = (name: string) => attribute(name, 'vec4')
   const iRect = A('iRect'), iMat0 = A('iMat0'), iMat1 = A('iMat1'), iMat2 = A('iMat2')

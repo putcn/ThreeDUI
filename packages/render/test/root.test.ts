@@ -42,6 +42,26 @@ async function timedRoot(cpuMs: number) {
   return { root, restore: () => now.mockRestore() }
 }
 
+const MOTION = '(prefers-reduced-motion: reduce)', TRANSPARENCY = '(prefers-reduced-transparency: reduce)'
+/** A `matchMedia` stub: one list per query, whose `change` the test fires. */
+function fakeMedia() {
+  const lists = new Map<string, { matches: boolean; listeners: Set<(e: { matches: boolean }) => void> }>()
+  const list = (q: string) => { let l = lists.get(q); if (!l) lists.set(q, l = { matches: false, listeners: new Set() }); return l }
+  const matchMedia = vi.fn((q: string) => {
+    const l = list(q)
+    return {
+      media: q, get matches() { return l.matches },
+      addEventListener: (type: string, fn: (e: { matches: boolean }) => void) => { if (type === 'change') l.listeners.add(fn) },
+      removeEventListener: (type: string, fn: (e: { matches: boolean }) => void) => { if (type === 'change') l.listeners.delete(fn) },
+    }
+  })
+  return {
+    matchMedia,
+    change(q: string, matches: boolean) { const l = list(q); l.matches = matches; for (const fn of [...l.listeners]) fn({ matches }) },
+    listening: (q: string) => list(q).listeners.size,
+  }
+}
+
 describe('createUIRoot', () => {
   it('initialises the renderer for transmitted VSM shadows and reports the backend', async () => {
     const o = base(); const root = await createUIRoot(o)
@@ -386,6 +406,48 @@ describe('createUIRoot', () => {
     const { setAnimationLoop: _, ...noLoop } = stubRenderer()
     const manual = await createUIRoot({ ...base(), renderer: noLoop })
     expect(() => manual.autoTick(true)).toThrow(/setAnimationLoop.*root\.frame/)
+  })
+  it('autoTick(false) clears the animation loop only if autoTick installed it', async () => {
+    const o = base(); const root = await createUIRoot(o)
+    root.autoTick(false)
+    expect(o.renderer.setAnimationLoop).not.toHaveBeenCalled()    // the host's own loop keeps running
+    root.autoTick(true); root.autoTick(false); root.autoTick(false)
+    expect(o.renderer.setAnimationLoop.mock.calls.map(c => c[0] === null)).toEqual([false, true])
+  })
+  it('follows the reduced-motion and reduced-transparency media queries live, and stops listening on dispose', async () => {
+    const media = fakeMedia()
+    vi.stubGlobal('matchMedia', media.matchMedia)
+    try {
+      const root = await createUIRoot({ ...base(), quality: 'auto' })
+      const s = root.createSurface({ width: 10, height: 10, fill: true })
+      const set = vi.spyOn(s, 'setQuality')
+      expect(root.quality.tier).toBe('high'); expect(root.anim.reducedMotion).toBe(false)
+      expect(media.listening(TRANSPARENCY)).toBe(1); expect(media.listening(MOTION)).toBe(1)
+      media.change(TRANSPARENCY, true)
+      expect(root.quality.tier).toBe('minimal'); expect(set).toHaveBeenLastCalledWith(expect.objectContaining({ tier: 'minimal', glassMode: 'fill' }))
+      media.change(TRANSPARENCY, false)
+      expect(root.quality.tier).toBe('high')
+      media.change(MOTION, true); expect(root.anim.reducedMotion).toBe(true)
+      media.change(MOTION, false); expect(root.anim.reducedMotion).toBe(false)
+      root.dispose()
+      expect(media.listening(TRANSPARENCY)).toBe(0); expect(media.listening(MOTION)).toBe(0)
+      // a root created while they match starts pinned and reduced
+      media.change(TRANSPARENCY, true); media.change(MOTION, true)
+      const later = await createUIRoot({ ...base(), quality: 'auto' })
+      expect(later.quality.tier).toBe('minimal'); expect(later.anim.reducedMotion).toBe(true)
+      later.dispose()
+    } finally { vi.unstubAllGlobals() }
+  })
+  it('an explicit reducedMotion / reducedTransparency is fixed: the media queries are not followed', async () => {
+    const media = fakeMedia()
+    vi.stubGlobal('matchMedia', media.matchMedia)
+    try {
+      const root = await createUIRoot({ ...base(), reducedMotion: false, reducedTransparency: false })
+      expect(media.listening(TRANSPARENCY)).toBe(0); expect(media.listening(MOTION)).toBe(0)
+      media.change(TRANSPARENCY, true); media.change(MOTION, true)
+      expect(root.quality.tier).toBe('medium'); expect(root.anim.reducedMotion).toBe(false)
+      root.dispose()
+    } finally { vi.unstubAllGlobals() }
   })
   it('dispose frees the Surfaces and detaches everything, clearing only a loop it installed', async () => {
     const o = base(); const root = await createUIRoot(o)

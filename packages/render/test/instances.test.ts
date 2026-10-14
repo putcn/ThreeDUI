@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { InstancedBufferGeometry, InstancedInterleavedBuffer, type InterleavedBufferAttribute } from 'three'
+import { GlassUIError } from '@glassui/core'
 import { InstanceBuffer } from '../src/instances'
 
 describe('InstanceBuffer', () => {
@@ -49,5 +50,7 @@ describe('InstanceBuffer', () => {
     const b = new InstanceBuffer(new InstancedBufferGeometry(), ['iRect'])
     b.begin(1)
     expect(() => b.set(0, 'iNope', 0, 0)).toThrow(/iNope/)
+    expect(() => b.get(0, 'iRekt')).toThrow(GlassUIError)
+    expect(() => b.get(0, 'iRekt')).toThrow('[InstanceBuffer] 未知的实例属性 "iRekt"。允许值：iRect。你可能想要：iRect')
   })
 })

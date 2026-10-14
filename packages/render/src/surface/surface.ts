@@ -25,7 +25,9 @@ import { liftFor, partition, type Partition } from './partition'
 import { toColor } from '../color'
 
 export interface SurfaceOptions {
-  id?: string; width: number; height: number; ptPerUnit?: number; placement?: 'screen' | 'world'; background?: 'none' | 'glass' | string; cornerRadius?: number; interactive?: boolean; castToWorld?: boolean
+  id?: string; width: number; height: number; ptPerUnit?: number; placement?: 'screen' | 'world'; background?: 'none' | 'glass' | string; cornerRadius?: number; interactive?: boolean
+  /** Spec §5.4: whether the Surface's glass also shadows world geometry. No effect yet (planned): the UI shadows only the UI. */
+  castToWorld?: boolean
   /** Default 1: multiplies the content RT's texels per CSS px after the quality's floor (below 1 it may go under one texel per CSS px). */
   contentScale?: number
 }
@@ -119,6 +121,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The content plane: the content quad, the glass, rims and what rides on glass; at z = `contentPlaneZ`. */
   readonly plane = new Object3D()
   interactive: boolean
+  /** `SurfaceOptions.castToWorld`: no effect yet (planned). */
   castToWorld: boolean
   /** Set when a frame threw: the Surface stops drawing (`visible = false`) and has emitted `{ type: 'error', error }`. */
   error: Error | null = null
@@ -145,8 +148,10 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private readonly screen: ScreenCapture | null = null
   /** A glass Surface's depth capture for `depthReject`, shared by the slab's faces and the element glass (one depth copy per render); made on first use. */
   private depth: DepthCapture | null = null
-  /** The content RT's blur pyramid on the 'kawase' tier (null otherwise), redrawn with it. */
+  /** The content RT's blur pyramid on the 'kawase' tier (null otherwise), redrawn with it while there is glass to sample it. */
   private pyramid: KawasePyramid | null = null
+  /** The pyramid holds the current content RT's blur (false after a redraw that had no glass to draw it for). */
+  private pyramidCurrent = false
   /** Clear + adaptive glass's backdrop luma (spec §5.3), measured from the content RT after it in `prepare`. */
   private readonly luma = new SurfaceLuma()
   /** The last `tick`'s dt (s): the luma's smoothing step. */
@@ -433,10 +438,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /**
    * Sizes the content RT (and the pyramid) for the Surface's projected size — `dpr × max(quality.contentScale, 1/dpr) ×
-   * contentScale` texels per CSS px, so never below one texel per CSS px from the quality alone — and redraws it when dirty (a resize makes it
-   * dirty), then the pyramid: the content RT is its only input, so a clean RT means a current pyramid. Then the luma
-   * (`SurfaceLuma.update`), from the content RT's own mips: on a redraw and while its smoothing settles after one; on a
-   * glass Surface drawn with `camera` (the root passes its own), every frame, over the slab's screen capture too.
+   * contentScale` texels per CSS px, so never below one texel per CSS px from the quality alone — and redraws it when
+   * dirty (a resize makes it dirty). Then the pyramid, when the RT changed since it was last drawn and the Surface has
+   * glass instances to sample it (its only input is the content RT; without glass its 9 passes are skipped until glass
+   * appears). Then the luma (`SurfaceLuma.update`, not in the 'fill' glass mode), from the content RT's own mips: on a
+   * redraw and while its smoothing settles after one; on a glass Surface drawn with `camera` (the root passes its
+   * own), every frame, over the slab's screen capture too.
    */
   prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number, camera?: Camera): void {
     if (this.error) return
@@ -451,8 +458,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
       if (redrawn) {
         this.contentPass.setView(this.model)
         this.contentPass.render(renderer, this.contentClear)
-        this.pyramid?.render(renderer, this.contentPass.texture)
-        this.contentDirty = false
+        this.contentDirty = false; this.pyramidCurrent = false
+      }
+      // 9 passes only when glass will sample them; skipped, the targets stay (wired to the glass) and catch up later
+      if (this.pyramid && !this.pyramidCurrent && this.glass.buffer.count > 0) {
+        this.pyramid.render(renderer, this.contentPass.texture)
+        this.pyramidCurrent = true
       }
       // the 'fill' glass mode samples no backdrop: nothing reads the luma (and the slab capture's copy would be stale)
       if (this.quality.glassMode === 'fill') return

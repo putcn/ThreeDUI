@@ -1,6 +1,7 @@
 import type { InstancedBufferGeometry } from 'three'
 import type { Node } from 'three/webgpu'
 import { attribute, float, vec2, vec3, vec4, abs, sign, pow, sin, cos, sqrt, max, min, select, dot, length, varying } from 'three/tsl'
+import { GlassUIError } from '@glassui/core'
 import { AXIS_SNAP } from './slab9'
 
 const HALF_PI = Math.PI / 2
@@ -28,8 +29,8 @@ const orOne = (l: Node<'float'>) => select(l.greaterThan(0), l, float(1))
  * grows, and the renderer rebinds a geometry attribute whose id changed under the same name.
  */
 export function slabVertex(geometry: InstancedBufferGeometry, K: number) {
-  for (const name of VERTEX_ATTRS) if (!geometry.hasAttribute(name)) throw new Error(`[render] slabVertex: geometry has no "${name}" attribute`)
-  if (geometry.userData.K !== K) throw new Error(`[render] slabVertex: geometry was laid out for K = ${String(geometry.userData.K)}, not K = ${K}`)
+  for (const name of VERTEX_ATTRS) if (!geometry.hasAttribute(name)) throw new GlassUIError('slabVertex', `几何体缺少属性 "${name}"（应为 GlassBatch.geometry）`)
+  if (geometry.userData.K !== K) throw new GlassUIError('slabVertex', `几何体按 K = ${String(geometry.userData.K)} 生成，不是 K = ${K}`)
 
   const slab = attribute('slab', 'vec4')
   const iRect = attribute('iRect', 'vec4'), iShape = attribute('iShape', 'vec4'), iCorner = attribute('iCorner', 'vec4')

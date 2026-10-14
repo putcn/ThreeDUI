@@ -2,7 +2,7 @@
 // A dim gradient room + a large softbox top-left + a thin strip light below,
 // so bevels pick up a crisp bright rim line (top) and a faint lower rim.
 
-import { Scene, Mesh, BoxGeometry, PlaneGeometry, MeshBasicMaterial, BackSide, Color, type Texture } from 'three'
+import { Scene, Mesh, BoxGeometry, PlaneGeometry, MeshBasicMaterial, BackSide, Color, type Material, type Texture } from 'three'
 import { PMREMGenerator } from 'three/webgpu'
 
 export function createStudioScene(): Scene {
@@ -29,11 +29,13 @@ export function createStudioScene(): Scene {
 /**
  * The PMREM of the studio scene for `scene.environment` (spec §5.3: a uniform room cannot produce the top glint).
  * Browser only: needs an initialised WebGPURenderer (`await renderer.init()` first — r186's `fromScene` throws otherwise).
- * The returned texture outlives the generator; the caller disposes it.
+ * The returned texture outlives the generator; the caller disposes it. The studio scene is drawn once into it, then its
+ * geometries and materials are freed (also when the generation throws).
  */
 export function createStudioEnvironment(renderer: { isWebGPURenderer?: boolean }): Texture {
-  const pmrem = new PMREMGenerator(renderer as never)
-  const tex = pmrem.fromScene(createStudioScene(), 0.02).texture
-  pmrem.dispose()
-  return tex
+  const pmrem = new PMREMGenerator(renderer as never), studio = createStudioScene()
+  try { return pmrem.fromScene(studio, 0.02).texture } finally {
+    pmrem.dispose()
+    studio.traverse(o => { if (o instanceof Mesh) { o.geometry.dispose(); (o.material as Material).dispose() } })
+  }
 }

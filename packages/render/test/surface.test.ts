@@ -554,6 +554,7 @@ describe('Surface: the dual-Kawase pyramid (quality.blur = \'kawase\')', () => {
   })
   it('a background slab never samples the pyramid; a \'mip\' Surface has none', () => {
     const glass = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, kawase()), r = recording()
+    const el = new Node('glass', 'el'); el.setStyle({ position: 'absolute', left: 20, top: 20, width: 120, height: 48 }); glass.root.appendChild(el)
     glass.tick(1 / 60); glass.prepare(r, { width: 400, height: 300 }, 1)
     const levels = levelsOf(r.drawn)
     expect(levels).toHaveLength(4)
@@ -584,6 +585,21 @@ describe('Surface: the dual-Kawase pyramid (quality.blur = \'kawase\')', () => {
     const fresh = levelsOf(r.drawn)
     expect(fresh).toHaveLength(4); for (const l of fresh) expect(levels).not.toContain(l)
     for (const l of fresh) expect(sampledBy(elementGlass(s))).toContain(l.texture)
+  })
+  it('skips the pyramid while the Surface has no glass (keeping its targets), and draws it once glass appears', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, kawase())
+    const card = new Node('box', 'card'); card.setStyle({ position: 'absolute', left: 0, top: 0, width: 400, height: 300, bg: 'fill' })
+    s.root.appendChild(card); s.tick(1 / 60)
+    const r = recording()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(r.drawn).toEqual([s.contentPass.target])                 // the content only: nothing samples a blur
+    const levels = [...sampledBy(elementGlass(s))].filter(t => t !== s.contentPass.texture && !(t instanceof DataTexture))   // not the luma placeholder
+    expect(levels).toHaveLength(4)                                    // the targets stay wired to the (empty) glass draws
+    const btn = new Node('glass', 'btn'); btn.setStyle({ position: 'absolute', left: 20, top: 20, width: 120, height: 48 })
+    card.appendChild(btn); s.tick(1 / 60)
+    r.drawn.length = 0; s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(r.drawn).toHaveLength(1 + 9); expect(r.drawn[0]).toBe(s.contentPass.target)
+    for (const l of levelsOf(r.drawn)) expect(levels).toContain(l.texture)
   })
   it('dispose frees the pyramid', () => {
     const { s } = signup(kawase()); s.tick(1 / 60)

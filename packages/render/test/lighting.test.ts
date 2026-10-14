@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
-import { BackSide, Box3, Mesh, MeshBasicMaterial, Vector3 } from 'three'
-import { createStudioScene, createUILights, fitShadowCamera, UI_KEY } from '../src/lighting/lights'
+import { describe, it, expect, vi } from 'vitest'
+import { BackSide, Box3, BoxGeometry, BufferGeometry, Material, Mesh, MeshBasicMaterial, PlaneGeometry, Vector3 } from 'three'
+import { createStudioEnvironment, createStudioScene, createUILights, fitShadowCamera, UI_KEY } from '../src/lighting/lights'
 
 describe('studio scene', () => {
   it('has a back-side room and four emitters', () => {
@@ -9,6 +9,19 @@ describe('studio scene', () => {
     expect(meshes).toHaveLength(5)
     expect((meshes[0]!.material as MeshBasicMaterial).side).toBe(BackSide)
     expect(meshes.slice(1).every(m => (m.material as MeshBasicMaterial).color.r >= 1)).toBe(true)   // emitters are > 1 (HDR)
+  })
+})
+
+describe('studio environment', () => {
+  it('frees the studio scene\'s geometries and materials once the PMREM is made, even when it fails', () => {
+    const geometries = vi.spyOn(BufferGeometry.prototype, 'dispose'), materials = vi.spyOn(Material.prototype, 'dispose')
+    try {
+      // an uninitialised renderer: r186's fromScene throws (the browser path differs only in returning the texture)
+      expect(() => createStudioEnvironment({ hasInitialized: () => false } as never)).toThrow(/initialized/)
+      const freedGeometries = new Set(geometries.mock.contexts), freedMaterials = new Set(materials.mock.contexts)
+      expect([...freedGeometries].filter(g => g instanceof BoxGeometry || g instanceof PlaneGeometry)).toHaveLength(5)
+      expect([...freedMaterials].filter(m => m instanceof MeshBasicMaterial)).toHaveLength(5)   // the room and four emitters
+    } finally { geometries.mockRestore(); materials.mockRestore() }
   })
 })
 

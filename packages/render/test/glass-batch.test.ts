@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { InstancedBufferGeometry, Matrix3, Vector3 } from 'three'
-import { Node, IDENTITY, scaleAbout, type GlassInstance, type ResolvedGlass } from '@glassui/core'
+import { GlassUIError, Node, IDENTITY, scaleAbout, type GlassInstance, type ResolvedGlass } from '@glassui/core'
 import { GlassBatch, GLASS_ATTRS, MIN_THICKNESS } from '../src/glass/batch'
 import { slabVertex } from '../src/glass/vertex'
 import { createSlabBaseGeometry, evalSlabVertex, type SlabInstanceParams } from '../src/glass/slab9'
@@ -144,5 +144,6 @@ describe('slabVertex', () => {
     const b = new GlassBatch(6, 8)
     expect(b.K).toBe(6)
     expect(() => slabVertex(b.geometry, 8)).toThrow(/K/)
+    expect(() => slabVertex(b.geometry, 8)).toThrow(GlassUIError)
   })
 })
