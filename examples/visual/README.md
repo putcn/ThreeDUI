@@ -12,6 +12,8 @@ Screenshots of the playground compared against committed baselines:
 - `webgpu`: the full Chromium build in new headless (`channel: 'chromium'`; the headless shell has no WebGPU). When
   three falls back to WebGL2 the test is skipped ("WebGPU unavailable: three fell back to WebGL2"), never compared.
 - The backend is checked before the screenshot, so a fallback never writes or matches a baseline.
+- An uncaught page error or a `console.error` from navigation on fails the test before the screenshot (it may change
+  too few pixels to trip the 2 % budget).
 - Determinism: `quality=high` fixes the tier; `hud=0` hides the HUD's live fps text. After `__glassui.ready` the test
   waits 1000 ms and at least 1 s of the UI's frame time (the root clamps a frame to 50 ms, so a slow SwiftShader frame
   rate stretches the wait) for the backdrop luma's smoothing to settle. Nothing else in the scenes moves without input.
@@ -36,7 +38,8 @@ Pass Playwright flags without `--` (pnpm forwards a `--` literally): `pnpm test:
 Baselines are machine-specific: text is rasterised with the system fonts, and WebGPU goes through the local GPU driver.
 The committed ones come from the reference machine: macOS on Apple Silicon, Chromium from Playwright (the version in
 `package.json`). Another machine (CI included) must not compare against them: it regenerates its own baselines once
-(below) and inspects them before trusting a run.
+(below), inspects them, and keeps them local. Never commit them: the file names carry no platform suffix, so they would
+overwrite the reference machine's.
 
 To (re)generate them:
 
@@ -44,12 +47,17 @@ To (re)generate them:
 pnpm test:visual:update        # writes tests/visual.spec.ts-snapshots/*.png
 ```
 
-Inspect every PNG against the reference renders in `docs/images/` before committing it.
+Inspect every PNG (and, on the reference machine only, commit it). `signup` has reference renders in `docs/images/`
+(`signup-front.jpg`). `world` has none and is judged by eye: the glass card stands to the right, tipped back, and the
+wall occludes its lower-left corner and the left end of the Cancel pill.
 
 ## On a diff
 
+The quick path: a failing test leaves `test-results/<test>/<scene>-{expected,actual,diff}.png`. The HTML report has
+the same images side by side (it is written on every run, never opened by itself):
+
 ```sh
-pnpm --filter visual exec playwright show-report   # opens playwright-report/: expected, actual and diff per test
+pnpm --filter visual exec playwright show-report   # serves playwright-report/: expected, actual and diff per test
 ```
 
 An unintended change is a regression: fix it. An intended one: regenerate with `pnpm test:visual:update`, inspect, and

@@ -10,8 +10,11 @@ export default defineConfig({
   // `<scene>-<project>.png` on every platform (the default template adds a platform suffix)
   snapshotPathTemplate: '{testDir}/{testFileName}-snapshots/{arg}-{projectName}{ext}',
   // SwiftShader draws the high tier at ~2 fps here and one capture takes ~2.5 s; the stable-screenshot check needs at
-  // least two identical captures, so the 5 s default times out although the frames match pixel for pixel
-  expect: { toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled', timeout: 30_000 } },
+  // least two identical captures, so the 5 s default times out although the frames match pixel for pixel. (The matcher's
+  // own options have no `timeout` in Playwright's types: it is set for every `expect` here.)
+  expect: { timeout: 30_000, toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled' } },
+  // `list` on the terminal; `html` writes playwright-report/ (expected, actual and diff per failure) for `show-report`
+  reporter: [['list'], ['html', { open: 'never' }]],
   use: { viewport: { width: 1280, height: 900 }, deviceScaleFactor: 1, baseURL: 'http://127.0.0.1:5177' },
   webServer: { command: 'pnpm --filter playground exec vite build && pnpm --filter playground exec vite preview --port 5177 --strictPort --host 127.0.0.1', url: 'http://127.0.0.1:5177', reuseExistingServer: true, timeout: 120_000 },
   projects: [

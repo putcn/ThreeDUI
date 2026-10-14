@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 
 // What the playground exposes (examples/playground/src/main.ts `PlaygroundHandle`), as far as the harness reads it.
 declare global {
-  interface Window { __glassui?: { ready: Promise<{ backend: 'webgpu' | 'webgl2' }> } }
+  interface Window { __glassui?: { ready: Promise<{ backend: 'webgpu' | 'webgl2' | 'unknown' }> } }
 }
 
 /** Wall clock to wait after `ready` (the springs, the first content passes). */
@@ -13,12 +13,18 @@ const SETTLE_MS = 1000
  * `LUMA_SETTLE` = 1 s of it from the first frame, which has no screen capture yet. At 20 fps or more the two are equal.
  */
 const SETTLE_UI_S = 1
+/** The root's per-frame dt clamp: `FrameScheduler`'s default `maxDt` (packages/render/src/scheduler.ts); keep in step. */
 const MAX_DT_S = 1 / 20
 
 const scenes = ['signup', 'world'] as const
 for (const scene of scenes) {
   test(`${scene} renders the same`, async ({ page }, info) => {
     const webgl = info.project.name === 'webgl2'
+    // from navigation on: an uncaught throw or a console error after `ready` may change only a few pixels (a stopped
+    // loop, the HUD's small error box), under the diff budget, so they fail the test on their own
+    const errors: string[] = []
+    page.on('pageerror', e => errors.push(`pageerror: ${e.message}`))
+    page.on('console', m => { if (m.type() === 'error') errors.push(`console.error: ${m.text()}`) })
     // `hud=0`: no live fps text in the frame
     await page.goto(`/?scene=${scene}&quality=high${webgl ? '&webgl' : ''}&hud=0`)
     // only the backend crosses back: the root itself is not serialisable
@@ -34,6 +40,7 @@ for (const scene of scenes) {
       expect(backend).toBe('webgpu')
     }
     await settle(page)
+    expect(errors, 'page errors and console errors since navigation').toEqual([])
     await expect(page).toHaveScreenshot(`${scene}.png`)
   })
 }
