@@ -100,6 +100,23 @@ describe('Surface', () => {
     s.tick(1 / 60); s.prepare(stubRenderer(), { width: 400, height: 300 }, 2)
     expect(s.contentPass.target.width).toBe(256); expect(s.contentPass.target.height).toBe(192)   // 400·2·¼ = 200 → 256, 150 → 192
   })
+  it('never draws the content below one texel per CSS px: the quality\'s scale only caps supersampling at DPR > 1', () => {
+    const at = (contentScale: number, dpr: number, own?: number) => {
+      const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, ...(own ? { contentScale: own } : {}) }, { ...ctx, quality: { ...ctx.quality, contentScale } })
+      s.tick(1 / 60); s.prepare(stubRenderer(), { width: 400, height: 300 }, dpr)
+      return [s.contentPass.target.width, s.contentPass.target.height]
+    }
+    // low/minimal (¼) at DPR 1: 400 × 300 CSS px get at least 400 × 300 texels, not 100 × 75
+    const [w, h] = at(0.25, 1)
+    expect(w).toBeGreaterThanOrEqual(400); expect(h).toBeGreaterThanOrEqual(300)
+    expect([w, h]).toEqual([448, 320])
+    expect(at(0.5, 1)).toEqual([448, 320])                  // medium at DPR 1: the floor, not 200 × 150
+    expect(at(0.5, 2)).toEqual([448, 320])                  // medium at DPR 2: 400 · 2 · ½ = one texel per CSS px
+    expect(at(0.5, 3)).toEqual([640, 512])                  // DPR 3: ½ of 1200 = 600 → 640 (1.5 texels per CSS px)
+    expect(at(0.25, 2)).toEqual([448, 320])                 // ¼ at DPR 2 is below the floor: ½
+    expect(at(1, 2)).toEqual([832, 640])                    // high: the full device resolution
+    expect(at(0.25, 1, 0.5)).toEqual([256, 192])            // the Surface's own scale still multiplies the floored one
+  })
   it('clears the content RT transparent black, or opaque to a colour background', () => {
     const none = new Surface({ width: 40, height: 30 }, ctx), r1 = stubRenderer()
     none.tick(1 / 60); none.prepare(r1, { width: 40, height: 30 }, 1)
@@ -374,8 +391,8 @@ describe('Surface', () => {
     s.setQuality(low)
     expect(c.quality).toBe(shared); expect(c.quality.contentScale).toBe(1)   // the root owns the shared profile
     expect(s.contentDirty).toBe(true)
-    s.prepare(stubRenderer(), { width: 400, height: 300 }, 1)
-    expect(s.contentPass.target.width).toBe(256)              // 400 · ½ = 200 → 256: this Surface's own profile
+    s.prepare(stubRenderer(), { width: 400, height: 300 }, 2)
+    expect(s.contentPass.target.width).toBe(448)              // 400 · 2 · ½ = 400 → 448: this Surface's own profile (the shared one: 832)
     expect(s.contentPass.texture.type).toBe(HalfFloatType)
     // a Surface made afterwards starts from the untouched shared profile
     expect(new Surface({ width: 400, height: 300, ptPerUnit: 100 }, c).contentPass.texture.type).toBe(UnsignedByteType)

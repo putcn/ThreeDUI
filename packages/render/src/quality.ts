@@ -4,7 +4,11 @@ export type QualityTier = 'high' | 'medium' | 'low' | 'minimal'
 /** A full tier: what a Surface reads (`QualitySettings`, `blur` included) plus what the root and the glass read. */
 export interface QualityProfile extends QualitySettings { tier: QualityTier; shadowMap: number; refraction: boolean; dispersion: 'always' | 'auto' | 'never' }
 
-/** Spec §5.6 table. Frozen: every root shares these rows, so copy one before changing it. */
+/**
+ * Spec §5.6 table. Frozen: every root shares these rows, so copy one before changing it. `contentScale` caps the
+ * content RT's supersampling above one texel per CSS px (see `QualitySettings.contentScale`): medium's ½ and low's ¼
+ * reduce it only at DPR > 1, and never below one texel per CSS px.
+ */
 export const QUALITY: Record<QualityTier, QualityProfile> = {
   high: Object.freeze({ tier: 'high', contentType: 'half', contentScale: 1, backFaces: true, depthReject: true, shadowMap: 2048, blur: 'kawase', refraction: true, dispersion: 'always' }),
   medium: Object.freeze({ tier: 'medium', contentType: 'byte', contentScale: 0.5, backFaces: false, depthReject: false, shadowMap: 1024, blur: 'mip', refraction: true, dispersion: 'auto' }),

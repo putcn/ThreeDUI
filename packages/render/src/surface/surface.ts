@@ -24,9 +24,21 @@ import { SurfaceLuma } from '../luma'
 import { liftFor, partition, type Partition } from './partition'
 import { toColor } from '../color'
 
-export interface SurfaceOptions { id?: string; width: number; height: number; ptPerUnit?: number; placement?: 'screen' | 'world'; background?: 'none' | 'glass' | string; cornerRadius?: number; interactive?: boolean; castToWorld?: boolean; contentScale?: number }
+export interface SurfaceOptions {
+  id?: string; width: number; height: number; ptPerUnit?: number; placement?: 'screen' | 'world'; background?: 'none' | 'glass' | string; cornerRadius?: number; interactive?: boolean; castToWorld?: boolean
+  /** Default 1: multiplies the content RT's texels per CSS px after the quality's floor (below 1 it may go under one texel per CSS px). */
+  contentScale?: number
+}
 /** The quality knobs a Surface reads (`QualityProfile` in `quality.ts` extends it into a full tier). */
-export interface QualitySettings { contentType: 'byte' | 'half'; contentScale: number; backFaces: boolean; depthReject: boolean; blur: 'kawase' | 'mip' }
+export interface QualitySettings {
+  contentType: 'byte' | 'half'
+  /**
+   * Content RT texels per device px, as a cap on supersampling: the RT gets `dpr × max(contentScale, 1/dpr)` texels per
+   * CSS px, never fewer than one (the content quad displays it), so a scale below 1 only bites above DPR 1.
+   */
+  contentScale: number
+  backFaces: boolean; depthReject: boolean; blur: 'kawase' | 'mip'
+}
 /** What every Surface of one root shares; `quality` is the root's current tier, the one new Surfaces start from. */
 export interface SurfaceContext { theme: Theme; scheme: ColorScheme; layout: LayoutEngine; measure: MeasureFn; anim: AnimationRuntime; text: TextEngine; pages: AtlasPages; quality: QualitySettings }
 export interface SurfaceEventMap extends Object3DEventMap { error: { error: Error } }
@@ -397,7 +409,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   }
 
   /**
-   * Sizes the content RT (and the pyramid) for the Surface's projected size and redraws it when dirty (a resize makes it
+   * Sizes the content RT (and the pyramid) for the Surface's projected size — `dpr × max(quality.contentScale, 1/dpr) ×
+   * contentScale` texels per CSS px, so never below one texel per CSS px from the quality alone — and redraws it when dirty (a resize makes it
    * dirty), then the pyramid: the content RT is its only input, so a clean RT means a current pyramid. Then the luma
    * (`SurfaceLuma.update`), from the content RT's own mips: on a redraw and while its smoothing settles after one; on a
    * glass Surface drawn with `camera` (the root passes its own), every frame, over the slab's screen capture too.
@@ -405,7 +418,10 @@ export class Surface extends Object3D<SurfaceEventMap> {
   prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number, camera?: Camera): void {
     if (this.error) return
     try {
-      const size = contentRTSize(projectedPx, dpr, { scale: this.quality.contentScale * this.contentScale })
+      // the quality's scale caps supersampling: the RT never drops below one texel per CSS px (it is what the content
+      // quad displays), so it only bites above DPR 1; the Surface's own `contentScale` multiplies the result
+      const floor = dpr > 0 ? 1 / dpr : 1
+      const size = contentRTSize(projectedPx, dpr, { scale: Math.max(this.quality.contentScale, floor) * this.contentScale })
       if (this.contentPass.resize(size.width, size.height)) this.contentDirty = true
       this.pyramid?.resize(size.width, size.height)
       const redrawn = this.contentDirty
