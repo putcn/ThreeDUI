@@ -724,21 +724,38 @@ describe('Surface', () => {
     expect(s.parent).toBeNull()
     forget.mockRestore(); release.mockRestore()
   })
-  it('dispose is idempotent: a second call frees nothing twice; one dispose event, after everything is freed', () => {
-    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
-    const g = new Node('glass'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60 })
-    s.root.appendChild(g); s.tick(0)
-    const tracked = new Set<{ addEventListener(type: 'dispose', fn: () => void): void }>([s.contentPass.target, s.contentMesh.geometry, s.contentMesh.material as Material, ...meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab || elementGlass(s).includes(m)).map(m => m.material as Material)])
-    const freed = new Map<object, number>()
-    for (const o of tracked) o.addEventListener('dispose', () => freed.set(o, (freed.get(o) ?? 0) + 1))
-    let freedBeforeEvent = false
-    const onDispose = vi.fn(() => { freedBeforeEvent = [...tracked].every(o => freed.get(o) === 1) }); s.addEventListener('dispose', onDispose)
-    expect(s.disposed).toBe(false)
-    s.dispose(); s.dispose()
-    expect(s.disposed).toBe(true); expect(onDispose).toHaveBeenCalledTimes(1); expect(freedBeforeEvent).toBe(true)
-    expect(tracked.size).toBeGreaterThan(5); for (const o of tracked) expect(freed.get(o)).toBe(1)
+  it('dispose is idempotent: a second call frees nothing twice, the captures and the probe included; one dispose event, after the frees', () => {
+    type Disposable = { addEventListener(type: 'dispose', fn: () => void): void }
+    type Captures = { screen: Disposable | null; depth: Disposable | null; behindCapture: Disposable | null; captureProbe: Mesh | null }
+    const glassy = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })   // screen + depth captures
+    const bare = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx })                          // with glass: a behind-capture and its probe
+    for (const s of [glassy, bare]) {
+      const g = new Node('glass'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60 })
+      s.root.appendChild(g); s.tick(0)
+    }
+    const own = (s: Surface) => s as unknown as Captures
+    const { screen, depth } = own(glassy), { behindCapture, captureProbe } = own(bare)
+    expect([screen, depth, behindCapture, captureProbe].every(c => c !== null)).toBe(true)
+    // the slab-order meshes: the glass Surface's background slab, the 'none' one's probe
+    const draws = (s: Surface): Disposable[] => [s.contentPass.target, s.contentMesh.geometry, s.contentMesh.material as Material,
+      ...meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab || elementGlass(s).includes(m)).map(m => m.material as Material)]
+    const tracked = new Map<Surface, Set<Disposable>>([
+      [glassy, new Set([...draws(glassy), screen!, depth!])],
+      [bare, new Set([...draws(bare), behindCapture!, captureProbe!.material as Material, captureProbe!.geometry])],
+    ])
+    expect(tracked.get(bare)!.has(captureProbe!.material as Material)).toBe(true)
+    const freed = new Map<object, number>(), events: boolean[] = []
+    for (const [s, objs] of tracked) {
+      for (const o of objs) o.addEventListener('dispose', () => freed.set(o, (freed.get(o) ?? 0) + 1))
+      s.addEventListener('dispose', () => events.push([...objs].every(o => freed.get(o) === 1)))
+      expect(s.disposed).toBe(false)
+      s.dispose(); s.dispose()
+      expect(s.disposed).toBe(true)
+    }
+    expect(events).toEqual([true, true])           // one event per Surface, after its frees
+    for (const objs of tracked.values()) { expect(objs.size).toBeGreaterThan(5); for (const o of objs) expect(freed.get(o)).toBe(1) }
   })
-  it('a disposed Surface does not tick, prepare or rebuild', () => {
+  it('a disposed Surface does not tick, prepare, rebuild or resize', () => {
     const { s, btn } = signup()
     s.tick(1 / 60); s.dispose()
     btn.setStyle({ width: 100 })
@@ -750,6 +767,8 @@ describe('Surface', () => {
       expect(s.refreshText()).toBe(false)
       expect(compute).not.toHaveBeenCalled(); expect(renderer.render).not.toHaveBeenCalled(); expect(build).not.toHaveBeenCalled()
       expect(s.error).toBeNull()
+      s.setSize(10, 10)                             // the Vue layer may still patch its size while unmounting
+      expect([s.model.width, s.model.height]).toEqual([400, 300]); expect(s.contentMesh.scale.x).toBeCloseTo(4)
     } finally { compute.mockRestore() }
   })
   it('markFailed stops the Surface: error set, hidden, one error event; its nodes\' whenSettled waiters settle', async () => {

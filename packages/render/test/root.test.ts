@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { Box3, PerspectiveCamera, Quaternion, Scene, Texture, Vector2, Vector3, VSMShadowMap, type DirectionalLight } from 'three'
+import { Box3, PerspectiveCamera, Quaternion, RenderTarget, Scene, Texture, Vector2, Vector3, VSMShadowMap, type DirectionalLight } from 'three'
 import type { WebGPURenderer } from 'three/webgpu'
 import { defaultTheme, GlassUIError, Node, resolveColor, type Theme } from '@glassui/core'
 import { createUIRoot, type UIRenderer, type UIRootOptions } from '../src/root'
@@ -718,9 +718,12 @@ describe('root hardening', () => {
     expect(errors).toEqual([bad]); expect(bad.error).toBeTruthy(); expect(good.error).toBeNull()
     expect(good.layer.visible).toBe(true); expect(bad.layer.visible).toBe(true)   // restored after the isolation
     expect(renderer.autoClear).toBe(true)
-    renderer.render.mockClear()
+    // the next frame: one UI draw (no isolation pass), with the good Surface's draws shown and the failed one's not
+    const uiDraws: { good: boolean; bad: boolean }[] = []
+    const shows = (s: Surface) => { let shown = false; s.traverseVisible(o => { if (o === s.layer) shown = true }); return shown }
+    renderer.render.mockImplementation((drawn: Scene) => { if (drawn === root.uiScene) uiDraws.push({ good: shows(good), bad: shows(bad) }) })
     root.tick(0); expect(() => root.renderUI()).not.toThrow()
-    expect(renderer.render).toHaveBeenLastCalledWith(root.uiScene, expect.anything()); expect(errors).toEqual([bad])
+    expect(uiDraws).toEqual([{ good: true, bad: false }]); expect(errors).toEqual([bad])
   })
   it('a UI render error no Surface reproduces, or that the scene throws without any Surface, fails none', async () => {
     const { root, renderer } = await createRoot()
@@ -745,6 +748,58 @@ describe('root hardening', () => {
     root.renderUI()
     expect(errors).toEqual([a]); expect(a.error).toBeTruthy(); expect(ok.error).toBeNull()
     expect(root.surfaces).toEqual([a, ok]); expect(b.disposed).toBe(true)
+  })
+  it('a swallowed throw puts back the render target three left bound; the isolation draws and the next frame start from it', async () => {
+    for (const mode of ['overlay', 'shared'] as const) {
+      const { root, renderer, scene } = await createRoot({ mode })
+      const host = new RenderTarget(4, 4), fbo = new RenderTarget(4, 4)   // the host's target; three's internal framebuffer target
+      let current: RenderTarget | null = host
+      renderer.setRenderTarget.mockImplementation((t: RenderTarget | null) => { current = t })
+      Object.assign(renderer, { getRenderTarget: () => current })
+      const good = root.createSurface({ width: 10, height: 10 }), bad = root.createSurface({ width: 10, height: 10 })
+      const drawn = mode === 'shared' ? scene : root.uiScene, draw = () => mode === 'shared' ? root.render() : root.renderUI()
+      const seen: (RenderTarget | null)[] = []
+      renderer.render.mockImplementation((s: Scene) => {
+        if (s !== drawn) return
+        seen.push(current)
+        let shown = false; bad.layer.traverseVisible(() => { shown = true })
+        if (shown && bad.visible) { current = fbo; throw new Error('shader') }   // `_renderScene` throwing inside its object loop
+      })
+      root.tick(0); draw()
+      expect(bad.error).toBeTruthy(); expect(good.error).toBeNull()
+      expect(current).toBe(host); expect(seen.length).toBeGreaterThan(2); expect(seen.every(t => t === host)).toBe(true)
+      seen.length = 0
+      root.tick(0); draw()
+      expect(seen).toEqual([host]); expect(current).toBe(host)
+    }
+  })
+  it('overlay: the host scene\'s own throw propagates with the render target put back', async () => {
+    const { root, renderer, scene } = await createRoot()
+    const host = new RenderTarget(4, 4), fbo = new RenderTarget(4, 4)
+    let current: RenderTarget | null = host
+    renderer.setRenderTarget.mockImplementation((t: RenderTarget | null) => { current = t })
+    Object.assign(renderer, { getRenderTarget: () => current })
+    renderer.render.mockImplementation((s: Scene) => { if (s === scene) { current = fbo; throw new Error('host bug') } })
+    expect(() => root.render()).toThrow('host bug')
+    expect(current).toBe(host); expect(renderer.autoClear).toBe(true)
+  })
+  it('without an error listener, a failure goes to the console; with one, only to the listener', async () => {
+    const { root, renderer } = await createRoot()
+    const s = root.createSurface({ width: 10, height: 10 }); s.name = 'form'
+    const bad = new Node('box'); bad.setStyle({ bg: 'nope' }); s.root.appendChild(bad)
+    const logged: unknown[][] = []
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => { logged.push(a) })
+    try {
+      root.tick(0)
+      expect(logged).toEqual([['[glassui]', 'form', s.error]])
+      renderer.render.mockImplementationOnce(() => { throw new Error('flaky') })
+      root.renderUI()
+      expect(logged[1]).toEqual(['[glassui]', '(no Surface)', new Error('flaky')])
+      const heard = vi.fn(); root.on('error', heard)
+      renderer.render.mockImplementationOnce(() => { throw new Error('again') })
+      root.renderUI()
+      expect(heard).toHaveBeenCalledWith({ surface: null, error: new Error('again') }); expect(logged).toHaveLength(2)
+    } finally { spy.mockRestore() }
   })
   it('shared mode isolates the throwing Surface around the host scene\'s render', async () => {
     const { root, renderer, scene } = await createRoot({ mode: 'shared' })

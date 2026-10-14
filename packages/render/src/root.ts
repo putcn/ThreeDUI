@@ -64,7 +64,7 @@ export interface UIRootEventMap {
   quality: { tier: QualityTier; prev: QualityTier; profile: Readonly<QualityProfile> }
   /**
    * A Surface failed (it stopped drawing: `Surface.markFailed`), or, with `surface: null`, a render of the UI threw and
-   * no Surface reproduced it (`render` / `renderUI`).
+   * no Surface reproduced it (`render` / `renderUI`). Without a listener the root logs it (`console.error`).
    */
   error: { surface: Surface | null; error: Error }
   /**
@@ -132,7 +132,8 @@ export interface UIRoot {
    * restored) and fails (`Surface.markFailed`) every Surface that throws so, each emitting `'error'`; when none does, or
    * when the scene throws with every Surface hidden (the fault is not a Surface's), it emits `'error'` with `surface:
    * null` and fails none. The next frame draws the Surfaces left. Overlay's host-scene draw is the host's: its throw
-   * propagates. A no-op after `dispose`.
+   * propagates. After any throw the renderer's render target is put back as it was before the draw. A no-op after
+   * `dispose`.
    */
   render(): void
   /**
@@ -277,6 +278,11 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   function emit<K extends keyof UIRootEventMap>(type: K, e: UIRootEventMap[K]): void {
     for (const fn of [...listeners[type]]) try { fn(e) } catch (err) { console.error(`[glassui] a "${type}" listener threw:`, err) }
   }
+  /** `'error'` to its listeners; with none, to the console (spec §9: a failure is never silent). */
+  function reportError(surface: Surface | null, error: Error): void {
+    if (listeners.error.size) emit('error', { surface, error })
+    else console.error('[glassui]', surface?.name ?? '(no Surface)', error)
+  }
 
   const offQuality = quality.onChange((tier, prev) => {
     const profile = QUALITY[tier]   // not `quality.profile`: a listener may have moved on already (queued delivery)
@@ -321,9 +327,20 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
 
   const toError = (e: unknown): Error => e instanceof Error ? e : new Error(String(e))
 
+  /**
+   * `renderer.render(target, camera)`; a throw puts the render target back as it was, then propagates. three r186's
+   * `_renderScene` binds its internal framebuffer target (sRGB output) and restores the output one only after its object
+   * loop, so a throw inside the loop (a node build failure) leaves it bound: every later draw would land offscreen with
+   * no output pass, and the canvas would freeze. (On success three restores it itself.)
+   */
+  function renderRestoring(target: Scene): void {
+    const prev = renderer.getRenderTarget?.() ?? null
+    try { renderer.render(target, camera) } catch (e) { renderer.setRenderTarget(prev); throw e }
+  }
+
   /** `renderer.render(target, camera)`, with a throw isolated (`isolate`) instead of propagating. */
   function draw(target: Scene): void {
-    try { renderer.render(target, camera) } catch (e) { isolate(target, e) }
+    try { renderRestoring(target) } catch (e) { isolate(target, e) }
   }
 
   /**
@@ -339,13 +356,13 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     /** Draws `target` with only `only`'s layer shown among `shown` (null: none of them); what that threw, or null. */
     const alone = (only: Surface | null): Error | null => {
       shown.forEach(s => { if (s !== only) s.layer.visible = false })
-      try { renderer.render(target, camera); return null }
+      try { renderRestoring(target); return null }
       catch (err) { return toError(err) }
       finally { shown.forEach((s, i) => { s.layer.visible = was[i]! }) }
     }
     const culprits: [Surface, Error][] = []
     if (shown.length && alone(null) === null) for (const s of shown) { const err = alone(s); if (err) culprits.push([s, err]) }
-    if (!culprits.length) { emit('error', { surface: null, error: toError(e) }); return }
+    if (!culprits.length) { reportError(null, toError(e)); return }
     for (const [s, err] of culprits) s.markFailed(err)   // a no-op on one an earlier culprit's listener disposed
   }
 
@@ -405,7 +422,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       if (disposed) throw new GlassUIError('UIRoot.createSurface', 'root 已经 dispose')
       const { layer = 'screen', fill, center, left, top, ...rest } = o
       const s = new Surface(layer === 'screen' ? { ...rest, ptPerUnit: 1, placement: 'screen' } : { ...rest, placement: 'world' }, ctx)
-      s.addEventListener('error', e => emit('error', { surface: s, error: e.error }))
+      s.addEventListener('error', e => reportError(s, e.error))
       s.addEventListener('dispose', () => { forgetSurface(s) })   // disposed directly: it leaves the root too
       if (layer === 'screen') screen.place(s, fill ? { fill: true } : center ? { center: true } : { left: left ?? 0, top: top ?? 0 })
       else world.add(s)
@@ -460,7 +477,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       const hostAutoClear = renderer.autoClear
       renderer.autoClear = true
       try {
-        renderer.render(scene, camera)
+        renderRestoring(scene)   // the host's: its throw propagates, the render target put back
         root.renderUI()
       } finally { renderer.autoClear = hostAutoClear }
     },

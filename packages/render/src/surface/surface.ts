@@ -453,8 +453,9 @@ export class Surface extends Object3D<SurfaceEventMap> {
   get drawOrder(): number { return this.layer.renderOrder }
   set drawOrder(v: number) { this.layer.renderOrder = v }
 
-  /** Surface size in pt; marks layout (the root's style size) and the content RT. */
+  /** Surface size in pt; marks layout (the root's style size) and the content RT. A no-op on a disposed Surface. */
   setSize(width: number, height: number): void {
+    if (this.isDisposed) return
     this.model.width = width; this.model.height = height
     this.root.setStyle({ width, height })
     this.applySize()
