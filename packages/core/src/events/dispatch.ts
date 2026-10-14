@@ -91,7 +91,11 @@ export class PointerTracker {
   private lastClick: { node: Node; t: number; x: number; y: number } | null = null
   private readonly now: () => number
 
-  constructor(private readonly root: Node, private readonly d: EventDispatcher, private readonly theme: Theme = defaultTheme, opts: { now?: () => number } = {}) {
+  /** What the hit test resolves radius tokens against; the owner replaces it when the theme changes. */
+  theme: Theme
+
+  constructor(private readonly root: Node, private readonly d: EventDispatcher, theme: Theme = defaultTheme, opts: { now?: () => number } = {}) {
+    this.theme = theme
     this.now = opts.now ?? (() => performance.now())
   }
 

@@ -29,8 +29,8 @@ export interface Theme {
 
 export const defaultTheme: Theme = {
   colors: {
-    light: { accent: '#6b63f5', label: '#1c1c22', secondaryLabel: '#6a6a78', tertiaryLabel: '#8a8a98', fill: '#ffffff', separator: '#00000014', danger: '#ff3b30', success: '#34c759' },
-    dark: { accent: '#8a83ff', label: '#f2f2f7', secondaryLabel: '#aeaeb8', tertiaryLabel: '#8e8e98', fill: '#1c1c22', separator: '#ffffff1f', danger: '#ff453a', success: '#30d158' },
+    light: { accent: '#6b63f5', label: '#1c1c22', secondaryLabel: '#6a6a78', tertiaryLabel: '#8a8a98', fill: '#ffffff', separator: '#00000014', danger: '#ff3b30', success: '#34c759', scrim: '#00000047' },
+    dark: { accent: '#8a83ff', label: '#f2f2f7', secondaryLabel: '#aeaeb8', tertiaryLabel: '#8e8e98', fill: '#1c1c22', separator: '#ffffff1f', danger: '#ff453a', success: '#30d158', scrim: '#00000080' },
   },
   spacing: [0, 4, 8, 12, 16, 20, 24, 32, 40, 48, 64, 80, 96],
   radius: { none: 0, sm: 8, md: 12, lg: 16, xl: 24, '2xl': 32 },

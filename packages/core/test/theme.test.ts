@@ -9,6 +9,10 @@ describe('theme', () => {
     expect(light[0]).toBeLessThan(0.2)   // dark text on light
     expect(dark[0]).toBeGreaterThan(0.8) // light text on dark
   })
+  it('has a translucent black scrim (a dialog backdrop), darker in dark mode', () => {
+    expect(resolveColor('scrim', defaultTheme, 'light')).toEqual([0, 0, 0, 0x47 / 255])
+    expect(resolveColor('scrim', defaultTheme, 'dark')).toEqual([0, 0, 0, 0x80 / 255])
+  })
   it('parses hex and rgba literals', () => {
     expect(resolveColor('#6b63f5', defaultTheme, 'light')).toEqual([0x6b / 255, 0x63 / 255, 0xf5 / 255, 1])
     expect(resolveColor('#fff8', defaultTheme, 'light')).toEqual([1, 1, 1, 0x88 / 255])
