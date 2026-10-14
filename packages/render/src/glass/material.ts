@@ -44,9 +44,9 @@ export interface GlassMaterialOptions {
   /**
    * Screen: the capture to refract, shared per layer and disposed by its owner; default: a new `ScreenCapture` this
    * material owns. Panel (optional): what lies behind the content plane, seen where the content RT is transparent — a
-   * `'glass'` Surface's slab capture, which the slab (that Surface's first draw) takes before any of its draws, so the
-   * content is not in it. Without it (an opaque or `'none'` Surface) the content RT is refracted alone (spec §5.1) and
-   * its empty texels refract as black; a `'none'` Surface takes no capture, so its glass never costs a framebuffer copy.
+   * `'glass'` Surface's slab capture, which the slab (that Surface's first draw) takes before any of its draws, or a
+   * `'none'` Surface's behind-capture, which its probe takes at the slab's place; either way the content is not in it.
+   * Without it (an opaque Surface) the content RT is refracted alone (spec §5.1) and its empty texels refract as black.
    */
   screen?: ReturnType<typeof viewportMipTexture> | undefined
   /** Panel with `screen`: the mip level of the behind-the-plane sample (default: the element's own roughness level). */

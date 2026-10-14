@@ -5,7 +5,7 @@ import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial, type MeshBasicNodeM
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme, resolveColor } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
 import { Surface, createContentMaterial, fillColors, CONTENT_ORDER, SLAB_FROST, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
-import { FILL } from '../src/glass/frost'
+import { FILL, SLAB_BEHIND } from '../src/glass/frost'
 import { AtlasPages } from '../src/text/pages'
 import { createMeasureFn } from '../src/text/measure'
 import { REFLECTION_STRENGTH } from '../src/glass/batch'
@@ -13,6 +13,7 @@ import { srgbToLinear } from '../src/color'
 import { surfaceToLocal } from '../src/units'
 import { ScreenCapture } from '../src/glass/material'
 import { buildShaders } from './fixtures/build-shaders'
+import { LumaPass } from '../src/luma'
 import { QUALITY } from '../src/quality'
 import { toColor } from '../src/color'
 import { evalNode } from './fixtures/tsl-eval'
@@ -63,6 +64,10 @@ function materialGraph(m: Material): GraphNode[] {
 const CAPTURES = ['ViewportTextureNode', 'ViewportDepthTextureNode']
 /** A Surface's element glass draws (back and front). */
 const elementGlass = (s: Surface) => meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.glassBack || m.renderOrder === SURFACE_ORDER.glassFront)
+/** The capture nodes `ms` sample. */
+const capturesIn = (ms: Mesh[]) => ms.flatMap(m => materialGraph(m.material as Material)).filter(n => CAPTURES.includes(n.constructor.type!))
+/** A 'none' Surface's draws at the slab's place in the order: its capture probe, when it has one. */
+const probeOf = (s: Surface) => meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab)
 
 describe('Surface', () => {
   it('builds the object graph and fills batches on tick', () => {
@@ -458,14 +463,85 @@ describe('Surface', () => {
     const opaque = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: '#ffffff' }, { ...ctx })
     expect(bases(elementGlass(opaque), 'ViewportTextureNode').size).toBe(0)   // an opaque content RT hides nothing
   })
-  it('a \'none\' Surface takes no capture: its element glass refracts the content RT alone', () => {
-    for (const s of [new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx }), new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'none' }, { ...ctx })]) {
-      const draws = [...meshes(s), ...meshes(s.contentPass.scene)]
-      expect(elementGlass(s)).toHaveLength(2)
-      expect(draws.flatMap(m => materialGraph(m.material as Material)).filter(n => CAPTURES.includes(n.constructor.type!))).toEqual([])
-      const sampled = elementGlass(s).flatMap(m => materialGraph(m.material as Material)).filter(n => n.isTextureNode).map(n => n.value)
-      expect(sampled).toContain(s.contentPass.texture)
-    }
+  it("a 'none' Surface without glass takes no capture", () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx })
+    const card = new Node('box'); card.setStyle({ position: 'absolute', left: 0, top: 0, width: 100, height: 100, bg: 'fill' })
+    s.root.appendChild(card); s.tick(0)
+    expect(capturesIn([...meshes(s), ...meshes(s.contentPass.scene)])).toEqual([])
+    expect(probeOf(s)).toEqual([])
+  })
+  it("a 'none' Surface with glass captures what is behind it before its content quad, and drops the capture with the glass", () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx })
+    const g = new Node('glass', 'g'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60, radius: 'capsule' })
+    s.root.appendChild(g); s.tick(0)
+    const probe = probeOf(s)
+    expect(probe).toHaveLength(1)
+    expect(probe[0]!.renderOrder).toBeLessThan(SURFACE_ORDER.content)
+    const base = (ms: Mesh[]) => new Set(ms.flatMap(m => materialGraph(m.material as Material)).filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!()))
+    const probeBase = base(probe)
+    expect(probeBase.size).toBe(1)
+    expect(base(elementGlass(s))).toEqual(probeBase)                     // element glass reads the probe's copy: one copy
+    g.remove(); s.tick(0)
+    expect(probeOf(s)).toEqual([])
+    expect(capturesIn([...meshes(s), ...meshes(s.contentPass.scene)])).toEqual([])
+  })
+  it("a 'none' Surface in the 'fill' glass mode takes no capture even with glass", () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx, quality: QUALITY.minimal })
+    const g = new Node('glass'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60 })
+    s.root.appendChild(g); s.tick(0)
+    expect(probeOf(s)).toEqual([])
+    expect(capturesIn(meshes(s))).toEqual([])
+  })
+  it("a 'none' Surface's behind-capture follows the quality: dropped on 'fill', made again on a refracting tier, freed on dispose", () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx })
+    const g = new Node('glass'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60 })
+    s.root.appendChild(g); s.tick(0)
+    const first = probeOf(s)[0]!
+    const freed: unknown[] = []
+    ;(first.material as Material).addEventListener('dispose', () => freed.push(first.material))
+    s.setQuality(QUALITY.minimal)
+    expect(probeOf(s)).toEqual([]); expect(capturesIn(meshes(s))).toEqual([]); expect(freed).toHaveLength(1)
+    s.setQuality(QUALITY.high)
+    const again = probeOf(s)
+    expect(again).toHaveLength(1)
+    const bases = (ms: Mesh[]) => new Set(capturesIn(ms).map(n => n.getBase!()))
+    expect(bases(elementGlass(s))).toEqual(bases(again))
+    const capture = [...bases(again)][0] as { value: Texture }
+    let captureFreed = 0
+    capture.value.addEventListener('dispose', () => { captureFreed++ })
+    ;(again[0]!.material as Material).addEventListener('dispose', () => freed.push(again[0]!.material))
+    s.dispose()
+    expect(captureFreed).toBe(1); expect(freed).toHaveLength(2)
+  })
+  it('the probe builds on both backends and copies the framebuffer, the copy the element glass reads', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, { ...ctx })
+    const g = new Node('glass'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60 })
+    s.root.appendChild(g); s.tick(0)
+    const warnings: string[] = []
+    const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
+    const copies = (m: Mesh, forceWebGL: boolean) => new Set(buildShaders(m.material as never, m.geometry, forceWebGL).updateBefore
+      .filter(n => CAPTURES.includes(n.constructor.type!)).map(n => n.getBase!()))
+    try {
+      for (const forceWebGL of [false, true]) {
+        const probe = probeOf(s)[0]!
+        expect(buildShaders(probe.material as never, probe.geometry, forceWebGL).updateBefore.length).toBeGreaterThan(0)
+        const probeCopies = copies(probe, forceWebGL)
+        expect(probeCopies.size).toBe(1)
+        for (const m of elementGlass(s)) expect(copies(m, forceWebGL)).toEqual(probeCopies)
+      }
+    } finally { spy.mockRestore() }
+    expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
+  })
+  it('takesPointer: a bare root takes nothing, a hit node, a coloured root or a glass background takes the pointer', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 1 }, { ...ctx })
+    const b = new Node('box'); b.setStyle({ position: 'absolute', left: 10, top: 10, width: 50, height: 50, bg: 'fill' })
+    s.root.appendChild(b); s.tick(0)
+    expect(s.takesPointer(20, 20)).toBe(true)
+    expect(s.takesPointer(300, 200)).toBe(false)
+    s.root.setStyle({ bg: '#00000040' }); s.tick(0)
+    expect(s.takesPointer(300, 200)).toBe(true)
+    const glass = new Surface({ width: 400, height: 300, ptPerUnit: 1, background: 'glass' }, { ...ctx }); glass.tick(0)
+    expect(glass.takesPointer(300, 200)).toBe(true)
   })
   it('repeated identical rebuilds keep exactly one live set of glass draws and never free the shared capture', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
@@ -617,7 +693,7 @@ describe('Surface: the dual-Kawase pyramid (quality.blur = \'kawase\')', () => {
 
 describe('Surface: adaptive luma (clear + adaptive glass, spec §5.3)', () => {
   /** A 400 × 300 Surface: a card panel and one glass element at (40, 30), 120 × 60 pt, with glass style `g`. */
-  function clearGlass(c: SurfaceContext = ctx, g: Record<string, unknown> = { variant: 'clear', adaptive: true }, background: 'none' | 'glass' = 'none') {
+  function clearGlass(c: SurfaceContext = ctx, g: Record<string, unknown> = { variant: 'clear', adaptive: true }, background = 'none') {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background }, c)
     const card = new Node('box', 'card'); card.setStyle({ position: 'absolute', left: 0, top: 0, width: 400, height: 300, bg: 'fill' })
     const el = new Node('glass', 'el'); el.setStyle({ position: 'absolute', left: 40, top: 30, width: 120, height: 60, glass: g })
@@ -705,23 +781,32 @@ describe('Surface: adaptive luma (clear + adaptive glass, spec §5.3)', () => {
     expect(sampledBy(meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab))).not.toContain(luma)
     expect(sampledBy(elementGlass(s))).toContain(luma)
   })
-  it('a glass Surface drawn with a camera measures every frame, quiet ones too, over the slab capture\'s latest copy; a \'none\' one settles', () => {
+  it('a glass or \'none\' Surface drawn with a camera measures every frame, quiet ones too, over its capture\'s latest copy; an opaque one settles', () => {
     const camera = new PerspectiveCamera(40, 4 / 3, 0.1, 100); camera.position.z = 8; camera.updateMatrixWorld()
-    const glass = clearGlass(ctx, { variant: 'clear', adaptive: true }, 'glass'), none = clearGlass()
-    const capture = nodesOf((meshes(glass).find(m => m.renderOrder === SURFACE_ORDER.slab)!.material as MeshPhysicalNodeMaterial).backdropNode)
-      .find((n): n is GraphNode & ScreenCapture => n instanceof ScreenCapture)!.getBase() as ScreenCapture
-    const rs = [recording(), recording()] as const
-    for (const [s, r] of [[glass, rs[0]], [none, rs[1]]] as const) {
-      s.updateMatrixWorld(true); s.tick(0.25); s.prepare(r, { width: 400, height: 300 }, 1, camera)
-      for (let i = 0; i < 8; i++) { s.tick(0.25); s.prepare(r, { width: 400, height: 300 }, 1, camera) }   // 2 s of quiet frames
-    }
-    expect(rs[0].render).toHaveBeenCalledTimes(2 + 8)
-    expect(rs[1].render).toHaveBeenCalledTimes(2 + 3)                 // the settle window only
-    const read = (r: typeof rs[0]) => new Set(nodesOf(((r.scenes[r.scenes.length - 1] as Mesh).material as MeshBasicNodeMaterial).colorNode).map(n => n.value))
-    capture.latest = new FramebufferTexture(8, 8)                     // what the slab's next copy would leave
-    glass.tick(0.25); glass.prepare(rs[0], { width: 400, height: 300 }, 1, camera)
-    expect(read(rs[0])).toContain(capture.latest)
-    expect(read(rs[0])).toContain(glass.contentPass.texture)
+    const adaptive = { variant: 'clear', adaptive: true }
+    const glass = clearGlass(ctx, adaptive, 'glass'), none = clearGlass(), opaque = clearGlass(ctx, adaptive, '#ffffff')
+    const rs = [recording(), recording(), recording()] as const
+    const passRender = vi.spyOn(LumaPass.prototype, 'render')
+    try {
+      for (const [s, r] of [[glass, rs[0]], [none, rs[1]], [opaque, rs[2]]] as const) {
+        s.updateMatrixWorld(true); s.tick(0.25); s.prepare(r, { width: 400, height: 300 }, 1, camera)
+        for (let i = 0; i < 8; i++) { s.tick(0.25); s.prepare(r, { width: 400, height: 300 }, 1, camera) }   // 2 s of quiet frames
+      }
+      expect(rs[0].render).toHaveBeenCalledTimes(2 + 8)
+      expect(rs[1].render).toHaveBeenCalledTimes(2 + 8)               // what is behind a 'none' Surface changes without a redraw too
+      expect(rs[2].render).toHaveBeenCalledTimes(2 + 3)               // the settle window only: an opaque content RT hides what is behind it
+      const read = (r: typeof rs[0]) => new Set(nodesOf(((r.scenes[r.scenes.length - 1] as Mesh).material as MeshBasicNodeMaterial).colorNode).map(n => n.value))
+      // the slab's capture on the glass Surface, the probe's on the 'none' one: what the element glass sees, frosted as it sees it
+      for (const [s, r, frost] of [[glass, rs[0], SLAB_BEHIND], [none, rs[1], { level: 0, lift: 0 }]] as const) {
+        const capture = materialGraph(meshes(s).find(m => m.renderOrder === SURFACE_ORDER.slab)!.material as Material)
+          .find((n): n is GraphNode & ScreenCapture => n instanceof ScreenCapture)!.getBase() as ScreenCapture
+        capture.latest = new FramebufferTexture(8, 8)                 // what the capture's next copy would leave
+        s.tick(0.25); s.prepare(r, { width: 400, height: 300 }, 1, camera)
+        expect(read(r)).toContain(capture.latest)
+        expect(read(r)).toContain(s.contentPass.texture)
+        expect(passRender.mock.lastCall![4]).toEqual(frost)
+      }
+    } finally { passRender.mockRestore() }
   })
   it('dispose frees the luma pass', () => {
     const s = clearGlass(); s.tick(1 / 60)

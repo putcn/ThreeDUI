@@ -297,6 +297,22 @@ describe('LumaPass kernel on a glass Surface: content over the frosted screen (C
     p.render(r, source, 1 / 60, capture)
     expect(r.taps.filter(t => t.of === 'screen').every(t => Math.abs(t.level - SLAB_BEHIND.level) < 1e-9)).toBe(true)
   })
+  it('with no frost (a \'none\' Surface: no slab) the screen counts unlifted, at its grid level with no floor; the next render frosts again', () => {
+    const small: LumaRect = { u: 0.5, v: 0.5, w: 0.01, h: 0.02 }       // 16 × 16 texels: under the slab's frost level
+    const p = new LumaPass(1); p.setRects([whole]); p.setScreenRects([small])
+    const r = cpuRenderer(p.rectTexture, source, { fn: () => [...C.map(x => x * 0.5), 0.5] }, { texture: capture, fn: () => S })
+    p.render(r, source, 1 / 60, capture, { level: 0, lift: 0 })
+    expect(r.images.get(p.texture)!.d[0]).toBeCloseTo(luma709(C) * 0.5 + 0.5 * luma709(S), 12)
+    const level = grid({ ...small, w: Math.fround(small.w), h: Math.fround(small.h) }, 1600, 800).level
+    expect(level).toBeLessThan(SLAB_BEHIND.level)
+    expect(r.taps.filter(t => t.of === 'screen').every(t => Math.abs(t.level - level) < 1e-6)).toBe(true)
+    const q = new LumaPass(1); q.setRects([whole]); q.setScreenRects([small])
+    const r2 = cpuRenderer(q.rectTexture, source, { fn: () => [0, 0, 0, 0] }, { texture: capture, fn: () => S })
+    q.render(r2, source, 1 / 60, capture, { level: 0, lift: 0 }); q.render(r2, source, 1 / 60, capture)   // the default again: the slab's
+    const screenTaps = r2.taps.filter(t => t.of === 'screen')
+    expect(screenTaps).toHaveLength(18)
+    expect(screenTaps.slice(9).every(t => Math.abs(t.level - SLAB_BEHIND.level) < 1e-9)).toBe(true)
+  })
   it('screen rects ride in row 1 and, unlike content rects, keep the smoothing when they change (the camera moved)', () => {
     const p = new LumaPass(2); p.setRects([whole]); p.setScreenRects([screenAt])
     expect(Array.from((p.rectTexture.image.data as Float32Array).slice(8, 12))).toEqual([0.25, 0.125, 0.5, 0.25])
@@ -440,10 +456,13 @@ describe('SurfaceLuma (a Surface\'s luma bookkeeping)', () => {
     row1([0.25, 0.375, 0.25, 0.125])                                       // local x −1…0, y 0…0.5 over a 4 × 4 view: NDC = local / 2
     capture.latest = new FramebufferTexture(8, 8)
     l.update(at(r, list, 0.25, false, { behind }))
-    expect(render).toHaveBeenLastCalledWith(r, src, 0.25, capture.latest)
+    expect(render).toHaveBeenLastCalledWith(r, src, 0.25, capture.latest, SLAB_BEHIND)   // by default, through the slab's frost
     plane.rotation.z = Math.PI / 2; plane.updateMatrixWorld()              // (x, y) → (−y, x): the bbox follows every frame
     l.update(at(r, list, 0.25, false, { behind }))
     row1([0.375, 0.5, 0.125, 0.25])
+    const clear = { level: 0, lift: 0 }                                   // a 'none' Surface's view: no slab, no frost
+    l.update(at(r, list, 0.25, false, { behind: { ...behind, frost: clear } }))
+    expect(render).toHaveBeenLastCalledWith(r, src, 0.25, capture.latest, clear)
   })
   it('screenRect: the bbox of the rect\'s corners projected through the plane and the camera, v = 0 at the top, clamped', () => {
     const S2 = { width: 400, height: 200, ptPerUnit: 100 }, rect = { x: 100, y: 50, width: 100, height: 50 }

@@ -1,8 +1,8 @@
 import { AddEquation, Box3, Color, CustomBlending, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Vector2, Vector3, type Camera, type Material, type Object3DEventMap, type Texture } from 'three'
-import { MeshStandardNodeMaterial } from 'three/webgpu'
-import { texture, uniform, uv, vec2 } from 'three/tsl'
+import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
+import { float, screenUV, texture, uniform, uv, vec2 } from 'three/tsl'
 import {
-  apply, buildRenderList, createSurface, EventDispatcher, FocusManager, PointerTracker, resolveColor,
+  apply, buildRenderList, createSurface, effectiveStyle, EventDispatcher, FocusManager, hitTest, PointerTracker, resolveColor,
   type AnimationRuntime, type ColorScheme, type GlassInstance, type LayoutEngine, type MeasureFn, type Node, type RenderList, type RGBA, type SurfaceModel, type Theme,
 } from '@glassui/core'
 import type { TextEngine } from '@glassui/text'
@@ -59,6 +59,9 @@ export { SLAB_FROST } from '../glass/frost'
 /** `renderOrder` of each draw inside the content RT's scene. */
 export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as const
 
+/** What is behind a `'none'` Surface, as its element glass sees it: no slab, so no frost (mip level 0, no lift). */
+const NO_FROST = { level: 0, lift: 0 } as const
+
 /** The `'fill'` glass mode's colours, linear: the background slab's, the element glass's and its border's. */
 export interface FillColors { slab: Color; glass: Color; border: Color }
 
@@ -100,10 +103,27 @@ export function createContentMaterial(content: Texture): MeshStandardNodeMateria
 }
 
 /**
+ * The draw that makes a `'none'` Surface's behind-capture copy the framebuffer before its content quad. three copies at
+ * the first draw of a frame that samples the capture; this one samples it (sampling is what schedules the copy:
+ * `updateBefore`) at the slab's place in the order, and writes nothing (no colour, no depth).
+ */
+function createCaptureProbe(capture: ScreenCapture): Mesh<PlaneGeometry, MeshBasicNodeMaterial> {
+  const m = new MeshBasicNodeMaterial()
+  m.colorNode = capture.sample(screenUV).rgb
+  m.opacityNode = float(0)
+  m.colorWrite = false; m.depthWrite = false; m.depthTest = false; m.transparent = true; m.toneMapped = false
+  const probe = new Mesh(new PlaneGeometry(1e-3, 1e-3), m)
+  probe.renderOrder = SURFACE_ORDER.slab; probe.frustumCulled = false
+  probe.name = 'capture-probe'
+  return probe
+}
+
+/**
  * Spec §3.2: a content face in 3D, in Surface-local units (centred, y up; its own position/quaternion/scale place it).
  *
  * Draws (all `frustumCulled = false`, orders in `SURFACE_ORDER`): background slab back/front (`background: 'glass'`
- * only, refracting the screen), the content quad, the glass back (with `quality.backFaces`) and front refracting the
+ * only, refracting the screen) — or, on a `'none'` Surface while it has glass to see through, the capture probe in
+ * their place (`createCaptureProbe`) — the content quad, the glass back (with `quality.backFaces`) and front refracting the
  * content RT, rims, then the images and glyphs riding on glass. The content RT's scene (`CONTENT_ORDER`), drawn
  * orthographically with the same Surface-local instance matrices: panels, pools, images, glyphs (one mesh per page).
  * With `quality.blur === 'kawase'` the content RT also feeds a `KawasePyramid`, which the element glass samples by
@@ -164,6 +184,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private readonly touch = new Map<Node, TouchState>()
   /** A glass Surface's framebuffer capture (null otherwise): the slab refracts it, element glass sees it under transparent content. */
   private readonly screen: ScreenCapture | null = null
+  /**
+   * A `'none'` Surface's capture of what is behind it, while it has glass in a mode that samples a backdrop (null
+   * otherwise): element glass sees it under transparent content. `captureProbe` takes it before the content quad.
+   */
+  private behindCapture: ScreenCapture | null = null
+  private captureProbe: Mesh<PlaneGeometry, MeshBasicNodeMaterial> | null = null
   /** A glass Surface's depth capture for `depthReject`, shared by the slab's faces and the element glass (one depth copy per render); made on first use. */
   private depth: DepthCapture | null = null
   /** The content RT's blur pyramid on the 'kawase' tier (null otherwise), redrawn with it while there is glass to sample it. */
@@ -201,8 +227,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
     if (bg === 'glass') {
       // one framebuffer capture, kept across quality rebuilds. The slab is this Surface's first draw and samples it, so
       // it is taken before any of this Surface's draws; element glass then shares it (no second copy) to see what is
-      // behind the slab where the content RT is transparent. A 'none' Surface takes no capture: its element glass
-      // refracts the content RT alone (spec §5.1), so it never pays a framebuffer copy
+      // behind the slab where the content RT is transparent. A 'none' Surface takes one only while it has glass
+      // (`syncBehind`), so without glass it never pays a framebuffer copy
       this.screen = new ScreenCapture()
       this.backgroundGlass = new GlassBatch()
     } else if (bg !== 'none') {
@@ -243,8 +269,9 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * a render copies the depth buffer once per Surface, not once per face) and the element glass's (its back with
    * `q.backFaces`, refracting the content RT). On a glass Surface element glass also sees the slab's screen capture,
    * through the slab's frost, where the content is transparent, and with `q.depthReject` reads the slab's depth capture
-   * too (no further copy); on a 'none' Surface it refracts the content RT alone. The captures are owned by the Surface:
-   * a rebuild never disposes them.
+   * too (no further copy); on a 'none' Surface it sees the behind-capture there (`syncBehind`; unfrosted, no depth
+   * reject), or, without one, refracts the content RT alone. The captures are owned by the Surface: a rebuild never
+   * disposes them.
    *
    * `q.glassMode` (`GlassMode`): `'straight'` looks through the same backdrops unrefracted, with no depth reject (and no
    * depth capture); `'fill'` hands no backdrop to any draw (the theme's fill colour instead), so while it lasts no draw
@@ -268,8 +295,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
         this.layer.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm)
       }
     }
-    // the slab's captures, which predate this Surface's draws: the slab is its first draw
-    const behind = slab && screen && mode !== 'fill' ? { screen, screenLevel: SLAB_BEHIND.level, screenLift: SLAB_BEHIND.lift, depthReject: reject, ...(depth ? { depth } : {}) } : {}
+    // what is behind the content plane, captured before any of this Surface's content: on a glass Surface the slab's
+    // captures (the slab is its first draw), through its frost; on a 'none' one the probe's (at the slab's place), as is
+    const behind = mode === 'fill' ? {}
+      : slab && screen ? { screen, screenLevel: SLAB_BEHIND.level, screenLift: SLAB_BEHIND.lift, depthReject: reject, ...(depth ? { depth } : {}) }
+        : this.behindCapture ? { screen: this.behindCapture, screenLevel: NO_FROST.level, screenLift: NO_FROST.lift }
+          : {}
     const element: GlassMaterial[] = []
     for (const [side, order, on] of [['back', SURFACE_ORDER.glassBack, q.backFaces], ['front', SURFACE_ORDER.glassFront, true]] as const) {
       if (!on) continue
@@ -292,9 +323,33 @@ export class Surface extends Object3D<SurfaceEventMap> {
   }
 
   /**
-   * A quality change for this Surface: rebuilds the glass draws for `q` (and the blur pyramid for `q.blur`; the rims
-   * when it enters or leaves the 'fill' glass mode), switches the content RT's texel type and marks the content dirty
-   * (the RT's size follows `q.contentScale` at the next `prepare`). A throw fails the Surface instead of propagating. It leaves the shared `ctx.quality` alone: the root
+   * A 'none' Surface's capture of what is behind it (and its probe): made while it has glass to show it through and the
+   * glass mode samples a backdrop (`wanted`), dropped when not; a no-op on other backgrounds. True when it appeared or
+   * went away: the element glass must then be rebuilt (`buildGlass`) to sample it, or to stop sampling it.
+   */
+  private syncBehind(wanted: boolean): boolean {
+    if (this.model.background !== 'none' || wanted === (this.behindCapture !== null)) return false
+    if (wanted) {
+      this.behindCapture = new ScreenCapture()
+      this.captureProbe = createCaptureProbe(this.behindCapture)
+      this.layer.add(this.captureProbe)
+    } else this.dropBehind()
+    return true
+  }
+
+  /** Frees the behind-capture and its probe, if any. */
+  private dropBehind(): void {
+    const probe = this.captureProbe
+    if (probe) { probe.removeFromParent(); probe.material.dispose(); probe.geometry.dispose() }
+    this.behindCapture?.dispose()
+    this.captureProbe = null; this.behindCapture = null
+  }
+
+  /**
+   * A quality change for this Surface: rebuilds the glass draws for `q` (and the blur pyramid for `q.blur`; a 'none'
+   * Surface's behind-capture, which the 'fill' glass mode drops; the rims when it enters or leaves the 'fill' glass mode),
+   * switches the content RT's texel type and marks the content dirty (the RT's size follows `q.contentScale` at the next
+   * `prepare`). A throw fails the Surface instead of propagating. It leaves the shared `ctx.quality` alone: the root
    * owns that (it is what new Surfaces start from), replaces it on a tier change and then calls this on every Surface.
    */
   setQuality(q: QualitySettings): void {
@@ -303,6 +358,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     if (this.error) return
     try {
       this.syncPyramid(q)
+      this.syncBehind(this.glass.buffer.count > 0 && q.glassMode !== 'fill')
       this.buildGlass(q)
       this.contentPass.setType(q.contentType)
       if (this.parts && wasFill !== (q.glassMode === 'fill')) this.fillRims(this.parts)
@@ -354,6 +410,24 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** Surface pt from the content quad's hit uv (PlaneGeometry: v = 1 at the top). */
   pointFromUV(u: number, v: number): [number, number] { return [u * this.model.width, (1 - v) * this.model.height] }
 
+  /** The node under (x, y) Surface pt in this Surface's tree, or null (core `hitTest` with the Surface's theme). */
+  hitNode(x: number, y: number): Node | null { return hitTest(this.model.root, x, y, this.ctx.theme) }
+
+  /**
+   * Whether a pointer at (x, y) Surface pt belongs to this Surface: always on a glass or coloured background (the
+   * panel is UI); on a 'none' one only where a node other than a bare root is hit — a root with no `bg` (or `'none'`)
+   * and no `border` — so a full-screen HUD lets the pointer through its empty areas to what is behind it (other
+   * Surfaces, then the host app).
+   */
+  takesPointer(x: number, y: number): boolean {
+    if (this.model.background !== 'none') return true
+    const hit = this.hitNode(x, y)
+    if (!hit) return false
+    if (hit !== this.model.root) return true
+    const s = effectiveStyle(hit)
+    return hit.type === 'glass' || (s.bg !== undefined && s.bg !== 'none') || s.border !== undefined
+  }
+
   /** The pointer's position on this Surface (pt), or null when it is elsewhere: where a press glows (the bridge sets it). */
   setPointer(pt: [number, number] | null): void { this.pointerPt = pt }
 
@@ -370,6 +444,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
         const p = this.parts = partition(list)
         this.updateTouch(list)
         this.fill(list, p)
+        // glass appeared on (or left) a 'none' Surface: it now sees (or no longer sees) what is behind it
+        if (this.syncBehind(this.glass.buffer.count > 0 && this.quality.glassMode !== 'fill')) this.buildGlass(this.quality)
         root.walk(n => { n.dirty.paint = false })
         this.contentDirty = true
       } else {
@@ -471,7 +547,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * glass instances to sample it (its only input is the content RT; without glass its 9 passes are skipped until glass
    * appears). Then the luma (`SurfaceLuma.update`, not in the 'fill' glass mode), from the content RT's own mips: on a
    * redraw and while its smoothing settles after one; on a glass Surface drawn with `camera` (the root passes its
-   * own), every frame, over the slab's screen capture too.
+   * own), every frame, over the slab's screen capture too (frosted as the slab frosts it); likewise on a 'none' Surface
+   * with a behind-capture, over that (unfrosted).
    */
   prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number, camera?: Camera): void {
     if (this.error) return
@@ -495,7 +572,9 @@ export class Surface extends Object3D<SurfaceEventMap> {
       }
       // the 'fill' glass mode samples no backdrop: nothing reads the luma (and the slab capture's copy would be stale)
       if (this.quality.glassMode === 'fill') return
-      const behind = this.screen && camera ? { behind: { capture: this.screen, camera, plane: this.plane } } : {}
+      // what the element glass sees where the content is transparent, frosted as it sees it
+      const capture = this.screen ?? this.behindCapture, frost = this.screen ? SLAB_BEHIND : NO_FROST
+      const behind = capture && camera ? { behind: { capture, camera, plane: this.plane, frost } } : {}
       this.luma.update({ renderer, glass: this.list?.glass ?? [], surface: this.model, content: this.contentPass.texture, dt: this.lastDt, redrawn, ...behind })
     } catch (e) { this.fail(e) }
   }
@@ -523,7 +602,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.foregroundText.dispose(); this.contentText.dispose(); this.foregroundImages.dispose(); this.contentImages.dispose()
     for (const gm of this.glassMaterials) gm.dispose()
     for (const m of this.materials) m.dispose()
-    this.screen?.dispose(); this.depth?.dispose()
+    this.screen?.dispose(); this.depth?.dispose(); this.dropBehind()
     this.contentMesh.geometry.dispose()
     this.removeFromParent()
   }

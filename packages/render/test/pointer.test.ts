@@ -46,12 +46,23 @@ function two() {
   const canvas = fakeCanvas()
   const list = [a, b]
   const bridge = new PointerBridge({ canvas, camera, surfaces: () => list, keyboard: true })
-  return { camera, layer, a, b, ab, bb, canvas, bridge, list }
+  return { camera, layer, a, b, ab, bb, canvas, bridge, list, rc: rayAt(camera, 0, 0) }
 }
 
 function rayAt(camera: PerspectiveCamera, x: number, y: number): Raycaster {
   const rc = new Raycaster(); rc.setFromCamera(new Vector2((x / 800) * 2 - 1, -((y / 600) * 2 - 1)), camera)
   return rc
+}
+/** Re-aims `rc` through canvas px (x, y) of the 800 × 600 canvas, from the camera it was last set from. */
+function aimAt(rc: Raycaster, x: number, y: number): Raycaster {
+  rc.setFromCamera(new Vector2((x / 800) * 2 - 1, -((y / 600) * 2 - 1)), rc.camera)
+  return rc
+}
+/** A `bg: 'fill'` box over the whole of `s`, on top of its other nodes, so `s` takes the pointer everywhere. */
+function cover(s: Surface): Node {
+  const n = new Node('box', `${s.name}-cover`); n.setStyle({ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', bg: 'fill' })
+  s.root.appendChild(n); s.tick(0)
+  return n
 }
 
 describe('hitSurfaces', () => {
@@ -70,20 +81,47 @@ describe('hitSurfaces', () => {
     expect(hitSurfaces(rc, [a, b])!.surface).toBe(b); expect(hitSurfaces(rc, [b, a])!.surface).toBe(b)
     const hit = hitSurfaces(rc, [a, b])!
     expect(hit.x).toBeCloseTo(50, 3); expect(hit.y).toBeCloseTo(50, 3)
+    cover(a)                                                           // a must take the pointer there to win it
     a.drawOrder = 2
     expect(hitSurfaces(rc, [a, b])!.surface).toBe(a); expect(hitSurfaces(rc, [b, a])!.surface).toBe(a)
   })
   it('skips hidden (also through an ancestor), failed and non-interactive Surfaces', () => {
     const { camera, layer, a, b } = two()
     const rc = rayAt(camera, 450, 350)
+    cover(a)                                                           // a takes the pointer where b no longer does
     b.visible = false; expect(hitSurfaces(rc, [a, b])!.surface).toBe(a); b.visible = true
     b.error = new Error('boom'); expect(hitSurfaces(rc, [a, b])!.surface).toBe(a); b.error = null
     b.interactive = false; expect(hitSurfaces(rc, [a, b])!.surface).toBe(a); b.interactive = true
     layer.visible = false; expect(hitSurfaces(rc, [a, b])).toBeNull()
   })
+  it('falls through a Surface that takes no pointer at the hit point', () => {
+    const { a, b, bb, rc } = two()
+    bb.remove(); b.tick(0)                                             // two() covers b with glass: bare it
+    const n = new Node('box', 'under'); n.setStyle({ position: 'absolute', left: 0, top: 0, width: 800, height: 600, bg: 'fill' })
+    a.root.appendChild(n); a.tick(0); b.tick(0)
+    // b's root is bare: the ray through b's quad lands on a
+    aimAt(rc, 450, 320)
+    expect(hitSurfaces(rc, [a, b])!.surface).toBe(a)
+    const k = new Node('box', 'chip'); k.setStyle({ position: 'absolute', left: 0, top: 0, width: 200, height: 100, bg: 'fill' })
+    b.root.appendChild(k); b.tick(0)
+    expect(hitSurfaces(rc, [a, b])!.surface).toBe(b)
+    n.remove(); a.tick(0)
+    k.remove(); b.tick(0)
+    expect(hitSurfaces(rc, [a, b])).toBeNull()                         // nothing anywhere: the pointer is the host's
+  })
+  it('falls through to a farther Surface when the nearer takes no pointer there', () => {
+    const far = new Surface({ width: 400, height: 400, ptPerUnit: 100 }, ctx), near = new Surface({ width: 400, height: 400, ptPerUnit: 100 }, ctx)
+    far.position.z = -6; near.position.z = -3
+    const world = new Object3D(); world.add(far, near); world.updateMatrixWorld(true)
+    const rc = new Raycaster(new Vector3(0, 0, 0), new Vector3(0, 0, -1))
+    cover(far); near.tick(0)
+    const hit = hitSurfaces(rc, [far, near])!
+    expect(hit.surface).toBe(far); expect(hit.distance).toBeCloseTo(6, 9); expect(hit.x).toBeCloseTo(200, 6); expect(hit.y).toBeCloseTo(200, 6)
+  })
   it('the nearest Surface wins over a higher drawOrder behind it', () => {
     const far = new Surface({ width: 400, height: 400, ptPerUnit: 100 }, ctx), near = new Surface({ width: 400, height: 400, ptPerUnit: 100 }, ctx)
     far.position.z = -6; near.position.z = -3; far.drawOrder = 5; near.drawOrder = 0
+    cover(far); cover(near)                                            // both take the pointer at the hit point
     const world = new Object3D(); world.add(far, near); world.updateMatrixWorld(true)
     const rc = new Raycaster(new Vector3(0, 0, 0), new Vector3(0, 0, -1))
     const hit = hitSurfaces(rc, [far, near])!

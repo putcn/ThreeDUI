@@ -17,6 +17,9 @@ export const LUMA_TAU = 0.2
  */
 export const LUMA_SETTLE = 5 * LUMA_TAU
 
+/** How element glass sees the capture behind its content plane: its mip level (a floor for the pass) and lift toward white. */
+export interface LumaFrost { readonly level: number; readonly lift: number }
+
 /** A glass element's footprint in content-RT uv (v = 0 at the top row), or in screen uv (v = 0 at the top). */
 export interface LumaRect { u: number; v: number; w: number; h: number }
 
@@ -38,10 +41,12 @@ function gridLevel(rect: Node<'vec4'>, size: UniformNode<'vec2', Vector2>): Node
  * then blends it with the previous result by `1 − e^(−dt/τ)`. Two targets ping-pong (no compute); the first render
  * after a `setRects` that changed the data writes through.
  *
- * A glass Surface's element glass shows what is behind its content plane where the content is transparent: the
- * premultiplied content plus `(1 − a)` × the slab capture, frosted as the slab frosts it (`SLAB_BEHIND`). Given that
- * capture (`render`'s `screen`), each tap adds it the same way, sampled at the matching tap of screen rect `i` (the
- * element's projected bbox, `setScreenRects`) at its grid level, never finer than the frost's. Without one the term is 0.
+ * Element glass on a glass or `'none'` Surface shows what is behind its content plane where the content is
+ * transparent: the premultiplied content plus `(1 − a)` × the capture of it, frosted as the glass sees it (`LumaFrost`:
+ * through the slab's frost, `SLAB_BEHIND`, on a glass Surface; unfrosted on a `'none'` one). Given that capture
+ * (`render`'s `screen`) and its frost, each tap adds it the same way, sampled at the matching tap of screen rect `i`
+ * (the element's projected bbox, `setScreenRects`) at its grid level, never finer than the frost's. Without one the
+ * term is 0.
  *
  * The rects ride in one `maxCount × 2` float `DataTexture`: row 0 the content rects, row 1 the screen rects. The pass is
  * a full-screen triangle drawn with `NoBlending`: it writes every texel of its target, so it needs no clear, whatever
@@ -65,6 +70,9 @@ export class LumaPass {
   private readonly blend = uniform(1)
   /** 1 with a screen capture, 0 without. */
   private readonly behind = uniform(0)
+  /** The screen's frost (`LumaFrost`): the floor of its taps' level, and its lift. */
+  private readonly frostLevel = uniform(SLAB_BEHIND.level)
+  private readonly frostLift = uniform(SLAB_BEHIND.lift)
   private readonly sourceSize: UniformNode<'vec2', Vector2> = uniform(new Vector2(1, 1))
   private readonly screenSize: UniformNode<'vec2', Vector2> = uniform(new Vector2(1, 1))
 
@@ -89,14 +97,14 @@ export class LumaPass {
     this.source = texture(new Texture(), uv(), float(0))
     this.screen = texture(this.noScreen, uv(), float(0))
     const lod = gridLevel(r, this.sourceSize)
-    const screenLod = max(gridLevel(sr, this.screenSize), SLAB_BEHIND.level)
+    const screenLod = max(gridLevel(sr, this.screenSize), this.frostLevel)
     let sum: Node<'float'> = float(0)
     for (let j = 0; j < 3; j++) for (let i = 0; i < 3; i++) {
       const fx = (i + 0.5) / 3, fy = (j + 0.5) / 3
       const c = this.source.sample(vec2(r.x.add(r.z.mul(fx)), r.y.add(r.w.mul(fy)))).level(lod)
       const under = this.screen.sample(vec2(sr.x.add(sr.z.mul(fx)), sr.y.add(sr.w.mul(fy)))).level(screenLod).rgb
       // premultiplied content over the frosted screen, as the element glass composites them
-      const seen = c.rgb.add(mix(under, vec3(1, 1, 1), SLAB_BEHIND.lift).mul(float(1).sub(c.a).mul(this.behind)))
+      const seen = c.rgb.add(mix(under, vec3(1, 1, 1), this.frostLift).mul(float(1).sub(c.a).mul(this.behind)))
       sum = sum.add(dot(seen, vec3(0.2126, 0.7152, 0.0722)))
     }
     const l = mix(this.previous.r, sum.div(9), this.blend)
@@ -138,16 +146,18 @@ export class LumaPass {
   }
 
   /**
-   * Measures `source` (its image's size sets the mip level) and, with a `screen` capture copy (a glass Surface's, with
-   * mips), the frosted screen behind it into the other target; restores the previous render target even when it throws.
+   * Measures `source` (its image's size sets the mip level) and, with a `screen` capture copy (with mips), the screen
+   * behind it seen through `frost` (default the slab's) into the other target; restores the previous render target even
+   * when it throws.
    */
-  render(renderer: RendererLike, source: Texture, dt: number, screen: Texture | null = null): void {
+  render(renderer: RendererLike, source: Texture, dt: number, screen: Texture | null = null, frost: LumaFrost = SLAB_BEHIND): void {
     const prev = renderer.getRenderTarget?.() ?? null
     const next = 1 - this.current
     this.source.value = source
     this.previous.value = this.targets[this.current]!.texture
     this.screen.value = screen ?? this.noScreen
     this.behind.value = screen ? 1 : 0
+    this.frostLevel.value = frost.level; this.frostLift.value = frost.lift
     const size = (t: Texture, v: Vector2) => { const img = t.image as { width?: number; height?: number } | null; v.set(img?.width ?? 1, img?.height ?? 1) }
     size(source, this.sourceSize.value); size(screen ?? this.noScreen, this.screenSize.value)
     this.blend.value = this.first ? 1 : 1 - Math.exp(-dt / LUMA_TAU)
@@ -166,14 +176,16 @@ export class LumaPass {
 
 const adaptiveClear = (g: GlassInstance) => g.params.variant === 'clear' && g.params.adaptive
 
-/** A glass Surface's view of what is behind its content plane. */
+/** A glass or `'none'` Surface's view of what is behind its content plane. */
 export interface LumaBehind {
-  /** The slab's screen capture: its `latest` copy (the previous frame's screen behind the Surface) is read. */
+  /** The slab's screen capture, or a `'none'` Surface's behind-capture: its `latest` copy (the previous frame's screen behind the Surface) is read. */
   capture: ScreenCapture
   /** The camera the Surface is drawn with; its matrices current. */
   camera: Camera
   /** The content plane; its `matrixWorld` current. */
   plane: Object3D
+  /** How the element glass sees the capture; default the slab's frost (`SLAB_BEHIND`). */
+  frost?: LumaFrost
 }
 
 /** One `SurfaceLuma.update`'s inputs. */
@@ -187,7 +199,7 @@ export interface LumaFrame {
   dt: number
   /** The content RT was redrawn this frame. */
   redrawn: boolean
-  /** A glass Surface's (with a camera): what its element glass shows where the content is transparent. */
+  /** A glass or `'none'` Surface's (with a camera and a capture): what its element glass shows where the content is transparent. */
   behind?: LumaBehind
 }
 
@@ -244,7 +256,7 @@ export class SurfaceLuma {
 
   /**
    * Each `prepare`, after the content pass, when any of `glass` is clear + adaptive. With `behind` it measures every
-   * frame: the screen behind a glass Surface changes without any redraw (the host animates, the camera moves).
+   * frame: the screen behind a glass or 'none' Surface changes without any redraw (the host animates, the camera moves).
    * Otherwise only when the content was `redrawn` and on every frame for `LUMA_SETTLE` of frame time after it; never on
    * a quiet frame past that: its inputs (the content RT, the rects) have not changed since, and the smoothing has settled.
    */
@@ -259,7 +271,7 @@ export class SurfaceLuma {
     }
     const behind = f.behind
     if (behind) pass.setScreenRects(this.sorted.map(g => screenRect(g.rect, s, behind)))
-    pass.render(f.renderer, f.content, f.dt, behind?.capture.latest ?? null)
+    pass.render(f.renderer, f.content, f.dt, behind?.capture.latest ?? null, behind?.frost ?? SLAB_BEHIND)
     this.feed()
   }
 

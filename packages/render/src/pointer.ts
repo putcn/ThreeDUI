@@ -1,4 +1,4 @@
-import { Matrix4, Plane, Ray, Raycaster, Vector2, Vector3, type Camera, type Object3D } from 'three'
+import { Matrix4, Plane, Ray, Raycaster, Vector2, Vector3, type Camera, type Intersection, type Object3D } from 'three'
 import { scrollOffset, type Node, type PointerType } from '@glassui/core'
 import type { Surface } from './surface/surface'
 
@@ -13,27 +13,33 @@ function shown(o: Object3D | null): boolean {
 /** Hits this much (relative) apart are one plane: coplanar Surfaces, e.g. a screen layer's. */
 const COPLANAR = 1e-6
 
+const surfaceOf = (h: Intersection): Surface => h.object.userData.surface as Surface
+
 /**
- * The nearest content-quad hit among the shown, interactive, error-free `surfaces`, converted with `pointFromUV`.
- * Coplanar hits (the screen layer's Surfaces share one plane) go to the highest `drawOrder`: the one drawn on top.
- * Reads the meshes' current `matrixWorld` (the root updates them each tick before routing).
+ * The nearest content-quad hit among the shown, interactive, error-free `surfaces` whose Surface takes the pointer at
+ * the hit point (`Surface.takesPointer`), converted with `pointFromUV`; null when none does (the pointer is the host
+ * app's). Coplanar hits (the screen layer's Surfaces share one plane) are tried from the highest `drawOrder` down: the
+ * one drawn on top first. A hit its Surface does not take (an empty area of a bare 'none' Surface, e.g. a full-screen
+ * HUD) falls through to the next. Reads the meshes' current `matrixWorld` (the root updates them each tick before routing).
  */
 export function hitSurfaces(raycaster: Raycaster, surfaces: readonly Surface[]): SurfaceHit | null {
   const targets = surfaces.filter(s => s.interactive && !s.error && shown(s.contentMesh)).map(s => s.contentMesh)
   const hits = raycaster.intersectObjects(targets, false)
-  const first = hits[0]
-  if (!first) return null
-  let best = first, order = (first.object.userData.surface as Surface).drawOrder
-  for (let i = 1; i < hits.length; i++) {
-    const h = hits[i]!
-    if (h.distance - first.distance > COPLANAR * Math.max(1, first.distance)) break
-    const o = (h.object.userData.surface as Surface).drawOrder
-    if (o > order) { best = h; order = o }
+  for (let i = 0; i < hits.length;) {
+    // the coplanar group starting at hit i, on top first (a stable sort: ties keep the raycaster's order)
+    const near = hits[i]!.distance
+    let j = i + 1
+    while (j < hits.length && hits[j]!.distance - near <= COPLANAR * Math.max(1, near)) j++
+    const group = hits.slice(i, j).sort((a, b) => surfaceOf(b).drawOrder - surfaceOf(a).drawOrder)
+    for (const h of group) {
+      if (!h.uv) continue
+      const surface = surfaceOf(h)
+      const [x, y] = surface.pointFromUV(h.uv.x, h.uv.y)
+      if (surface.takesPointer(x, y)) return { surface, x, y, distance: h.distance }
+    }
+    i = j
   }
-  if (!best.uv) return null
-  const surface = best.object.userData.surface as Surface
-  const [x, y] = surface.pointFromUV(best.uv.x, best.uv.y)
-  return { surface, x, y, distance: best.distance }
+  return null
 }
 
 const contentPlane = new Plane(new Vector3(0, 0, 1), 0), local = new Ray(), p = new Vector3(), inv = new Matrix4()
@@ -105,7 +111,8 @@ const FAR = -1e6
  * One pointer, as the trackers model it: secondary pointers (`isPrimary: false`) and non-primary buttons are ignored.
  * A press captures (as `setPointerCapture` does in the DOM): until up/cancel, moves and the up go to the pressed Surface
  * (`active`) at the ray's point on its content plane, even off its quad or over another Surface, and no other Surface
- * is hovered. Otherwise moves hover the Surface under the pointer (`hovered`), and the one left behind gets its hover
+ * is hovered. Otherwise moves hover the Surface under the pointer (`hovered`; `hitSurfaces`: an empty area of a bare
+ * 'none' Surface lets the pointer through), and the one left behind gets its hover
  * cleared. Keys go to `active`, the Surface last pressed (pressing another Surface, or nothing, blurs its focus); before
  * any press, the topmost interactive Surface is adopted. Tab steps through its focusables and is prevented, except past
  * the last (Shift+Tab: before the first), which blurs and lets the browser move focus out of the canvas.
