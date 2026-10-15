@@ -1,5 +1,5 @@
 import {
-  callWithAsyncErrorHandling, createRenderer, ErrorCodes, markRaw, normalizeClass,
+  callWithAsyncErrorHandling, createRenderer, ErrorCodes, markRaw, normalizeClass, toRaw,
   type CreateAppFunction, type RendererOptions, type RootRenderFunction,
 } from '@vue/runtime-core'
 import { GlassUIError, Node, parseTw, UI_EVENT_TYPES, validateStyle, type NodeType, type Style, type UIEventType } from '@glassui/core'
@@ -144,10 +144,12 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
       for (const c of [...el.children]) c.remove()
       if (t !== '') el.appendChild(textNode(t))
     },
-    insert(c, p, a) { p.insertBefore(c, a ?? null) },
-    remove(c) { c.remove() },
-    parentNode: n => n.parent,
-    nextSibling(n) { const p = n.parent; return p ? p.children[p.children.indexOf(n) + 1] ?? null : null },
+    // raw nodes only, whatever Vue hands over: a Teleport target held in a deep `ref` arrives as a reactive proxy, and a
+    // proxy stored as a parent (or child) breaks the core's identity checks (`PointerTracker`'s `p === this.root`)
+    insert(c, p, a) { toRaw(p).insertBefore(toRaw(c), a ? toRaw(a) : null) },
+    remove(c) { toRaw(c).remove() },
+    parentNode: n => toRaw(n).parent,
+    nextSibling(n) { const r = toRaw(n), p = r.parent; return p ? p.children[p.children.indexOf(r) + 1] ?? null : null },
     querySelector: teleportTarget,
     patchProp(el, key, _prev, next, _ns, instance) {
       if (/^on[A-Z]/.test(key)) {
@@ -176,8 +178,9 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
   }
   const renderer = createRenderer<Node, Node>(ops)
   const render: RootRenderFunction<Node> = (vnode, container, ns) => {
-    if (vnode) containers.add(container); else containers.delete(container)
-    renderer.render(vnode, container, ns)
+    const raw = toRaw(container)
+    if (vnode) containers.add(raw); else containers.delete(raw)
+    renderer.render(vnode, raw, ns)
   }
   const createApp: CreateAppFunction<Node> = (component, props) => {
     const app = renderer.createApp(component, props)
@@ -185,11 +188,12 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
     let container: Node | null = null
     app.mount = (target, ...rest) => {
       if (!(target instanceof Node)) throw new GlassUIError('app.mount', '挂载目标必须是 Node（createGlassApp 的 mount 还接受 Surface）')
-      containers.add(container = target)
-      const before = new Set(target.children)
-      try { return mount(target, ...rest) } catch (e) {
+      const raw = toRaw(target)
+      containers.add(container = raw)
+      const before = new Set(raw.children)
+      try { return mount(raw, ...rest) } catch (e) {
         // what a mount that failed half-way inserted (a fragment's first children); the instance mounts afresh on its next update
-        for (const c of [...target.children]) if (!before.has(c)) c.remove()
+        for (const c of [...raw.children]) if (!before.has(c)) c.remove()
         const handler = app.config.errorHandler
         if (!handler) throw e
         handler(e, null, 'mount')

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { h, nextTick, onMounted, reactive, ref, Teleport, Fragment, defineComponent } from '@vue/runtime-core'
+import { h, isProxy, nextTick, onMounted, reactive, ref, Teleport, Fragment, defineComponent } from '@vue/runtime-core'
 import { Node } from '@glassui/core'
 import { createGlassRenderer, setStyleLayer } from '../src/renderer'
 import { createFakeRoot } from './fixtures/fake-root'
@@ -160,6 +160,20 @@ describe('nodeOps', () => {
     const app = createGlassRenderer({ root }).createApp(() => h(Teleport, { to: '#dest' }, [h('box', { id: 'moved' })]))
     app.mount(new Node('box'))
     expect(dest.children.map(n => n.id)).toContain('moved')
+  })
+  it('a Teleport target held in a deep ref arrives as a proxy; the tree keeps raw nodes, so identity checks hold', async () => {
+    const root = createFakeRoot(), s = root.createSurface({ width: 100, height: 100 })
+    const target = ref(s.root), show = ref(true)          // a deep ref: `target.value` is a reactive proxy of the root
+    expect(isProxy(target.value)).toBe(true)
+    const { errors } = mount(() => h(Teleport, { to: target.value }, show.value ? [h('box', { id: 'kid', style: { width: 40, height: 40 }, onClick: () => {} })] : []), root)
+    const kid = s.root.children.find(n => n.id === 'kid')!
+    expect(kid.parent).toBe(s.root); expect(isProxy(kid.parent)).toBe(false)
+    expect(s.root.children.every(c => c.parent === s.root && !isProxy(c))).toBe(true)
+    root.tick(); s.pointer.down(10, 10)                     // PointerTracker.pathTo stops at `p === this.root`: a proxy parent never matches
+    expect(s.pointer.pressed).toBe(kid); s.pointer.up(10, 10)
+    show.value = false; await nextTick()
+    expect(s.root.children.some(n => n.id === 'kid')).toBe(false); expect(kid.parent).toBeNull()
+    expect(errors).toEqual([])
   })
   it('a Teleport target that is not there is reported: the defer hint, and a suggestion among the portals', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})   // Vue's own "Failed to locate Teleport target"

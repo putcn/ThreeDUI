@@ -1,4 +1,4 @@
-import type { App, Component, ComponentPublicInstance, InjectionKey } from '@vue/runtime-core'
+import { toRaw, type App, type Component, type ComponentPublicInstance, type InjectionKey } from '@vue/runtime-core'
 import { GlassUIError, Node } from '@glassui/core'
 import type { CanvasLike } from '@glassui/text'
 import type { Surface } from '@glassui/render'
@@ -55,12 +55,12 @@ export function createGlassApp(component: Component, opts: GlassAppOptions, root
   const mount = app.mount
   const glassApp = app as GlassApp
   glassApp.mount = ((target?: unknown) => {
-    const surface = isSurface(target) ? target : null
+    const surface = isSurface(target) ? toRaw(target) : null   // raw: a Surface from a deep ref would hand out proxy nodes
     if (!surface && target !== undefined && !(target instanceof Node)) {
       const got = typeof target === 'string' ? target : Object.prototype.toString.call(target)
       throw new GlassUIError('createGlassApp.mount', `挂载目标必须是 Surface、Node 或省略（省略时挂到一个分离的容器），得到 "${got}"`, { allowed: ['Surface', 'Node', 'undefined'], got })
     }
-    container = surface ? surface.root : target instanceof Node ? target : new Node('box', 'glass-app')
+    container = surface ? surface.root : target instanceof Node ? toRaw(target) : new Node('box', 'glass-app')
     provideOwn(app, GLASS_SURFACE, surface)
     return mount(container)
   }) as GlassApp['mount']
