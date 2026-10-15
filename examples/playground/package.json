@@ -6,9 +6,12 @@
     "@glassui/core": "workspace:*",
     "@glassui/text": "workspace:*",
     "@glassui/render": "workspace:*",
-    "three": "^0.186.1"
+    "@glassui/vue": "workspace:*",
+    "three": "^0.186.1",
+    "vue": "3.5.44"
   },
   "devDependencies": {
+    "@vitejs/plugin-vue": "6.0.10",
     "vite": "^8.3.3",
     "typescript": "^5.9.3",
     "@types/three": "^0.186.0"

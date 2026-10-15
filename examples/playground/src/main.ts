@@ -1,31 +1,43 @@
-// GlassUI playground: the sign-up form (a screen-layer Surface) and a world-layer Surface over a host three.js scene.
-//   ?scene=signup|world|both  (default both)   ?quality=high|medium|low|minimal  (default auto)   ?webgl  (force WebGL2)
+// GlassUI playground: the sign-up form (a screen-layer Surface) and a world-layer Surface over a host three.js scene,
+// and the @glassui/vue component gallery (a full-screen screen-layer Surface).
+//   ?scene=signup|world|both|gallery  (default both)   ?quality=high|medium|low|minimal  (default auto)   ?webgl  (force WebGL2)
 //   ?hud=0  (no HUD: the visual harness's screenshots must not hold the live fps text; an error still shows)
-// Drag the background to orbit (not in ?scene=signup); the form stays put, the world Surface moves with the scene.
+//   ?motion=frozen|live  (default live; frozen: the gallery's transitions complete at once, for screenshots)
+// Drag the background to orbit (world and both only); the form stays put, the world Surface moves with the scene.
 
 import { Color, PerspectiveCamera, Raycaster, Scene, Vector2 } from 'three'
 import { WebGPURenderer } from 'three/webgpu'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
+import { absoluteRect, type Node, type Rect } from '@glassui/core'
 import { createUIRoot, QUALITY, type QualityTier, type Surface, type UIRoot } from '@glassui/render'
 import { hitSurfaces } from '@glassui/render/internal'   // the orbit guard's own raycast: no public equivalent
+import { createGlassApp } from '@glassui/vue'
+import Gallery from './gallery/Gallery.vue'
 import { createHostLights, createWall } from './wall'
 import { buildSignup, SIGNUP } from './signup'
 import { buildWorld } from './world'
 
-/** What the visual harness (Task 24) reads: `ready` resolves to the root once the first frame has been drawn. */
-export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURenderer; root?: UIRoot; surfaces?: Surface[] }
+/**
+ * What the visual harness reads: `ready` resolves to the root once the first frame has been drawn; `rectOf(id)` is the
+ * CSS px rect (from the canvas's top-left) of the node with that id in any Surface, null when there is none or a
+ * corner is behind the camera (the harness hovers and presses at its centre).
+ */
+export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURenderer; root?: UIRoot; surfaces?: Surface[]; rectOf(id: string): Rect | null }
 declare global { interface Window { __glassui?: PlaygroundHandle } }
 
-type SceneMode = 'signup' | 'world' | 'both'
+const SCENES = ['signup', 'world', 'both', 'gallery'] as const
+type SceneMode = (typeof SCENES)[number]
 const params = new URLSearchParams(location.search)
 const forceWebGL = params.has('webgl')
 const sceneParam = params.get('scene')
-const mode: SceneMode = sceneParam === 'signup' || sceneParam === 'world' ? sceneParam : 'both'
+const mode: SceneMode = SCENES.find(s => s === sceneParam) ?? 'both'
+const motion = params.get('motion') === 'frozen' ? 'frozen' : 'live'
 const qualityParam = params.get('quality')
 const isTier = (q: string | null): q is QualityTier => q !== null && Object.hasOwn(QUALITY, q)
 const quality: QualityTier | 'auto' = isTier(qualityParam) ? qualityParam : 'auto'
 const liveHud = params.get('hud') !== '0'
 if (sceneParam !== null && sceneParam !== mode) console.warn(`[playground] unknown ?scene=${sceneParam}; using "both"`)
+if (params.has('motion') && params.get('motion') !== motion) console.warn(`[playground] unknown ?motion=${params.get('motion')}; using "live"`)
 if (qualityParam !== null && qualityParam !== 'auto' && !isTier(qualityParam)) console.warn(`[playground] unknown ?quality=${qualityParam}; using "auto"`)
 
 const renderer = new WebGPURenderer({ antialias: true, forceWebGL })
@@ -40,7 +52,7 @@ camera.position.set(0, 0.55, 7.3)
 camera.lookAt(0, -0.05, 0)
 hostScene.add(createWall(), ...createHostLights())
 
-const orbit = mode !== 'signup'
+const orbit = mode === 'world' || mode === 'both'
 const controls = new OrbitControls(camera, renderer.domElement)
 controls.target.set(0, -0.05, 0)
 controls.enableDamping = true
@@ -56,7 +68,7 @@ const showError = (e: unknown): void => {
 }
 
 // `handle` exists before `start()` runs, since `start()` writes `root` and `surfaces` into it; `ready` joins it after
-const handle: Omit<PlaygroundHandle, 'ready'> = { renderer }
+const handle: Omit<PlaygroundHandle, 'ready'> = { renderer, rectOf }
 const ready = start()
 window.__glassui = Object.assign(handle, { ready })
 ready.catch(showError)
@@ -65,13 +77,19 @@ async function start(): Promise<UIRoot> {
   const root = await createUIRoot({ renderer, scene: hostScene, camera, quality })
   root.on('error', e => console.error('[glassui]', e.surface?.name ?? '(no Surface)', e.error))
   const surfaces: Surface[] = []
-  if (mode !== 'world') {
+  if (mode === 'signup' || mode === 'both') {
     const form = buildSignup(root)
     surfaces.push(form)
     fit(form)
     addEventListener('resize', () => fit(form))
   }
-  if (mode !== 'signup') surfaces.push(buildWorld(root))
+  if (mode === 'world' || mode === 'both') surfaces.push(buildWorld(root))
+  if (mode === 'gallery') {
+    // a full-screen screen Surface (`fill` keeps it the viewport's size) with no slab: the gallery over the wall
+    const page = root.createSurface({ fill: true, width: innerWidth, height: innerHeight, background: 'none' })
+    createGlassApp(Gallery, { root, motion }).mount(page)
+    surfaces.push(page)
+  }
   handle.root = root
   handle.surfaces = surfaces
   guardOrbit(root)
@@ -113,6 +131,31 @@ async function start(): Promise<UIRoot> {
     }
   })
   return root
+}
+
+/** See `PlaygroundHandle.rectOf`: the node's Surface-pt rect, its four corners projected (`absoluteRect`, `screenFromPoint`). */
+function rectOf(id: string): Rect | null {
+  const root = handle.root
+  if (!root) return null
+  const find = (n: Node): Node | null => {
+    if (n.id === id) return n
+    for (const c of n.children) { const hit = find(c); if (hit) return hit }
+    return null
+  }
+  for (const s of root.surfaces) {
+    const node = find(s.root)
+    if (!node) continue
+    const r = absoluteRect(node)
+    const xs: number[] = [], ys: number[] = []
+    for (const [x, y] of [[r.x, r.y], [r.x + r.width, r.y], [r.x, r.y + r.height], [r.x + r.width, r.y + r.height]] as const) {
+      const p = root.screenFromPoint(s, x, y)
+      if (!p) return null
+      xs.push(p.x); ys.push(p.y)
+    }
+    const left = Math.min(...xs), top = Math.min(...ys)
+    return { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top }
+  }
+  return null
 }
 
 /**

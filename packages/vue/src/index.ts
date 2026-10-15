@@ -7,3 +7,8 @@ export { defineGlassComponent, glassComponents, type GlassComponent, type GlassC
 export { useRoot, useSurface, useMotion, useCanvasFactory, useScheme } from './inject'
 export { GlassTransition } from './transition'
 export type { TransitionPreset } from './motion'
+export { Box } from './components/Box'
+export { Text, type TextFragment } from './components/Text'
+export { Icon } from './components/Icon'
+export { Stack } from './components/Stack'
+export { ICON_NAMES, iconCanvas, knobCanvas, type IconName } from './icons'
