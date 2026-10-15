@@ -94,7 +94,7 @@ export interface GlassRendererOptions {
  * A Vue renderer over core `Node`s (spec §8.1). `querySelector` (Teleport's `to`) looks through the containers its
  * apps are mounted in and every Surface of `root`: `#id` finds a node by id, a bare name a `portal` with that `name`;
  * a miss is reported as a `GlassUIError` through `opts.onError` (Vue itself only warns and drops the children) and
- * yields null. An error while mounting goes to `app.config.errorHandler` when one is set (Vue rethrows it from `mount`
+ * yields a detached placeholder. An error while mounting goes to `app.config.errorHandler` when one is set (Vue rethrows it from `mount`
  * otherwise), after the nodes the failed mount inserted into the container are taken out again.
  */
 export function createGlassRenderer(opts: GlassRendererOptions): { render: RootRenderFunction<Node>; createApp: CreateAppFunction<Node> } {
@@ -110,9 +110,11 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
   }
   /**
    * Teleport's `to`: `#id` or a portal's name. A miss is reported (with the portal names there are as the allowed
-   * values), never thrown: a throw from a deferred Teleport's lookup would escape Vue's scheduler and stall it.
+   * values), never thrown: a throw from a deferred Teleport's lookup would escape Vue's scheduler and stall it. It
+   * yields a detached placeholder, not null: Vue mounts the children into it unseen (with null they stay unmounted and
+   * every later patch of them throws), and a later change of `to` moves them to the new target.
    */
-  const teleportTarget = (sel: string): Node | null => {
+  const teleportTarget = (sel: string): Node => {
     const byId = sel.startsWith('#')
     const hit = byId ? find(n => n.id === sel.slice(1)) : find(n => n.type === 'portal' && n.props.name === sel)
     if (hit) return hit
@@ -120,7 +122,7 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
     if (!byId) for (const r of searched()) r.walk(n => { if (n.type === 'portal' && typeof n.props.name === 'string') names.add(n.props.name) })
     const err = new GlassUIError('Teleport', `找不到目标 "${sel}"（to 可以是 Node、"#id" 或 portal 的 name，目标须在 Teleport 挂载前已在树中；与 Teleport 同一次渲染出来的 portal 要写成 <Teleport defer to="${sel}">）`, { allowed: [...names], got: sel })
     try { report(err) } catch (e) { console.error('[glassui] the error reporter threw:', e, 'reporting:', err) }   // never out of a lookup
-    return null
+    return markRaw(new Node('box'))
   }
   const ops: RendererOptions<Node, Node> = {
     createElement(tag, _ns, _is, props) {

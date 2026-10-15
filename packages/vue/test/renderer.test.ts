@@ -175,23 +175,25 @@ describe('nodeOps', () => {
     expect(err).toHaveBeenCalledWith('[glassui]', expect.objectContaining({ message: expect.stringMatching(/\[Teleport\] 找不到目标 "nope"/) }))
     err.mockRestore(); warn.mockRestore()
   })
-  it('a deferred Teleport whose target appears missing on an update is reported; the tree and the scheduler keep working', async () => {
+  it('a deferred Teleport whose target is missing on an update is reported once; later siblings keep updating; a new `to` moves the children', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const show = ref(false), n = ref(0)
+    const show = ref(false), n = ref(0), to = ref<string | Node>('nope'), target = new Node('box', 'target')
     const { container, errors } = mount(() => h('box', { id: 'outer' }, [
       h('text', { id: 'count' }, String(n.value)),
-      show.value ? h(Teleport, { to: 'nope', defer: true }, [h('box', { id: 'lost' })]) : null,
-      h('box', { id: 'after' }),
+      show.value ? h(Teleport, { to: to.value, defer: true }, [h('text', { id: 'lost' }, 'l' + n.value)]) : null,
+      h('text', { id: 'after' }, 'a' + n.value),
     ]))
-    show.value = true; await nextTick()
-    expect(errors.map(String)).toEqual([expect.stringMatching(/\[Teleport\] 找不到目标 "nope".*<Teleport defer to="nope">/)])
+    const value = (id: string) => container.children[0]!.children.find(c => c.id === id)?.props.value
     const ids = () => tree(container).children![0]!.children!.map(c => c.id)
-    expect(ids()).toEqual(['count', 'after'])
-    n.value = 1; await nextTick()                         // later updates still render
-    expect(container.children[0]!.children.find(c => c.id === 'count')!.props.value).toBe('1')
-    show.value = false; await nextTick()                  // and the Teleport that never found its target unmounts
-    n.value = 2; await nextTick()
-    expect(ids()).toEqual(['count', 'after']); expect(container.children[0]!.children.find(c => c.id === 'count')!.props.value).toBe('2')
+    show.value = true; await nextTick()
+    for (const i of [1, 2, 3]) { n.value = i; await nextTick() }   // re-renders patch the Teleport's (unmounted) children
+    expect(ids()).toEqual(['count', 'after']); expect([value('count'), value('after')]).toEqual(['3', 'a3'])
+    expect(errors.map(String)).toEqual([expect.stringMatching(/\[Teleport\] 找不到目标 "nope".*<Teleport defer to="nope">/)])   // once; no TypeError
+    to.value = target; await nextTick()                   // a target that exists: the children move there
+    expect(tree(target).children!.map(c => [c.id, c.value])).toEqual([['lost', 'l3']])
+    show.value = false; await nextTick(); n.value = 4; await nextTick()
+    expect(ids()).toEqual(['count', 'after']); expect(value('after')).toBe('a4'); expect(tree(target).children).toBeUndefined()
+    expect(errors).toHaveLength(1)
     expect(postFlushRuns()).toBe(true)
     const err = vi.spyOn(console, 'error').mockImplementation(() => {})   // a reporter that throws is logged, not rethrown
     const boom = createGlassRenderer({ root: createFakeRoot(), onError: () => { throw new Error('reporter') } })
