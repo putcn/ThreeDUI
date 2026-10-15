@@ -16,9 +16,15 @@ const vec3 = (x: number, y: number, z: number): FakeVec3 => {
   return v
 }
 
+/** A Surface event, as a render `Surface` (an Object3D) dispatches it. */
+export type FakeSurfaceEvent = { type: 'error'; error: Error } | { type: 'dispose' }
+type FakeListener = (e: FakeSurfaceEvent) => void
+
 /** The parts of a render `Surface` the Vue layer touches, over real core pieces (no three). */
 export interface FakeSurface {
   readonly model: SurfaceModel; readonly root: Node
+  /** The options `createSurface` was called with. */
+  readonly created: CreateSurfaceOptions
   readonly events: EventDispatcher; readonly pointer: PointerTracker; readonly focus: FocusManager
   readonly position: FakeVec3; readonly rotation: FakeVec3; readonly scale: FakeVec3
   billboard: boolean; trapFocus: boolean; interactive: boolean
@@ -27,8 +33,16 @@ export interface FakeSurface {
   readonly disposed: boolean
   /** Set by `markFailed`: the Surface stopped for good (the root's `tick` skips it), as a render Surface's. */
   readonly error: Error | null
-  /** As `Surface.markFailed`: sets `error` and forgets the tree's animation state (its `whenSettled` promises resolve); the first failure stands. */
+  /**
+   * As `Surface.markFailed`: sets `error`, forgets the tree's animation state (its `whenSettled` promises resolve) and
+   * dispatches `{ type: 'error', error }`; the first failure stands, a disposed Surface ignores it.
+   */
   markFailed(e: unknown): void
+  /** Object3D's event API, for `'error'` and `'dispose'` (dispatched once, at the end of `dispose`). */
+  addEventListener(type: FakeSurfaceEvent['type'], fn: FakeListener): void
+  removeEventListener(type: FakeSurfaceEvent['type'], fn: FakeListener): void
+  /** How many listeners of `type` are attached now. */
+  listenerCount(type: FakeSurfaceEvent['type']): number
 }
 
 export interface FakeRoot extends GlassRoot {
@@ -60,10 +74,11 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
   const make = (o: CreateSurfaceOptions): FakeSurface => {
     const { layer = 'screen', fill: _fill, center: _center, left: _left, top: _top, interactive, castToWorld: _cast, contentScale: _scale, billboard, ...rest } = o
     const model = createModel(layer === 'screen' ? { ...rest, ptPerUnit: 1, placement: 'screen' } : { ...rest, placement: 'world' })
-    const events = new EventDispatcher()
+    const events = new EventDispatcher(), listeners = new Map<string, Set<FakeListener>>()
+    const dispatch = (e: FakeSurfaceEvent): void => { for (const fn of [...listeners.get(e.type) ?? []]) fn(e) }
     let disposed = false, error: Error | null = null
     const s: FakeSurface = {
-      model, root: model.root, events, pointer: new PointerTracker(model.root, events, theme), focus: new FocusManager(model.root, events),
+      model, root: model.root, created: { ...o }, events, pointer: new PointerTracker(model.root, events, theme), focus: new FocusManager(model.root, events),
       position: vec3(0, 0, 0), rotation: vec3(0, 0, 0), scale: vec3(1, 1, 1),
       billboard: billboard ?? false, trapFocus: false, interactive: interactive ?? true,
       setSize(w, h) { if (disposed) return; model.width = w; model.height = h; model.root.setStyle({ width: w, height: h }) },
@@ -72,6 +87,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
         disposed = true
         anim.forget(model.root); layout.dispose(model.root)
         const i = surfaces.indexOf(s); if (i >= 0) surfaces.splice(i, 1)
+        dispatch({ type: 'dispose' })
       },
       get disposed() { return disposed },
       get error() { return error },
@@ -79,7 +95,11 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
         if (error || disposed) return
         error = e instanceof Error ? e : new Error(String(e))
         anim.forget(model.root)
+        dispatch({ type: 'error', error })
       },
+      addEventListener(type, fn) { let set = listeners.get(type); if (!set) listeners.set(type, set = new Set()); set.add(fn) },
+      removeEventListener(type, fn) { listeners.get(type)?.delete(fn) },
+      listenerCount: type => listeners.get(type)?.size ?? 0,
     }
     surfaces.push(s); surfacesMade.push(s)
     return s
