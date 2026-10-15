@@ -58,7 +58,9 @@ const Base = z.object({
   gap: Pt.optional(), rowGap: Pt.optional(), columnGap: Pt.optional(),
   top: Length.optional(), right: Length.optional(), bottom: Length.optional(), left: Length.optional(), inset: Length.optional(),
   overflow: z.enum(['visible', 'hidden', 'scroll']).optional(),
-  pointerEvents: z.enum(['auto', 'none']).optional(),
+  // Inherited, as in CSS (`hitTest`): 'none' makes the node and its descendants transparent to the pointer until one sets
+  // 'auto'; 'box-none' (React Native's) makes only the node itself transparent, its children inheriting what is above it
+  pointerEvents: z.enum(['auto', 'none', 'box-none']).optional(),
   bg: z.union([Token, z.literal('glass'), z.literal('glass-clear'), z.literal('none')]).optional(),
   radius: z.union([Pt, z.literal('capsule'), z.literal('concentric'), Token]).optional(),
   border: Border.optional(),

@@ -83,11 +83,13 @@ const POINTER_HANDLERS: readonly UIEventType[] = ['pointerdown', 'pointerup', 'p
 /**
  * Whether `n` paints (glass, text, an image, a background other than `'none'`, a border) or is interactive (a `scroll`
  * node, whose gaps still catch the wheel and drags; a finite `tabIndex`, read as the focus manager reads it; or an
- * element handler for a pointer type).
+ * element handler for a pointer type). Never a `pointerEvents: 'box-none'` node: it is not a pointer target itself, so
+ * neither its paint nor its scrolling claims the pointer (its children still can).
  */
 function paintedOrInteractive(n: Node): boolean {
-  if (n.type === 'glass' || n.type === 'text' || n.type === 'image' || n.type === 'scroll') return true
   const s = effectiveStyle(n)
+  if (s.pointerEvents === 'box-none') return false
+  if (n.type === 'glass' || n.type === 'text' || n.type === 'image' || n.type === 'scroll') return true
   if ((s.bg !== undefined && s.bg !== 'none') || s.border !== undefined) return true
   const t = n.props.tabIndex
   if (Number.isFinite(typeof t === 'number' || (typeof t === 'string' && t.trim() !== '') ? Number(t) : NaN)) return true
@@ -507,8 +509,9 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /**
    * Whether a pointer at (x, y) Surface pt belongs to this Surface: always on a glass or coloured background (the
    * panel is UI); on a 'none' one only where some node on the path from the hit node up to the root paints or is
-   * interactive (`paintedOrInteractive`). So a full-screen HUD — bare root, full-size layout wrappers and all — lets
-   * the pointer through its empty areas to what is behind it (other Surfaces, then the host app).
+   * interactive (`paintedOrInteractive`; a `pointerEvents: 'box-none'` node never is). So a full-screen HUD — bare root,
+   * full-size layout wrappers and all — lets the pointer through its empty areas to what is behind it (other Surfaces,
+   * then the host app); so does a full-screen `scroll` set to `'box-none'`, except over painted or interactive content.
    */
   takesPointer(x: number, y: number): boolean {
     if (this.model.background !== 'none') return true

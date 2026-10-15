@@ -667,6 +667,22 @@ describe('Surface', () => {
     const glass = new Surface({ width: 400, height: 300, ptPerUnit: 1, background: 'glass' }, { ...ctx }); glass.tick(0)
     expect(glass.takesPointer(300, 200)).toBe(true)
   })
+  it("takesPointer: a 'box-none' node is not the pointer's — neither its scrolling nor its paint — while its children are", () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 1 }, { ...ctx })
+    // a full-screen page: a scroll root that lets the pointer through its empty area, around unpainted content and a text
+    const page = new Node('scroll', 'page'); page.setStyle({ width: '100%', height: '100%', pointerEvents: 'box-none', bg: '#00000020' })
+    const content = new Node('box', 'content'); content.setStyle({ height: 500, flexShrink: 0 })
+    const label = new Node('text', 'label'); label.setProp('value', 'Hi'); label.setStyle({ position: 'absolute', left: 20, top: 20, width: 60, height: 20 })
+    content.appendChild(label); page.appendChild(content); s.root.appendChild(page); s.tick(0)
+    expect(s.hitNode(300, 200)).toBe(content)                          // the scroll itself is never hit
+    expect(s.takesPointer(300, 200)).toBe(false)                       // through: it neither scrolls nor paints for the pointer
+    expect(s.takesPointer(30, 25)).toBe(true)                          // its text does
+    content.setHandler('click', () => {})
+    expect(s.takesPointer(300, 200)).toBe(true)                        // and so does an interactive child
+    content.setHandler('click', null)
+    page.setStyle({ pointerEvents: 'auto' }); s.tick(0)
+    expect(s.takesPointer(300, 200)).toBe(true)                        // an ordinary scroll takes its whole area
+  })
   it('repeated identical rebuilds keep exactly one live set of glass draws and never free the shared capture', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, { ...ctx })
     const orders: number[] = [SURFACE_ORDER.slab, SURFACE_ORDER.glassBack, SURFACE_ORDER.glassFront]

@@ -6,6 +6,7 @@ import { createYogaLayout, type LayoutEngine } from '../src/layout/yoga'
 import { absoluteRect, hitTest } from '../src/events/hit'
 import { EventDispatcher, PointerTracker } from '../src/events/dispatch'
 import { createSurface } from '../src/surface'
+import { validateStyle } from '../src/style/schema'
 
 let engine: LayoutEngine
 beforeAll(async () => { engine = await createYogaLayout() })
@@ -54,6 +55,39 @@ describe('hitTest edge cases', () => {
     engine.compute(root, 100, 100)
     expect(hitTest(root, 10, 10)?.id).toBe('root')
     expect(hitTest(root, 70, 70)?.id).toBe('hotspot')
+  })
+  it("pointerEvents 'box-none': the node itself is never hit, its children are", () => {
+    const root = box({ width: 100, height: 100 }, 'root')
+    const layer = box({ position: 'absolute', inset: 0, pointerEvents: 'box-none', bg: 'fill' }, 'layer')
+    const badge = box({ position: 'absolute', left: 10, top: 10, width: 20, height: 20 }, 'badge')
+    const inner = box({ width: 10, height: 10 }, 'inner')
+    root.appendChild(layer); layer.appendChild(badge); badge.appendChild(inner)
+    engine.compute(root, 100, 100)
+    expect(hitTest(root, 60, 60)?.id).toBe('root')     // the layer's own area: through to what is below it
+    expect(hitTest(root, 25, 25)?.id).toBe('badge')    // a child: hit
+    expect(hitTest(root, 12, 12)?.id).toBe('inner')    // and a grandchild
+    expect(hitTest(layer, 60, 60)).toBeNull()          // as the test's root too
+    layer.setStyle({ pointerEvents: undefined, hover: { pointerEvents: 'box-none' } })
+    expect(hitTest(root, 60, 60)?.id).toBe('layer')
+    layer.setState({ hover: true })                    // read from the effective style, like 'none'
+    expect(hitTest(root, 60, 60)?.id).toBe('root')
+  })
+  it("pointerEvents 'box-none' passes on what it inherits: inside a 'none' ancestor its children stay transparent", () => {
+    const root = box({ width: 100, height: 100 }, 'root')
+    const off = box({ position: 'absolute', inset: 0, pointerEvents: 'none' }, 'off')
+    const layer = box({ position: 'absolute', inset: 0, pointerEvents: 'box-none' }, 'layer')
+    const badge = box({ position: 'absolute', left: 10, top: 10, width: 20, height: 20 }, 'badge')
+    const hot = box({ position: 'absolute', left: 60, top: 60, width: 20, height: 20, pointerEvents: 'auto' }, 'hot')
+    root.appendChild(off); off.appendChild(layer); layer.appendChild(badge); layer.appendChild(hot)
+    engine.compute(root, 100, 100)
+    expect(hitTest(root, 15, 15)?.id).toBe('root')     // badge inherits 'none' from above the layer
+    expect(hitTest(root, 65, 65)?.id).toBe('hot')      // an explicit 'auto' below still opts back in
+    off.setStyle({ pointerEvents: 'auto' })
+    expect(hitTest(root, 15, 15)?.id).toBe('badge')
+  })
+  it("validates pointerEvents: 'auto', 'none' and 'box-none'", () => {
+    expect(validateStyle({ pointerEvents: 'box-none' })).toEqual({ pointerEvents: 'box-none' })
+    expect(() => validateStyle({ pointerEvents: 'box-only' })).toThrow(/\[style\.pointerEvents\].*box-none/)
   })
   it('skips display none subtrees and clips to a rounded overflow-hidden parent', () => {
     const root = box({ width: 100, height: 100 }, 'root')

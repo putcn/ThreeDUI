@@ -104,6 +104,9 @@ interface Style {
   width?, height?, minWidth?, maxWidth?, minHeight?, maxHeight?, aspectRatio?
   padding?, paddingX?, paddingY?, paddingTop?... ; margin 同理 ; gap?, rowGap?, columnGap?
   top?, right?, bottom?, left?, inset?, overflow?: 'visible' | 'hidden' | 'scroll'
+  // 指针（像 CSS 一样继承）：'none' 让节点及其后代不接收指针，直到某个后代设回 'auto'；
+  // 'box-none' 只让节点自身不接收指针，子节点继承它上方的值（铺满的图层：子项可点，空白处穿透）
+  pointerEvents?: 'auto' | 'none' | 'box-none'
   // 外观
   bg?: ColorToken | 'glass' | 'glass-clear' | 'none'
   radius?: number | 'capsule' | 'concentric' | RadiusToken    // Apple 三类形状
@@ -266,7 +269,7 @@ interface TextEngine {
 
 ### 7.1 指针
 
-`@pmndrs/pointer-events` 对 Surface quad 做射线命中（屏幕层与世界层统一），命中点换算为 Surface pt 坐标后，由 `core` 做节点级命中测试（考虑圆角、裁剪、`pointerEvents: 'none'`、elevation 偏移），派发冒泡事件：`pointerdown/up/move/enter/leave/cancel`、`click`、`dblclick`、`wheel`、`contextmenu`。事件对象带 `localX/localY`（节点内 pt）、`surfacePoint`、`worldPoint`、`pointerType`。
+`@pmndrs/pointer-events` 对 Surface quad 做射线命中（屏幕层与世界层统一），命中点换算为 Surface pt 坐标后，由 `core` 做节点级命中测试（考虑圆角、裁剪、`pointerEvents: 'none' | 'box-none'`、elevation 偏移），派发冒泡事件：`pointerdown/up/move/enter/leave/cancel`、`click`、`dblclick`、`wheel`、`contextmenu`。事件对象带 `localX/localY`（节点内 pt）、`surfacePoint`、`worldPoint`、`pointerType`。
 
 ### 7.2 焦点与键盘
 

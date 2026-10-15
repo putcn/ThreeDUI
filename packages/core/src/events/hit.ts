@@ -52,7 +52,9 @@ function inverseOrNull(m: Mat2D): Mat2D | null {
  * Later siblings are above earlier ones and children above their parent. `display: 'none'` hides a whole subtree;
  * `overflow: hidden|scroll` and `scroll` nodes clip their descendants to their own rounded shape.
  * `pointerEvents` inherits as in CSS: `'none'` makes a node and its descendants transparent to the pointer,
- * and a descendant that sets `'auto'` becomes hittable again. Radius tokens resolve against `theme`, and an
+ * and a descendant that sets `'auto'` becomes hittable again; `'box-none'` makes the node itself transparent while its
+ * children inherit what is above it, as if it set nothing (a full-size layer whose children take the pointer but whose
+ * empty area lets it through, still transparent inside a `'none'` subtree). Radius tokens resolve against `theme`, and an
  * unknown token throws a GlassUIError like every theme lookup. Each node's effective style is read (its active state
  * branches applied, e.g. `hover: { display: 'none' }`), and `root`'s own ancestors are not consulted.
  * Geometry mirrors `buildRenderList`: a node's `visual` values replace its layout rect and radius; `concentric` resolves
@@ -77,13 +79,14 @@ export function hitTest(root: Node, x: number, y: number, theme: Theme = default
     const radius = Math.max(0, Math.min(resolved, r.width / 2, r.height / 2))
     const inside = insideRounded(r, radius, lx, ly)
     if (clips(n, s) && !inside) return null
-    const pointerEvents = s.pointerEvents ?? parent.pointerEvents
+    // what the children inherit: 'box-none' passes on the parent's value, as if the node set none
+    const own = s.pointerEvents, pointerEvents = own === undefined || own === 'box-none' ? parent.pointerEvents : own
     const o = scrollOffset(n)
     for (let i = n.children.length - 1; i >= 0; i--) {
       const hit = visit(n.children[i]!, r.x - o.x, r.y - o.y, { transform, radius, w: r.width, h: r.height, pointerEvents })
       if (hit) return hit
     }
-    return inside && pointerEvents !== 'none' ? n : null
+    return inside && own !== 'box-none' && pointerEvents !== 'none' ? n : null
   }
   const r = absoluteRect(root)
   return visit(root, r.x - root.layout.x, r.y - root.layout.y, { transform: IDENTITY, radius: 0, w: root.layout.width, h: root.layout.height, pointerEvents: 'auto' })

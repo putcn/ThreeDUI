@@ -1,4 +1,4 @@
-import { cloneVNode, Comment, createTextVNode, Fragment, h, isVNode, normalizeClass, type VNode } from '@vue/runtime-core'
+import { Comment, createTextVNode, Fragment, h, isVNode, normalizeClass, type VNode } from '@vue/runtime-core'
 import { z } from 'zod'
 import { GlassUIError, parseTw, type Style, type Theme } from '@glassui/core'
 import { defineGlassComponent } from '../define'
@@ -25,17 +25,6 @@ function layers(children: readonly unknown[] | undefined, path = '', out: { vnod
     }
   })
   return out
-}
-
-/**
- * A layer's content with `pointerEvents: 'auto'` under its own style: the layer box itself is `pointerEvents: 'none'`
- * (it fills the whole Stack, and would otherwise catch the pointer for every layer below it). Elements and components
- * (through their fallthrough) take it; text has no style.
- */
-function receivesPointer(c: VNode): VNode {
-  if (!(typeof c.type === 'string' || typeof c.type === 'function' || (typeof c.type === 'object' && c.type !== null && !('__isTeleport' in c.type)))) return c
-  const own: unknown = c.props?.style
-  return cloneVNode(c, { style: { pointerEvents: 'auto', ...(own && typeof own === 'object' && !Array.isArray(own) ? own : {}) } })
 }
 
 /** Style keys Stack's own props set: a `tw` / `class` setting one would lose to them (the style layer wins), so it is an error. */
@@ -94,9 +83,10 @@ export const Stack = defineGlassComponent({
     const v = p.value
     const place: Style = { ...(v.align ? { alignItems: ALIGN[v.align] } : {}), ...(v.justify ? { justifyContent: JUSTIFY[v.justify] } : {}) }
     if (v.direction === 'z') {
-      // each layer in a box filling the Stack, transparent to the pointer; keyed by its path and its child's key, so a
-      // keyed reorder moves the layers
-      return h('box', layers(slots.default?.()).map(({ vnode, key }) => h('box', { key, style: { position: 'absolute', inset: 0, pointerEvents: 'none', ...place } }, [receivesPointer(vnode)])))
+      // each layer in a box filling the Stack; `'box-none'`: the box itself lets the pointer through to the layers below
+      // (it fills the whole Stack), its child inherits what is above the Stack. Keyed by its path and its child's key,
+      // so a keyed reorder moves the layers
+      return h('box', layers(slots.default?.()).map(({ vnode, key }) => h('box', { key, style: { position: 'absolute', inset: 0, pointerEvents: 'box-none', ...place } }, [vnode])))
     }
     checkClasses(attrs, root.theme)
     return h('box', { style: { flexDirection: v.direction === 'horizontal' ? 'row' : 'column', gap: v.gap, ...place, ...(v.wrap ? { flexWrap: 'wrap' } : {}) } }, slots.default?.())

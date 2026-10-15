@@ -179,6 +179,21 @@ it('Stack z: the pointer passes through a layer\'s empty area to the layer below
   expect(hitTest(s.root, 80, 80)!.id).toBe('base')     // outside the badge: through the top layer's empty area
   expect(hitTest(s.root, 10, 10)!.id).toBe('badge')
 })
+it('Stack z: inside a pointerEvents \'none\' Box no layer is hit; the layer boxes are \'box-none\' and the children keep their own style', () => {
+  const root = createFakeRoot(), s = root.createSurface({ width: 200, height: 200 })
+  const app = createGlassApp({ render: () => h(Box, { id: 'off', style: { pointerEvents: 'none' } }, () => [
+    h(Stack, { direction: 'z', style: { width: 100, height: 100 } }, () => [
+      h(Box, { id: 'base', tw: 'w-full h-full' }),
+      h(Box, { id: 'badge', style: { width: 20, height: 20 } }),
+    ]),
+  ]) }, { root, createCanvas: napiCanvas })
+  app.mount(s as never); root.tick()
+  expect(hitTest(s.root, 80, 80)!.id).toBe(s.root.id)  // the base layer inherits 'none' from the Box above the Stack
+  expect(hitTest(s.root, 10, 10)!.id).toBe(s.root.id)  // the badge too
+  const z = first(s.root, 'box').children[0]!
+  expect(z.children.map(w => w.style.pointerEvents)).toEqual(['box-none', 'box-none'])
+  expect(z.children.map(w => w.children[0]!.style)).toEqual([{ width: '100%', height: '100%' }, { width: 20, height: 20 }])   // nothing injected
+})
 it('Text: a slot\'s edge whitespace is trimmed (template condensing); value and a slot together are an error (C4)', () => {
   expect(first(mountGlass(() => h(Text, null, () => ['\n  很长的说明文字', ' 第二行  \n'])).c, 'text').props.value).toBe('很长的说明文字 第二行')
   expect(mountGlass(() => h(Text, { value: 'a' }, () => 'b')).errors[0]).toMatch(/\[Text\] value 和默认插槽不能同时给出：二选一/)
