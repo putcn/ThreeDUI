@@ -58,14 +58,26 @@ describe('nodeOps', () => {
     const { container } = mount(defineComponent(() => () => h('box', { id: 'b', ref: el })))
     expect(el.value).toBe(container.children.find(n => n.id === 'b'))
   })
-  it('style, tw and class merge (style wins); an equal style patch leaves the node clean', async () => {
-    const pad = ref(8)
-    const { container } = mount(() => h('box', { id: 'b', tw: 'flex-row p-2', class: 'items-center', style: { padding: pad.value, bg: 'fill' } }))
+  it('style, tw and class merge (style wins); an equal re-render leaves the node clean (Review Focus 1)', async () => {
+    const pad = ref(8), bump = ref(0)
+    let renders = 0
+    const { container } = mount(() => {
+      void bump.value; renders++
+      // every render: fresh objects with the same content (style with nested glass and a state branch, a rebuilt tw
+      // string, an inline handler)
+      return h('glass', {
+        id: 'b', tw: ['flex-row', 'p-2'].join(' '), class: 'items-center', onClick: () => {},
+        style: { padding: pad.value, bg: 'fill', glass: { thickness: 4, glow: { color: 'accent', strength: 1 } }, hover: { scale: 1.02, glass: { lift: 0.3 } } },
+      })
+    })
     const b = container.children.find(n => n.id === 'b')!
-    expect(b.style).toMatchObject({ flexDirection: 'row', alignItems: 'center', padding: 8, bg: 'fill' })
-    b.dirty = { layout: false, paint: false, text: false, tree: false }
-    pad.value = 8; await nextTick()                       // re-render, same style
-    expect(b.dirty.paint).toBe(false)
+    expect(b.style).toMatchObject({ flexDirection: 'row', alignItems: 'center', padding: 8, bg: 'fill', hover: { scale: 1.02, glass: { lift: 0.3 } } })
+    const clean = { layout: false, paint: false, text: false, tree: false }
+    b.dirty = { ...clean }
+    const before = renders
+    bump.value++; await nextTick()                        // re-render, same content
+    expect(renders).toBe(before + 1)
+    expect(b.dirty).toEqual(clean)
     pad.value = 12; await nextTick()
     expect(b.style.padding).toBe(12); expect(b.dirty.layout).toBe(true)
   })
@@ -142,16 +154,35 @@ describe('nodeOps', () => {
     app.mount(new Node('box'))
     expect(dest.children.map(n => n.id)).toContain('moved')
   })
+  it('a Teleport target that is not there is an error: the defer hint, and a suggestion among the portals', () => {
+    const missing = mount(() => h('box', [h('portal', { name: 'overlay' }), h(Teleport, { to: 'overlay' }, [h('box')])]))   // same pass, no defer
+    expect(String(missing.errors[0])).toMatch(/\[Teleport\] 找不到目标 "overlay".*<Teleport defer to="overlay">/)
+    const root = createFakeRoot(), s = root.createSurface({ width: 100, height: 100 })
+    const portal = new Node('portal'); portal.setProp('name', 'overlay'); s.root.appendChild(portal)
+    const app = createGlassRenderer({ root }).createApp(() => h(Teleport, { to: 'overlya' }, [h('box')]))
+    const errors: unknown[] = []; app.config.errorHandler = e => { errors.push(e) }
+    app.mount(new Node('box'))
+    expect(String(errors[0])).toMatch(/\[Teleport\] 找不到目标 "overlya".*允许值：overlay。你可能想要：overlay/)
+    expect(String(mount(() => h(Teleport, { to: '#nope' }, [h('box')])).errors[0])).toMatch(/\[Teleport\] 找不到目标 "#nope"/)
+  })
   it('removing a focused, pressed node reconciles focus and releases the press (Review Focus 2)', async () => {
-    const show = ref(true)
-    const { root, container } = mount(() => h('box', show.value ? [h('glass', { id: 'g', tabIndex: 0 })] : []))
+    const show = ref(true), clicks: string[] = []
+    const { root, container } = mount(() => h('box', show.value ? [h('glass', { id: 'g', tabIndex: 0, style: { width: 40, height: 40 }, onClick: () => clicks.push('g') })] : []))
     const s = root.createSurface({ width: 100, height: 100 })
     s.root.appendChild(container)                         // the app's tree inside a Surface
-    const g = container.children[0]!.children[0]!
-    s.focus.focus(g); g.setState({ pressed: true })
+    root.tick()                                           // laid out: g at 0,0 40×40
+    const g = container.children[0]!.children.find(n => n.id === 'g')!
+    s.pointer.down(10, 10); s.focus.focusFromPointer(s.pointer.pressed)   // a real press, as the pointer bridge does it
+    expect(s.pointer.pressed).toBe(g); expect(g.state.pressed).toBe(true); expect(s.focus.current).toBe(g)
     show.value = false; await nextTick()
+    expect(g.parent).toBeNull()
     s.focus.reconcile()
-    expect(s.focus.current).toBeNull()
+    expect(s.focus.current).toBeNull(); expect(g.state.focused).toBe(false)
+    expect(() => root.tick()).not.toThrow()
+    s.pointer.up(10, 10)                                  // the press ends on what is under the pointer now
+    expect(s.pointer.pressed).toBeNull(); expect(g.state.pressed).toBe(false)
+    const stuck: string[] = []; s.root.walk(n => { if (n.state.pressed) stuck.push(n.id) })
+    expect(stuck).toEqual([]); expect(clicks).toEqual([])   // no click on a node that left the tree
     expect(() => root.tick()).not.toThrow()
   })
 })

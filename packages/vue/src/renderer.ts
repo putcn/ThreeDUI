@@ -82,17 +82,29 @@ const EVENT_PROPS = UI_EVENT_TYPES.map(t => `on${t[0]!.toUpperCase()}${t.slice(1
 
 /**
  * A Vue renderer over core `Node`s (spec §8.1). `querySelector` (Teleport's `to`) looks through the containers its
- * apps are mounted in and every Surface of `root`: `#id` finds a node by id, a bare name a `portal` with that `name`.
- * An error while mounting goes to `app.config.errorHandler` when one is set (Vue rethrows it from `mount` otherwise).
+ * apps are mounted in and every Surface of `root`: `#id` finds a node by id, a bare name a `portal` with that `name`;
+ * a miss throws a `GlassUIError` (Vue would only warn and drop the children). An error while mounting goes to
+ * `app.config.errorHandler` when one is set (Vue rethrows it from `mount` otherwise), after the nodes the failed mount
+ * inserted into the container are taken out again.
  */
 export function createGlassRenderer(opts: { root: GlassRoot }): { render: RootRenderFunction<Node>; createApp: CreateAppFunction<Node> } {
   const { root } = opts
   const containers = new Set<Node>()
   const textNode = (t: string): Node => { const n = markRaw(new Node('text')); n.setProp('value', t); if (t === '') n.replaceStyle(EMPTY); return n }
+  const searched = (): Node[] => [...containers, ...root.surfaces.map(s => s.root)]
   const find = (pred: (n: Node) => boolean): Node | null => {
     let hit: Node | null = null
-    for (const r of [...containers, ...root.surfaces.map(s => s.root)]) { r.walk(n => { if (!hit && pred(n)) hit = n }); if (hit) break }
+    for (const r of searched()) { r.walk(n => { if (!hit && pred(n)) hit = n }); if (hit) break }
     return hit
+  }
+  /** Teleport's `to`: `#id` or a portal's name; a miss is an error, with the portal names there are as the allowed values. */
+  const teleportTarget = (sel: string): Node => {
+    const byId = sel.startsWith('#')
+    const hit = byId ? find(n => n.id === sel.slice(1)) : find(n => n.type === 'portal' && n.props.name === sel)
+    if (hit) return hit
+    const names = new Set<string>()
+    if (!byId) for (const r of searched()) r.walk(n => { if (n.type === 'portal' && typeof n.props.name === 'string') names.add(n.props.name) })
+    throw new GlassUIError('Teleport', `找不到目标 "${sel}"（to 可以是 Node、"#id" 或 portal 的 name，目标须在 Teleport 挂载前已在树中；与 Teleport 同一次渲染出来的 portal 要写成 <Teleport defer to="${sel}">）`, { allowed: [...names], got: sel })
   }
   const ops: RendererOptions<Node, Node> = {
     createElement(tag, _ns, _is, props) {
@@ -111,7 +123,7 @@ export function createGlassRenderer(opts: { root: GlassRoot }): { render: RootRe
     remove(c) { c.remove() },
     parentNode: n => n.parent,
     nextSibling(n) { const p = n.parent; return p ? p.children[p.children.indexOf(n) + 1] ?? null : null },
-    querySelector: sel => sel.startsWith('#') ? find(n => n.id === sel.slice(1)) : find(n => n.type === 'portal' && n.props.name === sel),
+    querySelector: teleportTarget,
     patchProp(el, key, _prev, next, _ns, instance) {
       if (/^on[A-Z]/.test(key)) {
         const type = key.slice(2).toLowerCase()
@@ -149,7 +161,10 @@ export function createGlassRenderer(opts: { root: GlassRoot }): { render: RootRe
     app.mount = (target, ...rest) => {
       if (!(target instanceof Node)) throw new GlassUIError('app.mount', '挂载目标必须是 Node（createGlassApp 的 mount 还接受 Surface）')
       containers.add(container = target)
+      const before = new Set(target.children)
       try { return mount(target, ...rest) } catch (e) {
+        // what a mount that failed half-way inserted (a fragment's first children); the instance mounts afresh on its next update
+        for (const c of [...target.children]) if (!before.has(c)) c.remove()
         const handler = app.config.errorHandler
         if (!handler) throw e
         handler(e, null, 'mount')

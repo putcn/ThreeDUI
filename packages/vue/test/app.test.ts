@@ -5,6 +5,7 @@ import { createGlassApp } from '../src/app'
 import { createGlassRenderer } from '../src/renderer'
 import { GLASS_OPTIONS, GLASS_ROOT, GLASS_SURFACE } from '../src/keys'
 import { createFakeRoot } from './fixtures/fake-root'
+import { tree } from './fixtures/tree'
 
 it('mount(surface) mounts into its root and provides it; mount() uses a detached container', async () => {
   const root = createFakeRoot(), s = root.createSurface({ width: 200, height: 100 })
@@ -14,6 +15,18 @@ it('mount(surface) mounts into its root and provides it; mount() uses a detached
   expect(seen).toBe(s); expect(s.root.children.map(n => n.id)).toEqual(['x'])
   const a2 = createGlassApp(defineComponent(() => () => h('box', { id: 'y' })), { root })
   expect(() => a2.mount()).not.toThrow()
+})
+it('mount() rejects any other target instead of falling back to a detached container', () => {
+  const app = createGlassApp(defineComponent(() => () => null), { root: createFakeRoot() })
+  expect(() => app.mount('#app')).toThrow(/\[createGlassApp\.mount\] 挂载目标必须是 Surface、Node 或省略.*"#app".*允许值：Surface, Node, undefined/)
+  expect(() => app.mount({} as never)).toThrow(/\[createGlassApp\.mount\].*"\[object Object\]"/)
+})
+it('chainable App methods keep the GlassApp type (mount(surface) after use/provide compiles)', () => {
+  const root = createFakeRoot(), s = root.createSurface({ width: 10, height: 10 })
+  let seen: unknown
+  const App = defineComponent(() => { seen = inject('k'); return () => h('box', { id: 'z' }) })
+  createGlassApp(App, { root }).use({ install() {} }).provide('k', 1).mount(s)
+  expect(seen).toBe(1); expect(s.root.children.map(n => n.id)).toEqual(['z'])
 })
 it('provides the root and the options (motion live, a canvas factory) by default', () => {
   const root = createFakeRoot(), canvas = vi.fn()
@@ -33,6 +46,18 @@ it('parent sharing copies provides, components and global properties', () => {
   app.mount()
   expect(got).toBe(42); expect(app.component('Hello')).toBeDefined(); expect(app.config.globalProperties.$t).toBeDefined()
 })
+it('a glass app as the parent: no Vue warning, the child sees its own Surface and the parent\'s provides', () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const root = createFakeRoot(), s1 = root.createSurface({ width: 10, height: 10 }), s2 = root.createSurface({ width: 10, height: 10 })
+  const parent = createGlassApp(defineComponent(() => () => null), { root }).provide('store', 7)
+  parent.mount(s1)
+  let seen: unknown[] = []
+  const Child = defineComponent(() => { seen = [inject(GLASS_SURFACE), inject('store')]; return () => null })
+  createGlassApp(Child, { root, parent }).mount(s2)
+  expect(warn).not.toHaveBeenCalled()
+  expect(seen).toEqual([s2, 7])
+  warn.mockRestore()
+})
 it('a render error reaches the console and leaves a marker in the container', () => {
   const err = vi.spyOn(console, 'error').mockImplementation(() => {})
   const app = createGlassApp(defineComponent(() => () => h('nope')), { root: createFakeRoot() })
@@ -50,6 +75,16 @@ it('an error in a later render also reaches the console and the marker', async (
   tag.value = 'div'; await nextTick()
   expect(err).toHaveBeenCalled()
   expect(container.children.find(n => n.id === 'glassui-error')?.props.value).toMatch(/未知元素 <div>/)
+  err.mockRestore()
+})
+it('a first mount that fails half-way leaves only the marker; fixing the cause mounts one clean tree', async () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+  const bad = ref(true), container = new Node('box')
+  const app = createGlassApp(defineComponent(() => () => [h('box', { id: 'first' }), bad.value ? h('nope') : h('box', { id: 'second' })]), { root: createFakeRoot() })
+  expect(app.mount(container)).toBeUndefined()
+  expect(container.children.map(n => n.id)).toEqual(['glassui-error'])   // the fragment's anchors and 'first' are gone
+  bad.value = false; await nextTick()
+  expect(tree(container).children!.map(c => c.id)).toEqual(['glassui-error', 'first', 'second'])
   err.mockRestore()
 })
 it('errorMarker: false logs without a marker', () => {
