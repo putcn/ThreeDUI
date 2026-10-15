@@ -30,8 +30,12 @@ export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURend
 declare global { interface Window { __glassui?: PlaygroundHandle } }
 
 const SCENES = ['signup', 'world', 'both', 'gallery'] as const
-/** The gallery's column: this share of the viewport width; Gallery.vue's world panel stands in the rest. */
-const GALLERY_COLUMN = 0.68
+/**
+ * The gallery's column width in CSS px: 68 % of the viewport, but on wide viewports no more than half the width plus
+ * 0.3 × the height (where the world panel's left edge lands, which scales with the height); Gallery.vue's world panel
+ * stands in the rest.
+ */
+const galleryColumn = (): number => Math.round(Math.min(innerWidth * 0.68, innerWidth / 2 + innerHeight * 0.30))
 type SceneMode = (typeof SCENES)[number]
 const params = new URLSearchParams(location.search)
 const forceWebGL = params.has('webgl')
@@ -100,7 +104,7 @@ async function start(): Promise<UIRoot> {
     // a screen Surface with no slab, the gallery over the wall: a full-height column on the left, kept at that size on
     // resize. Not the whole viewport: the gallery's world-layer panel (Gallery.vue) stands in the strip to its right,
     // where a full-width page would cover it and, its scroll root taking the pointer everywhere, catch its hover and clicks.
-    const column = (): [number, number] => [Math.round(innerWidth * GALLERY_COLUMN), innerHeight]
+    const column = (): [number, number] => [galleryColumn(), innerHeight]
     const [width, height] = column()
     const page = root.createSurface({ left: 0, top: 0, width, height, background: 'none' })
     createGlassApp(Gallery, { root, motion }).mount(page)

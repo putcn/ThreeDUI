@@ -159,18 +159,19 @@ const tint = (a: number) => ({ width: 36, height: 36, radius: 10, bg: 'accent', 
     </Box>
   </scroll>
 
-  <!-- In the strip right of the column (main.ts: the column is GALLERY_COLUMN of the width; through the playground
-       camera, x = 2.55 keeps the panel in that strip and on screen from 4:3 to 16:9). 340 × 232 pt at 244 pt per unit:
-       1.39 × 0.95 units. Seen from the camera it is already ≈ 0.34 rad off-axis there, so −0.35 turns it to face the
-       viewer: it reads as 3D by its perspective (the near, right edge ≈ 7 % taller), not by a visible slant. -->
-  <Surface :width="340" :height="232" :position="[2.55, 0.9, 0]" :rotation="[0, -0.35, 0]" background="glass" :radius="28">
+  <!-- In the strip right of the column (main.ts: `galleryColumn`): through the playground camera, x = 2.5 keeps the
+       panel in that strip and on screen from 4:3 to ultrawide. 340 × 232 pt at 244 pt per unit: 1.39 × 0.95 units.
+       Seen from the camera it is already ≈ 0.34 rad off-axis there (−0.35 would face the viewer square on), so −0.7
+       turns it ≈ 0.37 rad past that, toward the gallery: a visible slant (its near, right edge ≈ 13 % taller) that
+       keeps the text legible. -->
+  <Surface :width="340" :height="232" :position="[2.5, 0.9, 0]" :rotation="[0, -0.7, 0]" background="glass" :radius="28">
     <Stack id="world-panel" justify="between" :style="{ padding: 24, flexGrow: 1 }">
       <Stack :gap="10">
         <Stack direction="horizontal" :gap="10" align="center">
           <Icon name="star" :size="24" color="accent" />
           <Text value="世界层 World layer" size="lg" :weight="700" />
         </Stack>
-        <Text value="一块世界层 Surface：场景里的玻璃面板，绕 Y 轴转了 −0.35 rad，有自己的悬停与点击。" size="sm" color="secondaryLabel" />
+        <Text value="一块世界层 Surface：场景里的玻璃面板，绕 Y 轴转了 −0.7 rad，有自己的悬停与点击。" size="sm" color="secondaryLabel" />
       </Stack>
       <Box
         id="world-tap" tw="flex-row items-center gap-2"
