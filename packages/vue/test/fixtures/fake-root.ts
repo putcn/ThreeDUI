@@ -36,6 +36,8 @@ export interface FakeRoot extends GlassRoot {
   tick(dt?: number): void
   /** Emits a root event to the `on` listeners. */
   emit<K extends keyof UIRootEventMap>(type: K, e: UIRootEventMap[K]): void
+  /** How many `on` listeners of `type` are subscribed now. */
+  listenerCount(type: keyof UIRootEventMap): number
   /** Every Surface `createSurface` made, removed ones included, in creation order. */
   readonly surfacesMade: FakeSurface[]
 }
@@ -111,6 +113,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
       return () => { set.delete(fn as (e: never) => void) }
     },
     emit(type, e) { for (const fn of [...listeners.get(type) ?? []]) (fn as (e: UIRootEventMap[typeof type]) => void)(e) },
+    listenerCount: type => listeners.get(type)?.size ?? 0,
     screenFromPoint: (s, x, y) => ({ x: x + s.position.x, y: y + s.position.y }),
   }
 }

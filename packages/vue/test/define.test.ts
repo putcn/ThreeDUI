@@ -1,8 +1,9 @@
 import { it, expect, vi } from 'vitest'
-import { defineComponent, Fragment, h, nextTick, provide, ref, shallowRef, type VNode } from '@vue/runtime-core'
+import { defineComponent, Fragment, h, nextTick, provide, ref, shallowRef, watchEffect, type VNode } from '@vue/runtime-core'
 import { z } from 'zod'
 import { Node } from '@glassui/core'
 import { createGlassApp } from '../src/app'
+import { GlassTransition } from '../src/transition'
 import { createGlassRenderer } from '../src/renderer'
 import { defineGlassComponent, glassComponents } from '../src/define'
 import { useCanvasFactory, useMotion, useRoot, useScheme, useSurface } from '../src/inject'
@@ -154,11 +155,11 @@ it('useScheme follows the root\'s theme event and stops listening on unmount', a
   const root = createFakeRoot(), show = ref(true), seen: string[] = []
   const Scheme = defineComponent(() => { const s = useScheme(); return () => { seen.push(s.value); return null } })
   createGlassApp(defineComponent(() => () => show.value ? h(Scheme) : null), { root }).mount(new Node('box'))
+  expect(root.listenerCount('theme')).toBe(1)
   root.emit('theme', { theme: root.theme, scheme: 'dark', contrast: false }); await nextTick()
   expect(seen).toEqual(['light', 'dark'])
   show.value = false; await nextTick()
-  root.emit('theme', { theme: root.theme, scheme: 'light', contrast: false }); await nextTick()
-  expect(seen).toEqual(['light', 'dark'])
+  expect(root.listenerCount('theme')).toBe(0)
 })
 it('useSurface reads the provided Surface (unwrapping a ref), useMotion and useCanvasFactory the app options', () => {
   const root = createFakeRoot(), s = root.createSurface({ width: 10, height: 10 }), canvas = vi.fn()
@@ -170,4 +171,46 @@ it('useSurface reads the provided Surface (unwrapping a ref), useMotion and useC
   const Wrap = defineComponent(() => { provide(GLASS_SURFACE, shallowRef(other) as never); return () => h(Read) })
   createGlassApp(Wrap, { root }).mount()
   expect(got[0]).toBe(other); expect(got[1]).toBe('live')
+})
+
+it('a setup effect reading props while they are invalid sees the readable error on every run, never stale props', async () => {
+  const size = ref<unknown>(1), other = ref(0), seen: unknown[] = []
+  const Watch = defineGlassComponent({ name: 'Watch', description: 'test', props: z.object({ size: z.number().describe('pt') }), examples: ['<Watch :size="1" />'] },
+    (p) => {
+      watchEffect(() => { void other.value; try { seen.push(p.value.size) } catch (e) { seen.push(String(e).replace(/^GlassUIError: /, '').slice(0, 13)) } })
+      return () => h('box')
+    })
+  run(() => h(Watch, { size: size.value }))
+  size.value = 'x'; await nextTick()                     // the props change: the effect re-runs
+  other.value++; await nextTick()                        // something else changes, the props stay invalid
+  size.value = 3; await nextTick()
+  expect(seen).toEqual([1, '[Watch.size] ', '[Watch.size] ', 3])
+})
+it('a non-finite number names what it got', () => {
+  expect(run(() => h(Btn, { size: Number.NaN })).errors[0]).toMatch(/\[Btn\.size\] 类型应为 number，得到 NaN$/)
+  expect(run(() => h(Btn, { size: Number.POSITIVE_INFINITY })).errors[0]).toMatch(/\[Btn\.size\] 类型应为 number，得到 Infinity$/)
+})
+it('v-model modifiers of a declared prop are allowed (and not passed to the root); of anything else they are unknown', () => {
+  const Field = defineGlassComponent({ name: 'Field', description: 'test', props: z.object({ modelValue: z.string().optional().describe('v'), firstName: z.string().optional().describe('n') }),
+    events: { 'update:modelValue': { payload: 'string', description: 'v' }, 'update:firstName': { payload: 'string', description: 'n' } }, examples: ['<Field v-model="v" />'] },
+    () => () => h('box', { id: 'field' }))
+  const ok = run(() => h(Field, { modelValue: 'a', modelModifiers: { trim: true }, firstName: 'b', firstNameModifiers: { trim: true }, 'first-nameModifiers': { lazy: true } }))
+  expect(ok.errors).toEqual([])
+  expect(Object.keys(byId(ok.c, 'field')!.props).filter(k => k.endsWith('Modifiers'))).toEqual([])
+  expect(run(() => h(Field, { lastNameModifiers: { trim: true } })).errors[0]).toMatch(/\[Field\] 未知属性 "lastNameModifiers"/)
+})
+it('fallthrough takes tw and class in their array / object forms', () => {
+  const { c } = run(() => h(Shell, { tw: ['p-4', { 'justify-center': true, 'justify-end': false }], class: ['items-center'] }))
+  expect(byId(c, 'shell')!.style).toMatchObject({ flexDirection: 'row', padding: 16, justifyContent: 'center', alignItems: 'center' })
+})
+it('a GlassTransition root: the user\'s tw and style merge into the transitioned child (not Vue\'s shallow fallthrough)', () => {
+  const Pop = defineGlassComponent({ name: 'Pop', description: 'test', props: z.object({}), examples: ['<Pop />'] },
+    () => () => h(GlassTransition, null, () => [h('glass', { id: 'pop', tw: 'p-2', class: 'items-start', style: { width: 50, glass: { thickness: 4 } } })]))
+  const root = createFakeRoot(), s = root.createSurface({ width: 100, height: 100 })
+  const errors: string[] = []
+  const app = createGlassApp(defineComponent(() => () => h(Pop, { tw: 'flex-row', class: 'items-center', style: { glass: { tint: '#f00' } } })), { root, motion: 'frozen' })
+  app.config.errorHandler = e => { errors.push(String(e)) }
+  app.mount(s)
+  expect(errors).toEqual([])
+  expect(byId(s.root, 'pop')!.style).toEqual({ padding: 8, flexDirection: 'row', alignItems: 'center', width: 50, glass: { thickness: 4, tint: '#f00' } })
 })

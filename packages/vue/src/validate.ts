@@ -18,7 +18,8 @@ function show(v: unknown): string {
   }
   return s.length > 80 ? `${s.slice(0, 79)}…` : s
 }
-const kind = (v: unknown): string => v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v
+/** What a value is, for "得到 …": `NaN` / `Infinity` by name (zod's number rejects them, "得到 number" would contradict). */
+const kind = (v: unknown): string => v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v === 'number' && !Number.isFinite(v) ? String(v) : typeof v
 
 type Issue = z.core.$ZodIssue
 /** The types a union takes, when each of its branches failed on the value's type alone; else null. */

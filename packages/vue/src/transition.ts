@@ -1,10 +1,17 @@
-import { BaseTransition, defineComponent, h, type Component, type PropType } from '@vue/runtime-core'
+import {
+  BaseTransition, BaseTransitionPropsValidators, callWithAsyncErrorHandling, defineComponent, ErrorCodes, getCurrentInstance, h,
+  type Component, type PropType,
+} from '@vue/runtime-core'
 import { GlassUIError, type Node, type Style } from '@glassui/core'
+import { fallthrough } from './define'
 import { useMotion, useRoot } from './inject'
 import { liveSurface, PRESET_TRANSITION, PRESETS, type TransitionPreset } from './motion'
 import { setStyleLayer } from './renderer'
 
 const MODES = ['out-in', 'in-out'] as const
+/** `BaseTransition`'s props (the hooks, `persisted`): attrs with these names go to it, the rest to the child. */
+const TRANSITION_KEYS: ReadonlySet<string> = new Set(Object.keys(BaseTransitionPropsValidators))
+type Hook = (...args: unknown[]) => unknown
 
 /**
  * Vue's `<Transition>` for glass nodes, over the animation runtime (spec §4.4, §8.3): its one child enters from the
@@ -18,7 +25,10 @@ const MODES = ['out-in', 'in-out'] as const
  * - Motion `'frozen'`, or a node no live Surface ticks (a detached container, a failed or disposed Surface; checked
  *   again after every wait): `done()` at once, no layer.
  *
- * The enter/leave hooks are its own; the `before*` / `after*` hooks a user passes (`@after-enter`, …) run as usual.
+ * The hooks a user passes all run: `before*` / `after*` as Vue runs them; `@enter`, `@leave`, `@appear` and the
+ * `*-cancelled` ones are called by its own hooks, first, with the node only (no `done`: GlassTransition decides when
+ * the transition ends). Other attrs (`tw`, `class`, `style`, `id`, listeners) go to the child, merged into its own as
+ * `defineGlassComponent` merges fallthrough attrs (so a GlassTransition can be a glass component's root).
  */
 export const GlassTransition = defineComponent({
   name: 'GlassTransition',
@@ -29,7 +39,7 @@ export const GlassTransition = defineComponent({
     mode: String as PropType<(typeof MODES)[number]>,
   },
   setup(props, { slots, attrs }) {
-    const root = useRoot(), motion = useMotion()
+    const root = useRoot(), motion = useMotion(), instance = getCurrentInstance()
     // per node: the current enter/leave (a continuation whose token moved on stops), and whether our layer is on
     const token = new WeakMap<Node, number>()
     const layered = new WeakSet<Node>()
@@ -42,6 +52,11 @@ export const GlassTransition = defineComponent({
     const cfg = (el: Node): Style => ({ transition: { ...PRESET_TRANSITION, ...el.style.transition } })
     const from = (el: Node): Style => ({ ...PRESETS[props.preset], ...cfg(el) })
     const live = (el: Node): boolean => motion === 'live' && liveSurface(root, el) !== null
+    /** The user's hook `name` (a function, or the array Vue merges listeners into) with `el`; a throw goes to the app's handler. */
+    const user = (name: string, el: Node): void => {
+      const fn = attrs[name] as Hook | Hook[] | undefined
+      if (fn) callWithAsyncErrorHandling(fn, instance, ErrorCodes.TRANSITION_HOOK, [el])
+    }
 
     async function enter(el: Node, t: number, done: () => void): Promise<void> {
       await root.afterTick()                    // that tick recorded the preset values
@@ -64,15 +79,21 @@ export const GlassTransition = defineComponent({
       if (!live(el)) layer(el, null)
       done()
     }
+    const startEnter = (el: Node, done: () => void): void => {
+      const t = bump(el)
+      if (!live(el)) { layer(el, null); done(); return }
+      layer(el, from(el))                       // before any tick: the node is never drawn in its own style first
+      void enter(el, t, done)
+    }
+    // the user's hook first: ours may finish at once (frozen), and `after*` must come after it
     const hooks = {
-      onEnter(el: Node, done: () => void) {
-        const t = bump(el)
-        if (!live(el)) { layer(el, null); done(); return }
-        layer(el, from(el))                     // before any tick: the node is never drawn in its own style first
-        void enter(el, t, done)
-      },
-      onEnterCancelled(el: Node) { bump(el) },  // the leave that follows takes the node from where it is
+      onEnter(el: Node, done: () => void) { user('onEnter', el); startEnter(el, done) },
+      onAppear(el: Node, done: () => void) { user(attrs.onAppear ? 'onAppear' : 'onEnter', el); startEnter(el, done) },
+      // the leave that follows takes the node from where it is
+      onEnterCancelled(el: Node) { user('onEnterCancelled', el); bump(el) },
+      onAppearCancelled(el: Node) { user(attrs.onAppearCancelled ? 'onAppearCancelled' : 'onEnterCancelled', el); bump(el) },
       onLeave(el: Node, done: () => void) {
+        user('onLeave', el)
         const t = bump(el)
         if (!live(el)) { layer(el, null); done(); return }
         // the springs on, so the next tick records the node where it is (a node the runtime never tracked would jump);
@@ -80,12 +101,16 @@ export const GlassTransition = defineComponent({
         if (!layered.has(el)) layer(el, cfg(el))
         void leave(el, t, done)
       },
-      onLeaveCancelled(el: Node) { bump(el); layer(el, null) },
+      onLeaveCancelled(el: Node) { user('onLeaveCancelled', el); bump(el); layer(el, null) },
     }
     return () => {
       if (!Object.hasOwn(PRESETS, props.preset)) throw new GlassUIError('GlassTransition.preset', `非法取值 "${props.preset}"`, { allowed: Object.keys(PRESETS), got: String(props.preset) })
       if (props.mode !== undefined && !MODES.includes(props.mode)) throw new GlassUIError('GlassTransition.mode', `非法取值 "${props.mode}"`, { allowed: MODES, got: String(props.mode) })
-      return h(BaseTransition as Component, { ...attrs, appear: props.appear, mode: props.mode, ...hooks, onAppear: hooks.onEnter, onAppearCancelled: hooks.onEnterCancelled }, slots)
+      const own: Record<string, unknown> = {}, rest: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(attrs)) (TRANSITION_KEYS.has(k) ? own : rest)[k] = v
+      // the rest onto the child ourselves: BaseTransition's own fallthrough would replace its tw and merge style shallowly
+      const children = Object.keys(rest).length ? { default: () => (slots.default?.() ?? []).map(v => fallthrough(v, rest)) } : slots
+      return h(BaseTransition as Component, { ...own, appear: props.appear, mode: props.mode, ...hooks }, children)
     }
   },
 })

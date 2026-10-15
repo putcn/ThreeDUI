@@ -145,3 +145,58 @@ it('open and close within one frame: the node is never drawn in its own style (R
   expect(byId(s.root, 'g')).toBeNull(); expect(events).toEqual(['left'])
   expect(seen.every(o => o === 0)).toBe(true)
 })
+
+it('the user\'s own enter/leave hooks run with ours: before*, enter and leave (with the node), the cancelled ones', async () => {
+  const root = createFakeRoot(), s = root.createSurface({ width: 200, height: 200 })
+  const show = ref(false), calls: string[] = []
+  const log = (name: string) => (el: Node, done?: unknown) => { calls.push(`${name}:${el.id}${done === undefined ? '' : ':done'}`) }
+  const App = defineComponent(() => () => h(GlassTransition, {
+    onBeforeEnter: log('beforeEnter'), onEnter: log('enter'), onAfterEnter: log('afterEnter'), onEnterCancelled: log('enterCancelled'),
+    onBeforeLeave: log('beforeLeave'), onLeave: log('leave'), onAfterLeave: log('afterLeave'),
+  } as never, () => show.value ? [h('glass', { id: 'g', style: { width: 80, height: 40 } })] : []))
+  createGlassApp(App, { root }).mount(s as never)
+  show.value = true; await nextTick()
+  root.tick(); await flush()                                // the enter is running
+  show.value = false; await nextTick()                      // the leave cancels it
+  await until(root, () => !byId(s.root, 'g'))
+  expect(calls).toEqual(['beforeEnter:g', 'enter:g', 'enterCancelled:g', 'beforeLeave:g', 'leave:g', 'afterLeave:g'])
+})
+it('mode out-in: the old node leaves first, then the new one enters; done once each', async () => {
+  const root = createFakeRoot(), s = root.createSurface({ width: 200, height: 200 })
+  const which = ref<'a' | 'b'>('a'), events: string[] = []
+  const App = defineComponent(() => () => h(GlassTransition, { mode: 'out-in', onAfterEnter: (el: Node) => events.push(`entered:${el.id}`), onAfterLeave: (el: Node) => events.push(`left:${el.id}`) } as never,
+    () => [h('glass', { key: which.value, id: which.value, style: { width: 80, height: 40 } })]))
+  createGlassApp(App, { root }).mount(s as never)
+  const ids = () => { const out: string[] = []; s.root.walk(n => { if (n.id === 'a' || n.id === 'b') out.push(n.id) }); return out }
+  which.value = 'b'; await nextTick()
+  expect(ids()).toEqual(['a'])                              // b waits for a's leave
+  root.tick(); await flush(); root.tick(); await flush()
+  expect(ids()).toEqual(['a'])
+  await until(root, () => events.includes('entered:b'))
+  for (let i = 0; i < 10; i++) { root.tick(); await flush() }
+  expect(events).toEqual(['left:a', 'entered:b']); expect(ids()).toEqual(['b'])
+})
+it('frozen: the user\'s hooks keep Vue\'s order (enter before after-enter); on appear their onAppear replaces onEnter', async () => {
+  const root = createFakeRoot(), s = root.createSurface({ width: 200, height: 200 })
+  const show = ref(true), calls: string[] = []
+  const log = (name: string) => (el: Node) => { calls.push(`${name}:${el.id}`) }
+  const App = defineComponent(() => () => h(GlassTransition, {
+    appear: true, onBeforeEnter: log('beforeEnter'), onEnter: log('enter'), onAppear: log('appear'), onAfterEnter: log('afterEnter'),
+    onBeforeLeave: log('beforeLeave'), onLeave: log('leave'), onAfterLeave: log('afterLeave'),
+  } as never, () => show.value ? [h('glass', { id: 'g', style: { width: 80, height: 40 } })] : []))
+  createGlassApp(App, { root, motion: 'frozen' }).mount(s as never)
+  expect(calls).toEqual(['beforeEnter:g', 'appear:g', 'afterEnter:g'])
+  show.value = false; await nextTick()
+  show.value = true; await nextTick()
+  expect(calls.slice(3)).toEqual(['beforeLeave:g', 'leave:g', 'afterLeave:g', 'beforeEnter:g', 'enter:g', 'afterEnter:g'])
+})
+it('live appear with the user\'s onAppear: ours still animates, theirs runs too', async () => {
+  const root = createFakeRoot(), s = root.createSurface({ width: 200, height: 200 })
+  const calls: string[] = []
+  const App = defineComponent(() => () => h(GlassTransition, { appear: true, onAppear: (el: Node) => { calls.push(`appear:${el.id}`) }, onAfterAppear: (el: Node) => { calls.push(`afterAppear:${el.id}`) } } as never,
+    () => [h('glass', { id: 'g', style: { width: 80, height: 40 } })]))
+  createGlassApp(App, { root }).mount(s as never)
+  expect(calls).toEqual(['appear:g']); expect(byId(s.root, 'g')!.style.opacity).toBe(0)
+  await until(root, () => calls.length > 1)
+  expect(calls).toEqual(['appear:g', 'afterAppear:g']); expect(byId(s.root, 'g')!.style.opacity).toBeUndefined()
+})
