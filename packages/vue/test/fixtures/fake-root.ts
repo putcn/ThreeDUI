@@ -25,10 +25,14 @@ export interface FakeSurface {
   setSize(width: number, height: number): void
   dispose(): void
   readonly disposed: boolean
+  /** Set by `markFailed`: the Surface stopped for good (the root's `tick` skips it), as a render Surface's. */
+  readonly error: Error | null
+  /** As `Surface.markFailed`: sets `error` and forgets the tree's animation state (its `whenSettled` promises resolve); the first failure stands. */
+  markFailed(e: unknown): void
 }
 
 export interface FakeRoot extends GlassRoot {
-  /** Lays out every Surface, runs the animation runtime, then resolves the `afterTick` waiters; dt in seconds. */
+  /** Lays out every live Surface, runs the animation runtime, then resolves the `afterTick` waiters; dt in seconds. */
   tick(dt?: number): void
   /** Emits a root event to the `on` listeners. */
   emit<K extends keyof UIRootEventMap>(type: K, e: UIRootEventMap[K]): void
@@ -55,7 +59,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     const { layer = 'screen', fill: _fill, center: _center, left: _left, top: _top, interactive, castToWorld: _cast, contentScale: _scale, billboard, ...rest } = o
     const model = createModel(layer === 'screen' ? { ...rest, ptPerUnit: 1, placement: 'screen' } : { ...rest, placement: 'world' })
     const events = new EventDispatcher()
-    let disposed = false
+    let disposed = false, error: Error | null = null
     const s: FakeSurface = {
       model, root: model.root, events, pointer: new PointerTracker(model.root, events, theme), focus: new FocusManager(model.root, events),
       position: vec3(0, 0, 0), rotation: vec3(0, 0, 0), scale: vec3(1, 1, 1),
@@ -68,6 +72,12 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
         const i = surfaces.indexOf(s); if (i >= 0) surfaces.splice(i, 1)
       },
       get disposed() { return disposed },
+      get error() { return error },
+      markFailed(e) {
+        if (error || disposed) return
+        error = e instanceof Error ? e : new Error(String(e))
+        anim.forget(model.root)
+      },
     }
     surfaces.push(s); surfacesMade.push(s)
     return s
@@ -85,6 +95,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     removeSurface(s) { const f = s as unknown as FakeSurface; if (surfaces.includes(f)) f.dispose() },
     tick(dt = 1 / 60) {
       for (const s of [...surfaces]) {
+        if (s.error) continue                             // a failed Surface never ticks again
         const root = s.root
         if (root.dirty.layout || root.dirty.tree) layout.compute(root, s.model.width, s.model.height, measure)
         anim.tick(root, dt, s.model.cornerRadius)
@@ -103,3 +114,6 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     screenFromPoint: (s, x, y) => ({ x: x + s.position.x, y: y + s.position.y }),
   }
 }
+
+/** Lets the promise chains hanging off a tick (`afterTick`, `whenSettled`) run: two microtask turns. */
+export const flush = async (): Promise<void> => { await Promise.resolve(); await Promise.resolve() }

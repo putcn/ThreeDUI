@@ -55,6 +55,13 @@ function over(a: Record<string, unknown>, b: object | undefined): Record<string,
   return out
 }
 
+/**
+ * A component root's own `style` with the `style` its user passed (fallthrough) laid over it, as styles compose here:
+ * state branches and `glass` / `transition` merge key by key, the user's values win, `undefined` is skipped. Unless
+ * both are plain objects, the user's as given.
+ */
+export const mergeStyle = (own: unknown, user: unknown): unknown => isPlain(own) && isPlain(user) ? over(own, user) : user
+
 /** Recomputes `n.style`: tw < class < style < control < morph < transition (`replaceStyle`: an equal style is a no-op). */
 function compose(n: Node): void {
   const r = rawOf(n)

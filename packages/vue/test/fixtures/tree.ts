@@ -16,3 +16,10 @@ export function tree(n: Node, opts: { anchors?: boolean } = {}): Snap {
   if (kids.length) out.children = kids
   return out
 }
+
+/** The first node with id `id` under `n` (depth-first, `n` included), or null. */
+export function byId(n: Node, id: string): Node | null {
+  if (n.id === id) return n
+  for (const c of n.children) { const hit = byId(c, id); if (hit) return hit }
+  return null
+}
