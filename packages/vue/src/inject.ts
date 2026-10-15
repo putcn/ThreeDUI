@@ -1,4 +1,4 @@
-import { getCurrentScope, inject, onScopeDispose, ref, unref, type Ref } from '@vue/runtime-core'
+import { computed, getCurrentScope, inject, onScopeDispose, ref, unref, type Ref } from '@vue/runtime-core'
 import { GlassUIError, type ColorScheme } from '@glassui/core'
 import type { CanvasLike } from '@glassui/text'
 import type { Surface } from '@glassui/render'
@@ -14,9 +14,23 @@ export function useRoot(): GlassRoot {
   return root
 }
 
-/** The Surface the component renders into (a provided ref is read now); null in a detached container. */
+/**
+ * The Surface the component renders into, as it is at the call (a provided ref is read now); null in a detached
+ * container. A `<Surface>` makes its render Surface again when a placement prop changes and moves the content over, so
+ * a value kept past setup can go stale: code that keeps the Surface (projecting a caret, a focus trap) uses
+ * `useSurfaceRef()`.
+ */
 export function useSurface(): Surface | null {
   return unref(inject(GLASS_SURFACE, null))
+}
+
+/**
+ * The Surface the component renders into, as a read-only ref that follows a `<Surface>` making its Surface again. The
+ * Surface `mount(surface)` took never changes; null in a detached container.
+ */
+export function useSurfaceRef(): Readonly<Ref<Surface | null>> {
+  const provided = inject(GLASS_SURFACE, null)
+  return computed(() => unref(provided))
 }
 
 /** The app's motion: `'frozen'` makes transitions complete at once (tests, screenshots). `'live'` outside an app. */

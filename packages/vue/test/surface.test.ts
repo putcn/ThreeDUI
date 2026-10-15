@@ -1,11 +1,12 @@
 import { it, expect } from 'vitest'
-import { defineComponent, h, nextTick, ref, shallowRef } from '@vue/runtime-core'
+import { defineComponent, h, isReadonly, nextTick, ref, shallowRef, watch, type Ref } from '@vue/runtime-core'
+import { createGlassApp } from '../src/app'
 import { glassComponents } from '../src/define'
-import { useSurface } from '../src/inject'
+import { useSurface, useSurfaceRef } from '../src/inject'
 import { Surface, ScreenLayer, WorldLayer } from '../src/components/Surface'
 import { Text } from '../src/components/Text'
 import { createFakeRoot } from './fixtures/fake-root'
-import { mountGlass } from './fixtures/mount'
+import { mountGlass, napiCanvas } from './fixtures/mount'
 import { byId, tree } from './fixtures/tree'
 
 it('creates a world Surface, teleports its slot into it, and applies the transform', async () => {
@@ -95,6 +96,67 @@ it('later reads of useSurface see a recreated Surface; the provided ref is not r
   late.value = true; await nextTick()
   expect(seen).toEqual([root.surfacesMade[0], root.surfacesMade[1]])
   expect(seen[1]).toBe(root.surfacesMade[1])
+})
+it('a recreated Surface keeps the focus (ring as it was) and the keys; the press and hover are released (Review Focus 2)', async () => {
+  const root = createFakeRoot(), bg = ref('none'), show = ref(true), events: string[] = []
+  const on = (t: string) => () => { events.push(t) }
+  mountGlass(() => h(Surface, { layer: 'screen', width: 100, height: 100, background: bg.value }, () => [
+    show.value ? h('glass', { id: 'g', tabIndex: 0, style: { width: 40, height: 40 }, onFocus: on('focus'), onBlur: on('blur'), onPointercancel: on('pointercancel'), onPointerleave: on('pointerleave') }) : null,
+  ]), { root })
+  root.tick()
+  const [a] = root.surfacesMade, g = byId(a!.root, 'g')!
+  root.pointer!.setActive(a as never)                     // the keys go to it, as after a press
+  a!.focus.next()                                         // keyboard focus: the ring shows
+  a!.pointer.move(10, 10); a!.pointer.down(10, 10)        // hovered and pressed (a drag in progress)
+  expect(g.state).toMatchObject({ focused: true, focusVisible: true, hover: true, pressed: true })
+  events.length = 0
+  bg.value = 'glass'; await nextTick()
+  const b = root.surfacesMade[1]!
+  expect(byId(b.root, 'g')).toBe(g)
+  expect(b.focus.current).toBe(g); expect(g.state).toMatchObject({ focused: true, focusVisible: true, hover: false, pressed: false })
+  expect(root.pointer!.active).toBe(b)                    // Tab and keys carry on in the new Surface
+  expect(events).toEqual(['pointercancel', 'pointerleave', 'blur', 'focus'])
+  b.focus.focus(null)                                     // the new focus manager owns it: blurring clears it
+  expect(g.state).toMatchObject({ focused: false, focusVisible: false })
+  // focus from a press has no ring, and keeps none; keys elsewhere stay elsewhere
+  b.focus.focusFromPointer(g); root.pointer!.setActive(null)
+  bg.value = 'fill'; await nextTick()
+  const c = root.surfacesMade[2]!
+  expect(c.focus.current).toBe(g); expect(g.state).toMatchObject({ focused: true, focusVisible: false }); expect(root.pointer!.active).toBeNull()
+  // a focused node removed in the same update is not focused again
+  bg.value = 'none'; show.value = false; await nextTick()
+  const d = root.surfacesMade[3]!
+  expect(d.focus.current).toBeNull(); expect(g.state.focused).toBe(false); expect(g.parent).toBeNull()
+})
+it('unmounting a Surface blurs its focused node and cancels its press while the content is still mounted', async () => {
+  const root = createFakeRoot(), show = ref(true), events: string[] = []
+  mountGlass(() => show.value ? h(Surface, { layer: 'screen', width: 100, height: 100 }, () => [
+    h('glass', { id: 'g', tabIndex: 0, style: { width: 40, height: 40 }, onBlur: () => { events.push('blur') }, onPointercancel: () => { events.push('pointercancel') } }),
+  ]) : null, { root })
+  root.tick()
+  const s = root.surfacesMade[0]!, g = byId(s.root, 'g')!
+  s.focus.next(); s.pointer.down(10, 10)
+  show.value = false; await nextTick()
+  expect(events).toEqual(['pointercancel', 'blur'])
+  expect(g.state).toMatchObject({ focused: false, pressed: false, hover: false }); expect(s.disposed).toBe(true)
+})
+it('useSurfaceRef follows a recreated Surface; useSurface is the one at call time', async () => {
+  const root = createFakeRoot(), bg = ref('none'), seen: unknown[] = []
+  let live: Readonly<Ref<unknown>> | undefined, once: unknown
+  const Probe = defineComponent(() => { live = useSurfaceRef(); once = useSurface(); watch(live, v => { seen.push(v) }); return () => null })
+  mountGlass(() => h(Surface, { width: 10, height: 10, background: bg.value }, () => [h(Probe)]), { root })
+  const [a] = root.surfacesMade
+  expect(live!.value).toBe(a)
+  bg.value = 'glass'; await nextTick()
+  const b = root.surfacesMade[1]
+  expect(live!.value).toBe(b); expect(once).toBe(a); expect(seen).toEqual([b])
+  expect(isReadonly(live)).toBe(true)
+  // outside a <Surface>: the Surface the app was mounted on, or null in a detached container
+  const s = root.createSurface({ width: 10, height: 10 })
+  createGlassApp(Probe, { root, createCanvas: napiCanvas }).mount(s)
+  expect(live!.value).toBe(s)
+  mountGlass(() => h(Probe))
+  expect(live!.value).toBeNull()
 })
 it('a Surface failure reaches @error; the listener leaves with the Surface, recreated or unmounted', async () => {
   const root = createFakeRoot(), bg = ref('none'), show = ref(true), got: unknown[] = []

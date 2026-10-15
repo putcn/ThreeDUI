@@ -1,6 +1,6 @@
 import { computed, h, inject, markRaw, onBeforeUnmount, provide, shallowRef, Teleport, watch, watchEffect, type InjectionKey } from '@vue/runtime-core'
 import { z } from 'zod'
-import { GlassUIError, type ColorScheme, type Theme } from '@glassui/core'
+import { GlassUIError, type ColorScheme, type Node, type Theme } from '@glassui/core'
 import type { CreateSurfaceOptions, Surface as RenderSurface } from '@glassui/render'
 import { defineGlassComponent } from '../define'
 import { useRoot } from '../inject'
@@ -110,21 +110,42 @@ export const Surface = defineGlassComponent({
   // again is what later `useSurface` reads see
   const surface = shallowRef<RenderSurface | null>(null)
   const forward = (e: { error: Error }): void => { emit('error', e.error) }
-  const drop = (): void => {
+  /**
+   * Removes the Surface, releasing first what its trackers hold in the content: the press is cancelled and the hover
+   * left (`pointercancel`, `pointerleave`), the focused node blurred. Disposing alone would leave those nodes pressed,
+   * hovered and focused for good, since the content outlives the Surface (it moves into the next one, or is being
+   * unmounted). Returns what the next Surface takes over: the focused node with its ring, and whether the root's
+   * pointer bridge sent its keys to this Surface.
+   */
+  const drop = (): { focused: Node | null; visible: boolean; keys: boolean } | null => {
     const s = surface.value
-    if (!s) return
+    if (!s) return null
+    const focused = s.focus.current, held = { focused, visible: focused?.state.focusVisible ?? false, keys: root.pointer?.active === s }
+    s.pointer.cancel(); s.focus.focus(null)
     s.removeEventListener('error', forward)
     root.removeSurface(s)
     surface.value = null
+    return held
   }
+  /** The node to focus in the new Surface once the Teleport has moved the content there (see the post watcher below). */
+  let refocus: { node: Node; visible: boolean } | null = null
   watch(key, k => {
     const s = state.value
     if (k === undefined || 'error' in s) return
-    drop()
+    const held = drop()
     const made = markRaw(root.createSurface(options(s.v, s.layer)))
     made.addEventListener('error', forward)
     surface.value = made
+    if (held?.keys) root.pointer?.setActive(made)     // Tab and the keys carry on here
+    refocus = held?.focused ? { node: held.focused, visible: held.visible } : null
   }, { immediate: true })
+  // after the render has moved the content into a new Surface: the node focused in the old one is focused again, its
+  // ring as it was (a no-op when it left the tree in the same update)
+  watch(surface, s => {
+    const r = refocus
+    refocus = null
+    if (s && r) s.focus.focus(r.node, { visible: r.visible })
+  }, { flush: 'post' })
   // what applies in place: size (a fill Surface's is its layer's), transform, flags
   watchEffect(() => {
     const s = surface.value, st = state.value
@@ -137,7 +158,7 @@ export const Surface = defineGlassComponent({
     s.interactive = v.interactive; s.billboard = v.billboard
   })
   provide(GLASS_SURFACE, surface)
-  onBeforeUnmount(drop)
+  onBeforeUnmount(() => { drop() })   // before the content unmounts: its blur and pointercancel listeners still run
   return () => {
     noAttrs('Surface', attrs)
     const st = state.value

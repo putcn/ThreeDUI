@@ -68,6 +68,8 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     return text.measure({ text: String(n.props.value ?? ''), font: { family: t.family, size: t.size, weight: t.weight }, lineHeight: t.lineHeight, letterSpacing: t.letterSpacing, maxLines: t.maxLines, wrap: t.wrap }, { maxWidth })
   }
   const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = []
+  /** The pointer bridge's key target, as `PointerBridge`: `setActive` sets it, removing its Surface clears it. */
+  const bridge: { active: FakeSurface | null; setActive(s: FakeSurface | null): void } = { active: null, setActive: vi.fn((s: FakeSurface | null) => { bridge.active = s }) }
   let waiters: (() => void)[] = []
   const listeners = new Map<string, Set<(e: never) => void>>()
 
@@ -111,10 +113,15 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     contrast: false,
     anim, text,
     surfaces: surfaces as unknown as readonly Surface[],
-    pointer: { setActive: vi.fn(), active: null } as unknown as GlassRoot['pointer'],
+    pointer: bridge as unknown as GlassRoot['pointer'],
     surfacesMade,
     createSurface: o => make(o) as unknown as Surface,
-    removeSurface(s) { const f = s as unknown as FakeSurface; if (surfaces.includes(f)) f.dispose() },
+    removeSurface(s) {
+      const f = s as unknown as FakeSurface
+      if (!surfaces.includes(f)) return
+      if (bridge.active === f) bridge.active = null   // as PointerBridge.forget
+      f.dispose()
+    },
     tick(dt = 1 / 60) {
       for (const s of [...surfaces]) {
         if (s.error) continue                             // a failed Surface never ticks again
