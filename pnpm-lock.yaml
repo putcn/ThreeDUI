@@ -95,6 +95,28 @@ importers:
         specifier: ^1.0.10
         version: 1.0.10
 
+  packages/vue:
+    dependencies:
+      '@glassui/core':
+        specifier: workspace:*
+        version: link:../core
+      '@glassui/text':
+        specifier: workspace:*
+        version: link:../text
+      '@vue/runtime-core':
+        specifier: 3.5.44
+        version: 3.5.44
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@glassui/render':
+        specifier: workspace:*
+        version: link:../render
+      '@napi-rs/canvas':
+        specifier: ^1.0.10
+        version: 1.0.10
+
   spikes/glyph-cjk:
     dependencies:
       '@pmndrs/glyph':
@@ -615,6 +637,15 @@ packages:
 
   '@vitest/spy@5.0.3':
     resolution: {integrity: sha512-XhFysQTB8AZ+P4gMi+Lpo99vg2AZi0qKpaB9yXQl37+CaMEAPO3iH/wGVnSyL5MPERiLezpqTVtrR6UZH5GCXg==}
+
+  '@vue/reactivity@3.5.44':
+    resolution: {integrity: sha512-u+QJdKeBBEADkPdevsL+6E12QlYVfBD8Zcw5qjDQKtamI6l14KyqazJMobhCKelhWN5zpyKUiEDoTyHE93cqWw==}
+
+  '@vue/runtime-core@3.5.44':
+    resolution: {integrity: sha512-uEa/ndwjhrrhnOfb2p+sZy6zeoamJOISqaLSJGk/8R6nABT1ZldpzcJoPzKj+zHVomVBPcmQYyC2r4LtvDV6CQ==}
+
+  '@vue/shared@3.5.44':
+    resolution: {integrity: sha512-H82XLH0DjmSOdbEwO15x3QTo1f5PWEtv237eLpYKc0mqLu+B8hnq16lFWmuBmNurkeiG3wr+oM1FhOll/YVFRg==}
 
   ajv@6.15.0:
     resolution: {integrity: sha512-fgFx7Hfoq60ytK2c7DhnF8jIvzYgOMxfugjLOSMHjLIPgenqa7S7oaagATUq99mV6IYvN2tRmC0wnTYX6iPbMw==}
@@ -1272,6 +1303,17 @@ snapshots:
       vite: 8.3.3(@types/node@22.20.5)
 
   '@vitest/spy@5.0.3': {}
+
+  '@vue/reactivity@3.5.44':
+    dependencies:
+      '@vue/shared': 3.5.44
+
+  '@vue/runtime-core@3.5.44':
+    dependencies:
+      '@vue/reactivity': 3.5.44
+      '@vue/shared': 3.5.44
+
+  '@vue/shared@3.5.44': {}
 
   ajv@6.15.0:
     dependencies:

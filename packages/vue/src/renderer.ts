@@ -1,0 +1,163 @@
+import {
+  callWithAsyncErrorHandling, createRenderer, ErrorCodes, markRaw, normalizeClass,
+  type CreateAppFunction, type RendererOptions, type RootRenderFunction,
+} from '@vue/runtime-core'
+import { GlassUIError, Node, parseTw, UI_EVENT_TYPES, validateStyle, type NodeType, type Style, type UIEventType } from '@glassui/core'
+import type { GlassRoot } from './root'
+
+/** The elements a template can use (spec §8.1); `anchor` nodes are Vue's own (comments). */
+export const HOST_TAGS = ['box', 'text', 'image', 'glass', 'scroll', 'portal'] as const
+export type HostTag = (typeof HOST_TAGS)[number]
+/** Style layers over a node's own style, lowest first: `control` < `morph` < `transition`. */
+export type StyleLayer = 'control' | 'morph' | 'transition'
+
+/**
+ * What the props and the layers set on a node, its style is composed from (`compose`): `tw` and `class` parsed, `style`
+ * validated (both when the prop is patched, so a bad value throws before anything changes), the layers as given.
+ */
+interface Raw { tw?: Style; class?: Style; style?: Style; layers: Partial<Record<StyleLayer, Style>> }
+const raws = new WeakMap<Node, Raw>()
+const rawOf = (n: Node): Raw => { let r = raws.get(n); if (!r) raws.set(n, r = { layers: {} }); return r }
+
+/** State branches: two of them merge key by key (the later wins per key), as `effectiveStyle` lays them over the base. */
+const BRANCHES: ReadonlySet<string> = new Set(['hover', 'pressed', 'focused', 'disabled'])
+/** Partial objects that merge entry by entry, as in core's `effectiveStyle`. */
+const NESTED: ReadonlySet<string> = new Set(['glass', 'transition'])
+
+const isPlain = (v: unknown): v is Record<string, unknown> => {
+  if (typeof v !== 'object' || v === null) return false
+  const p: unknown = Object.getPrototypeOf(v)
+  return p === Object.prototype || p === null
+}
+/** A deep copy of plain data (plain objects, arrays); anything else as it is. */
+const copy = (v: unknown): unknown => Array.isArray(v) ? v.map(copy) : isPlain(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, copy(x)])) : v
+
+/** `a`'s entries, then `b`'s defined ones copied over them (a NESTED object's merge). */
+function merge(a: unknown, b: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = isPlain(a) ? { ...a } : {}
+  for (const [k, v] of Object.entries(b)) if (v !== undefined) out[k] = copy(v)
+  return out
+}
+
+/**
+ * `b` laid over `a` into a new style: `undefined` values are skipped, state branches merge key by key (recursively, so
+ * their `glass` / `transition` too), `glass` / `transition` merge entry by entry, anything else replaces. Every value
+ * taken from `b` is a deep copy: the node's style never shares an object with the props (a reactive style mutated in
+ * place) or a layer, so `replaceStyle`'s deep comparison sees the change.
+ */
+function over(a: Record<string, unknown>, b: object | undefined): Record<string, unknown> {
+  if (!b) return a
+  const out = { ...a }
+  for (const [k, v] of Object.entries(b)) {
+    if (v === undefined) continue
+    out[k] = BRANCHES.has(k) && isPlain(v) ? over(isPlain(out[k]) ? out[k] : {}, v) : NESTED.has(k) && isPlain(v) ? merge(out[k], v) : copy(v)
+  }
+  return out
+}
+
+/** Recomputes `n.style`: tw < class < style < control < morph < transition (`replaceStyle`: an equal style is a no-op). */
+function compose(n: Node): void {
+  const r = rawOf(n)
+  let s: Record<string, unknown> = {}
+  for (const part of [r.tw, r.class, r.style, r.layers.control, r.layers.morph, r.layers.transition]) s = over(s, part)
+  n.replaceStyle(s as Style)
+}
+
+/**
+ * Sets (or with `null` removes) one of `node`'s style layers and recomposes its style (tw < class < style < control <
+ * morph < transition): composition (`useGlassControl`, the glassId morph, `GlassTransition`) styles a node without
+ * fighting Vue's patches of its props or each other. The composition starts from the node's `tw` / `class` / `style`
+ * props, so it is for nodes a glass renderer made (a style set directly with `setStyle` is replaced). Layers are not
+ * validated.
+ */
+export function setStyleLayer(node: Node, layer: StyleLayer, style: Style | null): void {
+  const r = rawOf(node)
+  if (style) r.layers[layer] = style; else delete r.layers[layer]
+  compose(node)
+}
+
+/** Layout-neutral: Vue's anchors (comments) and empty text nodes take no space and no flex gap. */
+const EMPTY: Style = { position: 'absolute', width: 0, height: 0 }
+const EVENT_PROPS = UI_EVENT_TYPES.map(t => `on${t[0]!.toUpperCase()}${t.slice(1)}`)
+
+/**
+ * A Vue renderer over core `Node`s (spec §8.1). `querySelector` (Teleport's `to`) looks through the containers its
+ * apps are mounted in and every Surface of `root`: `#id` finds a node by id, a bare name a `portal` with that `name`.
+ * An error while mounting goes to `app.config.errorHandler` when one is set (Vue rethrows it from `mount` otherwise).
+ */
+export function createGlassRenderer(opts: { root: GlassRoot }): { render: RootRenderFunction<Node>; createApp: CreateAppFunction<Node> } {
+  const { root } = opts
+  const containers = new Set<Node>()
+  const textNode = (t: string): Node => { const n = markRaw(new Node('text')); n.setProp('value', t); if (t === '') n.replaceStyle(EMPTY); return n }
+  const find = (pred: (n: Node) => boolean): Node | null => {
+    let hit: Node | null = null
+    for (const r of [...containers, ...root.surfaces.map(s => s.root)]) { r.walk(n => { if (!hit && pred(n)) hit = n }); if (hit) break }
+    return hit
+  }
+  const ops: RendererOptions<Node, Node> = {
+    createElement(tag, _ns, _is, props) {
+      if (!(HOST_TAGS as readonly string[]).includes(tag)) throw new GlassUIError('renderer', `未知元素 <${tag}>`, { allowed: HOST_TAGS, got: tag })
+      return markRaw(new Node(tag as NodeType, props?.id == null ? undefined : String(props.id)))
+    },
+    createText: textNode,
+    createComment() { const n = markRaw(new Node('anchor')); n.replaceStyle(EMPTY); return n },
+    setText(n, t) { n.setProp('value', t); n.replaceStyle(t === '' ? EMPTY : {}) },
+    setElementText(el, t) {
+      if (el.type === 'text') { el.setProp('value', t); return }
+      for (const c of [...el.children]) c.remove()
+      if (t !== '') el.appendChild(textNode(t))
+    },
+    insert(c, p, a) { p.insertBefore(c, a ?? null) },
+    remove(c) { c.remove() },
+    parentNode: n => n.parent,
+    nextSibling(n) { const p = n.parent; return p ? p.children[p.children.indexOf(n) + 1] ?? null : null },
+    querySelector: sel => sel.startsWith('#') ? find(n => n.id === sel.slice(1)) : find(n => n.type === 'portal' && n.props.name === sel),
+    patchProp(el, key, _prev, next, _ns, instance) {
+      if (/^on[A-Z]/.test(key)) {
+        const type = key.slice(2).toLowerCase()
+        if (!(UI_EVENT_TYPES as readonly string[]).includes(type)) throw new GlassUIError('renderer', `未知事件 "${key}"`, { allowed: EVENT_PROPS, got: key })
+        // an array when Vue merges listeners (a component's own and its fallthrough `@click`); errors go to the app's handler
+        const fns = (Array.isArray(next) ? next : [next]).filter((f): f is (...a: unknown[]) => unknown => typeof f === 'function')
+        el.setHandler(type as UIEventType, fns.length ? e => { callWithAsyncErrorHandling(fns, instance ?? null, ErrorCodes.NATIVE_EVENT_HANDLER, [e]) } : null)
+        return
+      }
+      if (key === 'style' || key === 'tw' || key === 'class') {
+        // Vue normalises `class` (string, array or object) to a string, not `tw`; both resolve against the root's theme
+        // as it is when they are set
+        const src = key === 'style' ? next : normalizeClass(next)
+        const v = src == null || src === '' ? undefined : key === 'style' ? validateStyle(src, 'style') : parseTw(src as string, root.theme, key)
+        const r = rawOf(el)
+        if (v) r[key] = v; else delete r[key]
+        compose(el)
+        return
+      }
+      // the id is the node's own (set at creation from the props); a changed `id` prop renames it
+      if (key === 'id' && next != null && String(next) !== el.id) (el as { id: string }).id = String(next)
+      if (key === 'disabled') el.setState({ disabled: next === '' || !!next })   // `<glass disabled>` passes ''
+      el.setProp(key, next)
+    },
+  }
+  const renderer = createRenderer<Node, Node>(ops)
+  const render: RootRenderFunction<Node> = (vnode, container, ns) => {
+    if (vnode) containers.add(container); else containers.delete(container)
+    renderer.render(vnode, container, ns)
+  }
+  const createApp: CreateAppFunction<Node> = (component, props) => {
+    const app = renderer.createApp(component, props)
+    const { mount, unmount } = app
+    let container: Node | null = null
+    app.mount = (target, ...rest) => {
+      if (!(target instanceof Node)) throw new GlassUIError('app.mount', '挂载目标必须是 Node（createGlassApp 的 mount 还接受 Surface）')
+      containers.add(container = target)
+      try { return mount(target, ...rest) } catch (e) {
+        const handler = app.config.errorHandler
+        if (!handler) throw e
+        handler(e, null, 'mount')
+        return undefined as never   // nothing mounted: no instance
+      }
+    }
+    app.unmount = () => { unmount(); if (container) containers.delete(container) }
+    return app
+  }
+  return { render, createApp }
+}
