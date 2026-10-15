@@ -1,14 +1,18 @@
 <script setup lang="ts">
 // The component gallery (`?scene=gallery`): every @glassui/vue component, section by section. Content only, so no
-// glass here (spec §8.3: glass on controls, never on content areas); later sections add the controls.
-import { computed, h, type FunctionalComponent } from 'vue'
-import { Box, Icon, ICON_NAMES, Stack, Text, useScheme } from '@glassui/vue'
+// glass in the column (spec §8.3: glass on controls, never on content areas); later sections add the controls. Beside
+// it stands a world-layer <Surface>: a glass panel in the scene, turned about Y, with hover and clicks of its own.
+import { computed, h, ref, type FunctionalComponent } from 'vue'
+import { Box, Icon, ICON_NAMES, Stack, Surface, Text, useScheme } from '@glassui/vue'
 
 // The page is a vertical `scroll` (the wheel scrolls it once later sections outgrow the viewport). No page fill: the
 // content sits on the wall itself, which the later sections' glass refracts.
 const scheme = useScheme()
-/** The wrap tile's chip fill: the scheme's accent (theme `accent`) at low alpha. */
+/** The wrap tile's chip fill: the scheme's accent (theme `accent`) at low alpha; a little more under the pointer. */
 const chip = computed(() => scheme.value === 'dark' ? '#8a83ff33' : '#6b63f524')
+const chipHover = computed(() => scheme.value === 'dark' ? '#8a83ff59' : '#6b63f547')
+/** Clicks on the world panel's button. */
+const taps = ref(0)
 
 /** A small spaced caption over each group. */
 const Caption: FunctionalComponent<{ value: string }> = p => h(Text, { value: p.value, size: 12, weight: 600, color: 'secondaryLabel', style: { letterSpacing: 1.4 } })
@@ -104,49 +108,78 @@ const tint = (a: number) => ({ width: 36, height: 36, radius: 10, bg: 'accent', 
 
         <Stack id="stacks" :gap="14">
           <Caption value="布局 STACK" />
-          <Stack direction="horizontal" :gap="16" align="stretch">
-            <Stack justify="between" :gap="12" :style="tile">
-              <Stack direction="horizontal" :gap="8">
-                <Box :style="tint(1)" /><Box :style="tint(0.6)" /><Box :style="tint(0.3)" />
+          <!-- two rows of three: the column beside the world panel is too narrow for six in a row -->
+          <Stack :gap="16">
+            <Stack direction="horizontal" :gap="16" align="stretch">
+              <Stack justify="between" :gap="12" :style="tile">
+                <Stack direction="horizontal" :gap="8">
+                  <Box :style="tint(1)" /><Box :style="tint(0.6)" /><Box :style="tint(0.3)" />
+                </Stack>
+                <Text value="horizontal · gap 8" :size="12" color="secondaryLabel" />
               </Stack>
-              <Text value="horizontal · gap 8" :size="12" color="secondaryLabel" />
+              <Stack justify="between" :gap="12" :style="tile">
+                <Stack :gap="6">
+                  <Box v-for="w in [120, 88, 56]" :key="w" :style="{ width: w, height: 10, radius: 'capsule', bg: 'accent', opacity: 0.25 + w / 160 }" />
+                </Stack>
+                <Text value="vertical · gap 6" :size="12" color="secondaryLabel" />
+              </Stack>
+              <Stack justify="between" :gap="12" :style="tile">
+                <Stack direction="z" align="center" justify="center" :style="{ width: 56, height: 56 }">
+                  <Box tw="w-full h-full" :style="{ bg: 'accent', radius: 16 }" />
+                  <Icon name="star" :size="28" color="#ffffff" />
+                </Stack>
+                <Text value="z · 叠放" :size="12" color="secondaryLabel" />
+              </Stack>
             </Stack>
-            <Stack justify="between" :gap="12" :style="tile">
-              <Stack :gap="6">
-                <Box v-for="w in [120, 88, 56]" :key="w" :style="{ width: w, height: 10, radius: 'capsule', bg: 'accent', opacity: 0.25 + w / 160 }" />
+            <Stack direction="horizontal" :gap="16" align="stretch">
+              <Stack justify="between" :gap="12" :style="tile">
+                <Stack direction="horizontal" justify="between" align="center" :style="{ height: 36 }">
+                  <Box v-for="i in 3" :key="i" :style="{ width: 14, height: 14, radius: 'capsule', bg: 'accent' }" />
+                </Stack>
+                <Text value="justify between" :size="12" color="secondaryLabel" />
               </Stack>
-              <Text value="vertical · gap 6" :size="12" color="secondaryLabel" />
-            </Stack>
-            <Stack justify="between" :gap="12" :style="tile">
-              <Stack direction="z" align="center" justify="center" :style="{ width: 56, height: 56 }">
-                <Box tw="w-full h-full" :style="{ bg: 'accent', radius: 16 }" />
-                <Icon name="star" :size="28" color="#ffffff" />
+              <Stack justify="between" :gap="12" :style="tile">
+                <Stack direction="horizontal" :gap="6" align="center" :style="{ height: 56 }">
+                  <Box v-for="hh in [24, 44, 32, 56, 18]" :key="hh" :style="{ width: 12, height: hh, radius: 'capsule', bg: 'accent', opacity: 0.75 }" />
+                </Stack>
+                <Text value="align center" :size="12" color="secondaryLabel" />
               </Stack>
-              <Text value="z · 叠放" :size="12" color="secondaryLabel" />
-            </Stack>
-            <Stack justify="between" :gap="12" :style="tile">
-              <Stack direction="horizontal" justify="between" align="center" :style="{ height: 36 }">
-                <Box v-for="i in 3" :key="i" :style="{ width: 14, height: 14, radius: 'capsule', bg: 'accent' }" />
+              <Stack justify="between" :gap="12" :style="tile">
+                <Stack direction="horizontal" :gap="6" wrap>
+                  <Box v-for="t in ['玻璃', 'Glass', '折射', 'Refraction', '高光']" :key="t" :style="{ paddingX: 10, paddingY: 3, radius: 'capsule', bg: chip }">
+                    <Text :value="t" :size="13" color="accent" :weight="500" />
+                  </Box>
+                </Stack>
+                <Text value="wrap" :size="12" color="secondaryLabel" />
               </Stack>
-              <Text value="justify between" :size="12" color="secondaryLabel" />
-            </Stack>
-            <Stack justify="between" :gap="12" :style="tile">
-              <Stack direction="horizontal" :gap="6" align="center" :style="{ height: 56 }">
-                <Box v-for="hh in [24, 44, 32, 56, 18]" :key="hh" :style="{ width: 12, height: hh, radius: 'capsule', bg: 'accent', opacity: 0.75 }" />
-              </Stack>
-              <Text value="align center" :size="12" color="secondaryLabel" />
-            </Stack>
-            <Stack justify="between" :gap="12" :style="tile">
-              <Stack direction="horizontal" :gap="6" wrap>
-                <Box v-for="t in ['玻璃', 'Glass', '折射', 'Refraction', '高光']" :key="t" :style="{ paddingX: 10, paddingY: 3, radius: 'capsule', bg: chip }">
-                  <Text :value="t" :size="13" color="accent" :weight="500" />
-                </Box>
-              </Stack>
-              <Text value="wrap" :size="12" color="secondaryLabel" />
             </Stack>
           </Stack>
         </Stack>
       </Stack>
     </Box>
   </scroll>
+
+  <!-- In the strip right of the column (main.ts: the column is GALLERY_COLUMN of the width; through the playground
+       camera, x = 2.55 keeps the panel in that strip and on screen from 4:3 to 16:9). 340 × 232 pt at 244 pt per unit:
+       1.39 × 0.95 units. Seen from the camera it is already ≈ 0.34 rad off-axis there, so −0.35 turns it to face the
+       viewer: it reads as 3D by its perspective (the near, right edge ≈ 7 % taller), not by a visible slant. -->
+  <Surface :width="340" :height="232" :position="[2.55, 0.9, 0]" :rotation="[0, -0.35, 0]" background="glass" :radius="28">
+    <Stack id="world-panel" justify="between" :style="{ padding: 24, flexGrow: 1 }">
+      <Stack :gap="10">
+        <Stack direction="horizontal" :gap="10" align="center">
+          <Icon name="star" :size="24" color="accent" />
+          <Text value="世界层 World layer" size="lg" :weight="700" />
+        </Stack>
+        <Text value="一块世界层 Surface：场景里的玻璃面板，绕 Y 轴转了 −0.35 rad，有自己的悬停与点击。" size="sm" color="secondaryLabel" />
+      </Stack>
+      <Box
+        id="world-tap" tw="flex-row items-center gap-2"
+        :style="{ alignSelf: 'flex-start', paddingX: 14, paddingY: 8, radius: 'capsule', bg: chip, hover: { bg: chipHover }, pressed: { scale: 0.96 }, transition: { bg: 'smooth', scale: 'snappy' } }"
+        @click="taps++"
+      >
+        <Icon name="check" :size="18" color="accent" />
+        <Text :value="taps ? `点了 ${taps} 次` : '悬停、点我试试'" size="sm" :weight="600" color="accent" />
+      </Box>
+    </Stack>
+  </Surface>
 </template>

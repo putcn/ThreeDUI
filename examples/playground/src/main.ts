@@ -1,5 +1,5 @@
 // GlassUI playground: the sign-up form (a screen-layer Surface) and a world-layer Surface over a host three.js scene,
-// and the @glassui/vue component gallery (a full-screen screen-layer Surface).
+// and the @glassui/vue component gallery (a screen-layer column, with a world-layer panel beside it).
 //   ?scene=signup|world|both|gallery  (default both)   ?quality=high|medium|low|minimal  (default auto)   ?webgl  (force WebGL2)
 //   ?hud=0  (no HUD: the visual harness's screenshots must not hold the live fps text; an error still shows)
 //   ?motion=frozen|live  (default live; frozen: the gallery's transitions complete at once, for screenshots)
@@ -30,6 +30,8 @@ export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURend
 declare global { interface Window { __glassui?: PlaygroundHandle } }
 
 const SCENES = ['signup', 'world', 'both', 'gallery'] as const
+/** The gallery's column: this share of the viewport width; Gallery.vue's world panel stands in the rest. */
+const GALLERY_COLUMN = 0.68
 type SceneMode = (typeof SCENES)[number]
 const params = new URLSearchParams(location.search)
 const forceWebGL = params.has('webgl')
@@ -95,10 +97,15 @@ async function start(): Promise<UIRoot> {
   }
   if (mode === 'world' || mode === 'both') surfaces.push(buildWorld(root))
   if (mode === 'gallery') {
-    // a full-screen screen Surface (`fill` keeps it the viewport's size) with no slab: the gallery over the wall
-    const page = root.createSurface({ fill: true, width: innerWidth, height: innerHeight, background: 'none' })
+    // a screen Surface with no slab, the gallery over the wall: a full-height column on the left, kept at that size on
+    // resize. Not the whole viewport: the gallery's world-layer panel (Gallery.vue) stands in the strip to its right,
+    // where a full-width page would cover it and, its scroll root taking the pointer everywhere, catch its hover and clicks.
+    const column = (): [number, number] => [Math.round(innerWidth * GALLERY_COLUMN), innerHeight]
+    const [width, height] = column()
+    const page = root.createSurface({ left: 0, top: 0, width, height, background: 'none' })
     createGlassApp(Gallery, { root, motion }).mount(page)
-    surfaces.push(page)
+    addEventListener('resize', () => page.setSize(...column()))
+    surfaces.push(page, ...root.surfaces.filter(s => s !== page))   // and the Surfaces the gallery made (its world panel)
   }
   handle.root = root
   handle.surfaces = surfaces
