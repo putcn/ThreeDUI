@@ -28,20 +28,27 @@ function slotText(children: readonly unknown[] | undefined): string {
     else if (Array.isArray(c)) out += slotText(c)
     else if (isVNode(c) && c.type === TextVNode) out += String(c.children ?? '')
     else if (isVNode(c) && c.type === Fragment && Array.isArray(c.children)) out += slotText(c.children)
-    else if (!(isVNode(c) && c.type === Comment)) throw new GlassUIError('Text', '默认插槽只能是纯文本（图标与文字并排请用 <Stack direction="horizontal">）')
+    else if (!(isVNode(c) && c.type === Comment)) throw new GlassUIError('Text.default', '默认插槽只能是纯文本（图标与文字并排请用 <Stack direction="horizontal">）')
   }
   return out
 }
+/** Whitespace a template leaves at a slot's edges (`<Text>\n  文字\n</Text>` condenses to " 文字 "), dropped as HTML does. */
+const EDGE_WS = /^[ \t\n\r\f]+|[ \t\n\r\f]+$/g
+/**
+ * A fragment run's edge spaces as no-break spaces: each run is its own text node, and the text engine hangs a line's
+ * trailing spaces outside its width (CSS-like), so "状态 " would lose the space before the next run.
+ */
+const keepEdgeSpaces = (t: string): string => t.replace(/^ +| +$/g, m => '\u00a0'.repeat(m.length))
 
 export const Text = defineGlassComponent({
   name: 'Text',
-  description: '一段文字（支持中文与系统字体回退）。value 或默认插槽给出内容；value 也可以是片段数组（各自颜色/字重/字号，按行排成可换行的一排，片段内部不再跨片段重排）。不可选择、不可编辑：输入用 Input。',
+  description: '一段文字（支持中文与系统字体回退）。value 或默认插槽给出内容（二选一；插槽首尾空白会去掉）；value 也可以是片段数组：各自颜色/字重/字号，排成可换行的一排，片段首尾的空格保留，换行只发生在片段之间或片段内部，不跨片段重排；片段数组不支持 maxLines，wrap: false 让整排与每个片段都不换行。不可选择、不可编辑：输入用 Input。',
   props: z.object({
     value: z.union([z.string(), z.array(Run)]).optional().describe('文字内容；省略时用默认插槽的纯文本'),
     size: z.union([z.number().positive(), z.string()]).optional().describe('字号，pt 数字或 fontSize token（xs/sm/base/lg/xl/2xl/3xl/4xl）'),
     weight: Weight.optional().describe('字重 100–900'),
     color: z.string().optional().describe('颜色 token（label、secondaryLabel、accent…）或 #hex'),
-    maxLines: z.number().int().min(1).optional().describe('最多行数，超出以 … 截断'),
+    maxLines: z.number().int().min(1).optional().describe('最多行数，超出以 … 截断（片段数组不支持）'),
     align: z.enum(['left', 'center', 'right']).optional().describe('对齐（片段数组时对齐整排）'),
     wrap: z.boolean().optional().describe('是否在宽度处换行（默认 true）'),
   }),
@@ -67,14 +74,16 @@ export const Text = defineGlassComponent({
       ...(v.color !== undefined ? { color: v.color } : {}), ...(v.maxLines !== undefined ? { maxLines: v.maxLines } : {}),
       ...(v.align !== undefined ? { textAlign: v.align } : {}), ...(v.wrap !== undefined ? { wrap: v.wrap } : {}),
     }
-    if (!Array.isArray(v.value)) return h('text', { style }, v.value ?? slotText(slots.default?.()))
+    if (v.value !== undefined && slots.default) throw new GlassUIError('Text', 'value 和默认插槽不能同时给出：二选一')
+    if (!Array.isArray(v.value)) return h('text', { style }, v.value ?? slotText(slots.default?.()).replace(EDGE_WS, ''))
     // fragments: one text node per run in a row that wraps between runs; `align` places the row's runs
+    if (v.maxLines !== undefined) throw new GlassUIError('Text.maxLines', '片段数组不支持 maxLines（各片段是独立的文字，无法一起截断）：用字符串 value')
     const { textAlign: _align, ...typo } = style
     const row: Style = { flexDirection: 'row', flexWrap: v.wrap === false ? 'nowrap' : 'wrap', alignItems: 'baseline', ...(v.align && v.align !== 'left' ? { justifyContent: JUSTIFY[v.align] } : {}) }
     return h('box', { style: row }, v.value.map((f, i) => {
       if (f.color !== undefined) colorOf(`Text.value.${i}.color`, f.color, theme, scheme)
       const own: Style = { ...(f.size !== undefined ? { fontSize: f.size } : {}), ...(f.weight !== undefined ? { fontWeight: f.weight } : {}), ...(f.color !== undefined ? { color: f.color } : {}) }
-      return h('text', { style: { ...typo, ...own } }, f.text)
+      return h('text', { style: { ...typo, ...own } }, keepEdgeSpaces(f.text))
     }))
   }
 })

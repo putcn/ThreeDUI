@@ -11,9 +11,11 @@ export default defineConfig({
     vue({ template: { compilerOptions: { isCustomElement: tag => ['box', 'text', 'image', 'glass', 'scroll', 'portal'].includes(tag) } } }),
   ],
   resolve: {
-    // one Vue runtime: the SFCs import `vue`, @glassui/vue imports `@vue/runtime-core`; two copies would split `h`, the
-    // current instance and the scheduler
-    dedupe: ['vue', '@vue/runtime-core', '@vue/reactivity', '@vue/shared'],
+    // One Vue runtime: the SFCs import `vue`, @glassui/vue imports `@vue/runtime-core`; two copies would split `h`, the
+    // current instance and the scheduler. They are one because pnpm resolves `vue`'s runtime-core and @glassui/vue's to
+    // the same store path (both pinned to the same exact version: packages/vue/test/runtime-pin.test.ts); dedupe can only
+    // name this package's own dependencies, so it keeps `vue` itself single should another workspace package bring one.
+    dedupe: ['vue'],
   },
   build: {
     outDir: process.env.GLASSUI_OUT ?? 'dist',

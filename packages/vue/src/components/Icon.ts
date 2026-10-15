@@ -23,6 +23,15 @@ export const Icon = defineGlassComponent({
     { mistake: 'size="20" (a string)', fix: ':size="20"' },
     { mistake: 'name="close"', fix: 'name="x"' },
   ],
+  // names from other icon sets → ours, for the error's suggestion only (an alias is still an invalid name)
+  aliases: {
+    name: {
+      close: 'x', cross: 'x', times: 'x', settings: 'gear', cog: 'gear', ok: 'check', tick: 'check', checkmark: 'check',
+      back: 'chevron-left', previous: 'chevron-left', prev: 'chevron-left', forward: 'chevron-right', next: 'chevron-right',
+      add: 'plus', remove: 'minus', subtract: 'minus', person: 'user', profile: 'user', account: 'user', email: 'mail', envelope: 'mail',
+      alert: 'warning', error: 'warning', favorite: 'heart', like: 'heart', hide: 'eye-slash', show: 'eye', password: 'lock', magnifier: 'search',
+    },
+  },
 }, (p) => {
   const root = useRoot(), scheme = useScheme(), createCanvas = useCanvasFactory()
   // the theme too (a `setTheme` with the same scheme swaps the colours the tokens name)

@@ -10,7 +10,8 @@ import { WebGPURenderer } from 'three/webgpu'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { absoluteRect, type Node, type Rect } from '@glassui/core'
 import { createUIRoot, QUALITY, type QualityTier, type Surface, type UIRoot } from '@glassui/render'
-import { hitSurfaces } from '@glassui/render/internal'   // the orbit guard's own raycast: no public equivalent
+// the orbit guard's own raycast and the host scene's studio environment: no public equivalents
+import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
 import Gallery from './gallery/Gallery.vue'
 import { createHostLights, createWall } from './wall'
@@ -19,10 +20,13 @@ import { buildWorld } from './world'
 
 /**
  * What the visual harness reads: `ready` resolves to the root once the first frame has been drawn; `rectOf(id)` is the
- * CSS px rect (from the canvas's top-left) of the node with that id in any Surface, null when there is none or a
- * corner is behind the camera (the harness hovers and presses at its centre).
+ * CSS px box (from the canvas's top-left) of the node with that id in any Surface — the bounding box of its four
+ * projected corners, and `cx, cy` its projected centre (where the harness hovers and presses). Null when there is no
+ * such node, a corner or the centre is behind the camera, or the centre is off the canvas. Clipping by `scroll` or
+ * `overflow: hidden` ancestors is not considered: a node scrolled out of view still has a rect.
  */
-export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURenderer; root?: UIRoot; surfaces?: Surface[]; rectOf(id: string): Rect | null }
+export interface NodeRect extends Rect { cx: number; cy: number }
+export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURenderer; root?: UIRoot; surfaces?: Surface[]; rectOf(id: string): NodeRect | null }
 declare global { interface Window { __glassui?: PlaygroundHandle } }
 
 const SCENES = ['signup', 'world', 'both', 'gallery'] as const
@@ -75,6 +79,12 @@ ready.catch(showError)
 
 async function start(): Promise<UIRoot> {
   const root = await createUIRoot({ renderer, scene: hostScene, camera, quality })
+  // The spike's host lighting (spikes/glass3d/main.ts): the studio environment at 0.45 on the wall as well as the UI.
+  // The renderer is initialised now (the PMREM needs it). The root runs in its default 'overlay' mode, which never
+  // touches the host scene's environment (only 'shared' fills an empty one), so nothing else sets it. The playground
+  // has no teardown: the texture lives as long as the page.
+  hostScene.environment = createStudioEnvironment(renderer)
+  hostScene.environmentIntensity = 0.45
   root.on('error', e => console.error('[glassui]', e.surface?.name ?? '(no Surface)', e.error))
   const surfaces: Surface[] = []
   if (mode === 'signup' || mode === 'both') {
@@ -133,8 +143,8 @@ async function start(): Promise<UIRoot> {
   return root
 }
 
-/** See `PlaygroundHandle.rectOf`: the node's Surface-pt rect, its four corners projected (`absoluteRect`, `screenFromPoint`). */
-function rectOf(id: string): Rect | null {
+/** See `PlaygroundHandle.rectOf`: the node's Surface-pt rect (`absoluteRect`), its corners and centre projected (`screenFromPoint`). */
+function rectOf(id: string): NodeRect | null {
   const root = handle.root
   if (!root) return null
   const find = (n: Node): Node | null => {
@@ -152,8 +162,10 @@ function rectOf(id: string): Rect | null {
       if (!p) return null
       xs.push(p.x); ys.push(p.y)
     }
+    const c = root.screenFromPoint(s, r.x + r.width / 2, r.y + r.height / 2), canvas = renderer.domElement.getBoundingClientRect()
+    if (!c || !(c.x >= 0 && c.x < canvas.width && c.y >= 0 && c.y < canvas.height)) return null
     const left = Math.min(...xs), top = Math.min(...ys)
-    return { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top }
+    return { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top, cx: c.x, cy: c.y }
   }
   return null
 }

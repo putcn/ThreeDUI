@@ -5,7 +5,7 @@ import {
 import { z } from 'zod'
 import { GlassUIError } from '@glassui/core'
 import { mergeStyle } from './renderer'
-import { parseProps } from './validate'
+import { parseProps, type PropAliases } from './validate'
 
 /** A component's manifest entry (spec §8.2): what an agent reads to use it. */
 export interface GlassComponentMeta<P extends z.ZodObject> {
@@ -20,6 +20,8 @@ export interface GlassComponentMeta<P extends z.ZodObject> {
   /** 2–3 template snippets, each a complete `<Comp …>` usage. */
   examples: string[]
   mistakes?: { mistake: string; fix: string }[]
+  /** Per enum prop, names an agent may reach for → the value they mean (`{ name: { close: 'x' } }`): an invalid value's suggestion. */
+  aliases?: PropAliases
 }
 export type GlassComponent<P extends z.ZodObject = z.ZodObject> = Component & { readonly glass: GlassComponentMeta<P> }
 
@@ -90,7 +92,7 @@ export function defineGlassComponent<P extends z.ZodObject>(meta: GlassComponent
       // the parse never throws inside a computed (one that threw hands its last value to the next reader until its
       // sources change): `parsed` holds the result, `p` re-throws on every read while the props are invalid
       const parsed = computed((): { data: z.output<P> } | { error: unknown } => {
-        try { return { data: parseProps(meta.name, meta.props, raw as Record<string, unknown>) } } catch (error) { return { error } }
+        try { return { data: parseProps(meta.name, meta.props, raw as Record<string, unknown>, meta.aliases) } } catch (error) { return { error } }
       })
       const p = toRef(() => { const r = parsed.value; if ('error' in r) throw r.error; return r.data }) as unknown as ComputedRef<z.output<P>>
       const render = setup(p, ctx as SetupContext)

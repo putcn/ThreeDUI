@@ -4,6 +4,7 @@ export { createGlassRenderer, setStyleLayer, HOST_TAGS, type GlassRendererOption
 export { GLASS_ROOT, GLASS_SURFACE, GLASS_OPTIONS } from './keys'
 export type { GlassRoot } from './root'
 export { defineGlassComponent, glassComponents, type GlassComponent, type GlassComponentMeta } from './define'
+export type { PropAliases } from './validate'
 export { useRoot, useSurface, useMotion, useCanvasFactory, useScheme } from './inject'
 export { GlassTransition } from './transition'
 export type { TransitionPreset } from './motion'

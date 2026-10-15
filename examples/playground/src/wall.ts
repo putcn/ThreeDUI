@@ -40,11 +40,13 @@ export function createWall(): Mesh {
 
 /**
  * The host scene's own lights (the UI scene has its lights and environment): a sky/ground hemisphere and a soft,
- * non-shadowing key from the top-left front. The key's target is returned too, so it sits in the scene graph.
+ * non-shadowing key (1.8, as in `spikes/glass3d/main.ts`) from the top-left front. The key's target is returned too, so
+ * it sits in the scene graph. The spike's other light, the studio environment at 0.45, is set by `main.ts` once the
+ * renderer is initialised; with both the wall reads as the spike's bright pastel gradient.
  */
 export function createHostLights(): Object3D[] {
   const hemi = new HemisphereLight(0xffffff, 0x8899bb, 0.65)
-  const key = new DirectionalLight(0xffffff, 1.2)
+  const key = new DirectionalLight(0xffffff, 1.8)
   key.position.set(-0.9, 3, 5)
   key.castShadow = false
   return [hemi, key, key.target]

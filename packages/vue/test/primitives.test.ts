@@ -1,6 +1,9 @@
-import { it, expect } from 'vitest'
-import { h, nextTick, ref } from '@vue/runtime-core'
-import { defaultTheme, resolveColor, type Theme } from '@glassui/core'
+import { it, expect, vi } from 'vitest'
+import { Fragment, h, nextTick, ref } from '@vue/runtime-core'
+import { createCanvas } from '@napi-rs/canvas'
+import { defaultTheme, hitTest, resolveColor, type Theme } from '@glassui/core'
+import { SystemFontEngine } from '@glassui/text'
+import { createGlassApp } from '../src/app'
 import { glassComponents } from '../src/define'
 import { Box } from '../src/components/Box'
 import { Text } from '../src/components/Text'
@@ -22,7 +25,8 @@ it('Text takes slot text', () => {
 it('Text fragments render as a wrapping row of runs', () => {
   const { c } = mountGlass(() => h(Text, { value: [{ text: 'A ' }, { text: 'link', color: 'accent', weight: 700 }] }))
   const row = first(c, 'box'); expect(row.style).toMatchObject({ flexDirection: 'row', flexWrap: 'wrap' })
-  expect(row.children.map(n => n.props.value)).toEqual(['A ', 'link'])
+  // a run's edge spaces become no-break spaces, which the text engine keeps (fix round 1, D13): brief expected 'A '
+  expect(row.children.map(n => n.props.value)).toEqual(['A\u00a0', 'link'])
 })
 it('Icon rasterises at 2× into a cached canvas; an unknown name suggests (Review Focus 5)', () => {
   const { c } = mountGlass(() => h('box', [h(Icon, { name: 'check', size: 20 }), h(Icon, { name: 'check', size: 20 })]))
@@ -47,7 +51,7 @@ it('Text maps maxLines, align and wrap; absent props leave no style keys', () =>
 it('Text takes template-style slot text (several text vnodes, a v-if comment) and rejects anything else in the slot', () => {
   const { c } = mountGlass(() => h(Text, null, () => ['a', 'b', null]))
   expect(first(c, 'text').props.value).toBe('ab')
-  expect(mountGlass(() => h(Text, null, () => [h('box')])).errors[0]).toMatch(/\[Text\] 默认插槽只能是纯文本/)
+  expect(mountGlass(() => h(Text, null, () => [h('box')])).errors[0]).toMatch(/\[Text\.default\] 默认插槽只能是纯文本/)
 })
 it('Text: a fragment run keeps the Text\'s typography and overrides it; align moves the row; wrap: false keeps one row', () => {
   const { c } = mountGlass(() => h(Text, { value: [{ text: 'A' }, { text: 'B', size: 30, color: '#ff0000', weight: 800 }], size: 'lg', color: 'secondaryLabel', align: 'right', wrap: false }))
@@ -139,4 +143,78 @@ it('the primitives are registered with complete manifest metadata', () => {
     for (const [k, s] of Object.entries(m.props.shape)) expect((s as { description?: string }).description, `${name}.${k}`).toBeTruthy()
   }
   expect(byName.get('Icon')!.mistakes).toEqual(expect.arrayContaining([{ mistake: 'size="20" (a string)', fix: ':size="20"' }, { mistake: 'name="close"', fix: 'name="x"' }]))
+})
+
+// ── fix round 1 ──
+
+it('a bad fragment is reported at its field: wrong type, missing key, unknown key with a suggestion (B1)', () => {
+  expect(mountGlass(() => h(Text, { value: [{ text: 'a', weight: '600' }] })).errors[0]).toMatch(/\[Text\.value\.0\.weight\] 类型应为 number，得到 string（模板里数字和布尔值要写成 :prop="…"）$/)
+  expect(mountGlass(() => h(Text, { value: [{ txt: 'a' }] })).errors[0]).toMatch(/\[Text\.value\.0\.text\] 缺少必填属性/)
+  expect(mountGlass(() => h(Text, { value: [{ text: 'a' }, { text: 'b', colour: 'red' }] })).errors[0]).toMatch(/\[Text\.value\.1\] 未知属性 "colour"。允许值：text, color, weight, size。你可能想要：color$/)
+})
+it('out-of-range numbers read in Chinese with their bounds; a custom message is kept (C5)', () => {
+  expect(mountGlass(() => h(Text, { value: 'x', weight: 1000 })).errors[0]).toMatch(/\[Text\.weight\] 超出范围（100–900），得到 1000$/)
+  expect(mountGlass(() => h(Icon, { name: 'x', weight: 0.9 })).errors[0]).toMatch(/\[Icon\.weight\] 超出范围（0–0\.5），得到 0\.9$/)
+  expect(mountGlass(() => h(Text, { value: 'x', maxLines: 0 })).errors[0]).toMatch(/\[Text\.maxLines\] 不能小于 1，得到 0$/)
+  expect(mountGlass(() => h(Stack, { gap: -1 })).errors[0]).toMatch(/\[Stack\.gap\] 不能小于 0，得到 -1$/)
+  expect(mountGlass(() => h(Text, { value: [{ text: 'a', size: -3 }] })).errors[0]).toMatch(/\[Text\.value\.0\.size\] 应大于 0，得到 -3$/)
+})
+it('Stack: a tw / class layout class that its props would override is an error naming the prop to use (B2)', () => {
+  const err = (attrs: Record<string, unknown>) => mountGlass(() => h(Stack, attrs, () => [h(Box)])).errors[0]
+  expect(err({ tw: 'gap-4' })).toMatch(/\[Stack\.tw\] "gap-4" 与 Stack 的 gap 属性冲突.*：用 :gap="16"$/)
+  expect(err({ class: ['p-2', 'flex-row'] })).toMatch(/\[Stack\.class\] "flex-row" 与 Stack 的 direction 属性冲突.*用 direction="horizontal"$/)
+  expect(err({ tw: 'p-4 items-center' })).toMatch(/\[Stack\.tw\] "items-center" 与 Stack 的 align 属性冲突.*用 align="center"$/)
+  expect(err({ tw: 'justify-between' })).toMatch(/用 justify="between"$/)
+  expect(err({ tw: 'flex-wrap' })).toMatch(/\[Stack\.tw\] "flex-wrap" 与 Stack 的 wrap 属性冲突.*用 wrap（布尔属性）$/)
+  const ok = mountGlass(() => h(Stack, { tw: 'p-4 bg-accent rounded-lg' }, () => [h(Box)]))
+  expect(ok.errors).toEqual([]); expect(first(ok.c, 'box').style).toMatchObject({ padding: 16, bg: 'accent', radius: 'lg', flexDirection: 'column', gap: 8 })
+})
+it('Stack z: the pointer passes through a layer\'s empty area to the layer below (B3)', () => {
+  const root = createFakeRoot(), s = root.createSurface({ width: 200, height: 200 })
+  const app = createGlassApp({ render: () => h(Stack, { direction: 'z', style: { width: 100, height: 100 } }, () => [
+    h(Box, { id: 'base', tw: 'w-full h-full' }),
+    h(Box, { id: 'badge', style: { width: 20, height: 20 } }),
+  ]) }, { root, createCanvas: napiCanvas })
+  app.mount(s as never); root.tick()
+  expect(hitTest(s.root, 80, 80)!.id).toBe('base')     // outside the badge: through the top layer's empty area
+  expect(hitTest(s.root, 10, 10)!.id).toBe('badge')
+})
+it('Text: a slot\'s edge whitespace is trimmed (template condensing); value and a slot together are an error (C4)', () => {
+  expect(first(mountGlass(() => h(Text, null, () => ['\n  很长的说明文字', ' 第二行  \n'])).c, 'text').props.value).toBe('很长的说明文字 第二行')
+  expect(mountGlass(() => h(Text, { value: 'a' }, () => 'b')).errors[0]).toMatch(/\[Text\] value 和默认插槽不能同时给出：二选一/)
+})
+it('Stack z: a v-if branch key and a v-for item key never collide; a keyed reorder in the v-for moves its layers (C6)', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const show = ref(true), order = ref([0, 1])
+  // as a template compiles `<Box v-if="show" /><Box v-for="k in order" :key="k" />`: the v-if branch is keyed 0
+  const { c, errors } = mountGlass(() => h(Stack, { direction: 'z', style: { width: 10, height: 10 } }, () => [
+    show.value ? h(Box, { key: 0, id: 'top' }) : null, h(Fragment, order.value.map(k => h(Box, { key: k, id: `f${k}` }))),
+  ]))
+  const z = first(c, 'box'), ids = () => z.children.map(w => w.children[0]!.id), [, w0, w1] = z.children
+  expect(ids()).toEqual(['top', 'f0', 'f1'])
+  show.value = false; await nextTick()
+  expect(ids()).toEqual(['f0', 'f1']); expect(z.children[0]).toBe(w0); expect(z.children[1]).toBe(w1)   // not top's layer renamed
+  order.value = [1, 0]; await nextTick()
+  expect(ids()).toEqual(['f1', 'f0']); expect(z.children[0]).toBe(w1); expect(z.children[1]).toBe(w0)
+  expect(errors).toEqual([]); expect(warn).not.toHaveBeenCalled()
+  warn.mockRestore()
+})
+it('Icon: a name from another icon set suggests ours (C9)', () => {
+  expect(mountGlass(() => h(Icon, { name: 'close' })).errors[0]).toMatch(/\[Icon\.name\] 非法取值 "close"。允许值：user, mail,.*heart。你可能想要：x$/)
+  expect(mountGlass(() => h(Icon, { name: 'Settings' })).errors[0]).toMatch(/你可能想要：gear$/)
+  expect(mountGlass(() => h(Icon, { name: 'constructor' })).errors[0]).toMatch(/\[Icon\.name\] 非法取值 "constructor"。允许值：[^。]*$/)   // own entries only
+})
+it('Text: fragments with maxLines are an error (C12)', () => {
+  expect(mountGlass(() => h(Text, { value: [{ text: 'a' }], maxLines: 2 })).errors[0]).toMatch(/\[Text\.maxLines\] 片段数组不支持 maxLines/)
+})
+it('the text engine keeps a no-break space at a run\'s end, where it hangs an ordinary one (D13)', () => {
+  const engine = new SystemFontEngine({ createCanvas: (w, hh) => createCanvas(w, hh) as never, pageSize: 256 })
+  const run = (text: string) => ({ text, font: { family: 'sans-serif', size: 20, weight: 400 } })
+  const a = engine.measure(run('A'), {}).width
+  expect(engine.measure(run('A '), {}).width).toBe(a)                         // why the runs need it
+  expect(engine.measure(run('A '), {}).width).toBeGreaterThan(a + 2)       // a space's advance
+  expect(engine.measure(run(' A'), {}).width).toBeGreaterThan(a + 2)
+  expect(engine.layout(run('A '), undefined, 'left').map(g => g.char)).toEqual(['A'])   // drawn as a gap
+  const { c } = mountGlass(() => h(Text, { value: [{ text: '状态 ' }, { text: '  ·  ' }, { text: 'a b' }] }))
+  expect(first(c, 'box').children.map(n => n.props.value)).toEqual(['状态 ', '  ·  ', 'a b'])
 })
