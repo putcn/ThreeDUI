@@ -80,15 +80,26 @@ export function setStyleLayer(node: Node, layer: StyleLayer, style: Style | null
 const EMPTY: Style = { position: 'absolute', width: 0, height: 0 }
 const EVENT_PROPS = UI_EVENT_TYPES.map(t => `on${t[0]!.toUpperCase()}${t.slice(1)}`)
 
+export interface GlassRendererOptions {
+  root: GlassRoot
+  /**
+   * Reports an error that must not be thrown: a Teleport target that is not there (`querySelector` runs inside Vue's
+   * post-flush callbacks for `defer`, which do not catch). Default `console.error`; `createGlassApp` passes its app's
+   * error handler (console + marker).
+   */
+  onError?: (err: unknown) => void
+}
+
 /**
  * A Vue renderer over core `Node`s (spec §8.1). `querySelector` (Teleport's `to`) looks through the containers its
  * apps are mounted in and every Surface of `root`: `#id` finds a node by id, a bare name a `portal` with that `name`;
- * a miss throws a `GlassUIError` (Vue would only warn and drop the children). An error while mounting goes to
- * `app.config.errorHandler` when one is set (Vue rethrows it from `mount` otherwise), after the nodes the failed mount
- * inserted into the container are taken out again.
+ * a miss is reported as a `GlassUIError` through `opts.onError` (Vue itself only warns and drops the children) and
+ * yields null. An error while mounting goes to `app.config.errorHandler` when one is set (Vue rethrows it from `mount`
+ * otherwise), after the nodes the failed mount inserted into the container are taken out again.
  */
-export function createGlassRenderer(opts: { root: GlassRoot }): { render: RootRenderFunction<Node>; createApp: CreateAppFunction<Node> } {
+export function createGlassRenderer(opts: GlassRendererOptions): { render: RootRenderFunction<Node>; createApp: CreateAppFunction<Node> } {
   const { root } = opts
+  const report = opts.onError ?? ((err: unknown) => { console.error('[glassui]', err) })
   const containers = new Set<Node>()
   const textNode = (t: string): Node => { const n = markRaw(new Node('text')); n.setProp('value', t); if (t === '') n.replaceStyle(EMPTY); return n }
   const searched = (): Node[] => [...containers, ...root.surfaces.map(s => s.root)]
@@ -97,14 +108,19 @@ export function createGlassRenderer(opts: { root: GlassRoot }): { render: RootRe
     for (const r of searched()) { r.walk(n => { if (!hit && pred(n)) hit = n }); if (hit) break }
     return hit
   }
-  /** Teleport's `to`: `#id` or a portal's name; a miss is an error, with the portal names there are as the allowed values. */
-  const teleportTarget = (sel: string): Node => {
+  /**
+   * Teleport's `to`: `#id` or a portal's name. A miss is reported (with the portal names there are as the allowed
+   * values), never thrown: a throw from a deferred Teleport's lookup would escape Vue's scheduler and stall it.
+   */
+  const teleportTarget = (sel: string): Node | null => {
     const byId = sel.startsWith('#')
     const hit = byId ? find(n => n.id === sel.slice(1)) : find(n => n.type === 'portal' && n.props.name === sel)
     if (hit) return hit
     const names = new Set<string>()
     if (!byId) for (const r of searched()) r.walk(n => { if (n.type === 'portal' && typeof n.props.name === 'string') names.add(n.props.name) })
-    throw new GlassUIError('Teleport', `找不到目标 "${sel}"（to 可以是 Node、"#id" 或 portal 的 name，目标须在 Teleport 挂载前已在树中；与 Teleport 同一次渲染出来的 portal 要写成 <Teleport defer to="${sel}">）`, { allowed: [...names], got: sel })
+    const err = new GlassUIError('Teleport', `找不到目标 "${sel}"（to 可以是 Node、"#id" 或 portal 的 name，目标须在 Teleport 挂载前已在树中；与 Teleport 同一次渲染出来的 portal 要写成 <Teleport defer to="${sel}">）`, { allowed: [...names], got: sel })
+    try { report(err) } catch (e) { console.error('[glassui] the error reporter threw:', e, 'reporting:', err) }   // never out of a lookup
+    return null
   }
   const ops: RendererOptions<Node, Node> = {
     createElement(tag, _ns, _is, props) {

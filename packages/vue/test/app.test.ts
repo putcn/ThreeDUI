@@ -1,5 +1,5 @@
 import { it, expect, vi } from 'vitest'
-import { defineComponent, h, inject, nextTick, ref } from '@vue/runtime-core'
+import { defineComponent, h, inject, nextTick, onMounted, ref, Teleport } from '@vue/runtime-core'
 import { Node } from '@glassui/core'
 import { createGlassApp } from '../src/app'
 import { createGlassRenderer } from '../src/renderer'
@@ -86,6 +86,23 @@ it('a first mount that fails half-way leaves only the marker; fixing the cause m
   bad.value = false; await nextTick()
   expect(tree(container).children!.map(c => c.id)).toEqual(['glassui-error', 'first', 'second'])
   err.mockRestore()
+})
+it('a deferred Teleport whose target is missing at mount is reported (console + marker); the tree stays and keeps updating', async () => {
+  const err = vi.spyOn(console, 'error').mockImplementation(() => {}), warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  const root = createFakeRoot(), n = ref(0), container = new Node('box')
+  createGlassApp(defineComponent(() => () => h('box', { id: 'outer' }, [
+    h('text', { id: 'count' }, String(n.value)), h(Teleport, { to: 'nope', defer: true }, [h('box', { id: 'lost' })]), h('box', { id: 'after' }),
+  ])), { root }).mount(container)
+  expect(err).toHaveBeenCalledWith('[glassui]', expect.objectContaining({ message: expect.stringMatching(/\[Teleport\] 找不到目标 "nope".*defer/) }))
+  expect(tree(container).children!.map(c => c.id)).toEqual(['outer', 'glassui-error'])
+  expect(tree(container).children![0]!.children!.map(c => c.id)).toEqual(['count', 'after'])
+  expect(container.children.find(c => c.id === 'glassui-error')!.props.value).toMatch(/找不到目标 "nope"/)
+  n.value = 1; await nextTick()                           // later updates still render
+  expect(container.children[0]!.children.find(c => c.id === 'count')!.props.value).toBe('1')
+  let mounted = false                                     // and a later app's post-flush hooks still run
+  createGlassApp(defineComponent(() => { onMounted(() => { mounted = true }); return () => null }), { root }).mount()
+  expect(mounted).toBe(true)
+  err.mockRestore(); warn.mockRestore()
 })
 it('errorMarker: false logs without a marker', () => {
   const err = vi.spyOn(console, 'error').mockImplementation(() => {})

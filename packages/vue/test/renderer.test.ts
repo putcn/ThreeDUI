@@ -1,16 +1,23 @@
-import { describe, it, expect } from 'vitest'
-import { h, nextTick, reactive, ref, Teleport, Fragment, defineComponent } from '@vue/runtime-core'
+import { describe, it, expect, vi } from 'vitest'
+import { h, nextTick, onMounted, reactive, ref, Teleport, Fragment, defineComponent } from '@vue/runtime-core'
 import { Node } from '@glassui/core'
 import { createGlassRenderer, setStyleLayer } from '../src/renderer'
 import { createFakeRoot } from './fixtures/fake-root'
 import { tree } from './fixtures/tree'
 
-const mount = (comp: unknown) => {
-  const root = createFakeRoot(), container = new Node('box', 'c')
-  const app = createGlassRenderer({ root }).createApp(comp as never)
-  const errors: unknown[] = []; app.config.errorHandler = e => { errors.push(e) }
+/** Mounts `comp` with a bare renderer; `errors` collects what the app's error handler and the renderer's `onError` get. */
+const mount = (comp: unknown, root = createFakeRoot()) => {
+  const container = new Node('box', 'c'), errors: unknown[] = []
+  const app = createGlassRenderer({ root, onError: e => { errors.push(e) } }).createApp(comp as never)
+  app.config.errorHandler = e => { errors.push(e) }
   app.mount(container)
   return { root, container, app, errors }
+}
+/** Whether post-flush callbacks still run (a later app's `onMounted`): a throw escaping Vue's post flush stalls them for good. */
+const postFlushRuns = (): boolean => {
+  let ran = false
+  createGlassRenderer({ root: createFakeRoot() }).createApp(defineComponent(() => { onMounted(() => { ran = true }); return () => null })).mount(new Node('box'))
+  return ran
 }
 
 describe('nodeOps', () => {
@@ -154,16 +161,44 @@ describe('nodeOps', () => {
     app.mount(new Node('box'))
     expect(dest.children.map(n => n.id)).toContain('moved')
   })
-  it('a Teleport target that is not there is an error: the defer hint, and a suggestion among the portals', () => {
-    const missing = mount(() => h('box', [h('portal', { name: 'overlay' }), h(Teleport, { to: 'overlay' }, [h('box')])]))   // same pass, no defer
-    expect(String(missing.errors[0])).toMatch(/\[Teleport\] 找不到目标 "overlay".*<Teleport defer to="overlay">/)
+  it('a Teleport target that is not there is reported: the defer hint, and a suggestion among the portals', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})   // Vue's own "Failed to locate Teleport target"
+    const missing = mount(() => h('box', { id: 'outer' }, [h('portal', { name: 'overlay' }), h(Teleport, { to: 'overlay' }, [h('box')]), h('box', { id: 'after' })]))   // same pass, no defer
+    expect(missing.errors.map(String)).toEqual([expect.stringMatching(/\[Teleport\] 找不到目标 "overlay".*<Teleport defer to="overlay">/)])
+    expect(tree(missing.container).children![0]!.children!.map(c => c.id ?? c.type)).toEqual(['portal', 'after'])   // the rest is mounted
     const root = createFakeRoot(), s = root.createSurface({ width: 100, height: 100 })
     const portal = new Node('portal'); portal.setProp('name', 'overlay'); s.root.appendChild(portal)
-    const app = createGlassRenderer({ root }).createApp(() => h(Teleport, { to: 'overlya' }, [h('box')]))
-    const errors: unknown[] = []; app.config.errorHandler = e => { errors.push(e) }
-    app.mount(new Node('box'))
-    expect(String(errors[0])).toMatch(/\[Teleport\] 找不到目标 "overlya".*允许值：overlay。你可能想要：overlay/)
+    expect(String(mount(() => h(Teleport, { to: 'overlya' }, [h('box')]), root).errors[0])).toMatch(/\[Teleport\] 找不到目标 "overlya".*允许值：overlay。你可能想要：overlay/)
     expect(String(mount(() => h(Teleport, { to: '#nope' }, [h('box')])).errors[0])).toMatch(/\[Teleport\] 找不到目标 "#nope"/)
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})   // no onError: the console
+    createGlassRenderer({ root: createFakeRoot() }).createApp(() => h(Teleport, { to: 'nope' }, [h('box')])).mount(new Node('box'))
+    expect(err).toHaveBeenCalledWith('[glassui]', expect.objectContaining({ message: expect.stringMatching(/\[Teleport\] 找不到目标 "nope"/) }))
+    err.mockRestore(); warn.mockRestore()
+  })
+  it('a deferred Teleport whose target appears missing on an update is reported; the tree and the scheduler keep working', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const show = ref(false), n = ref(0)
+    const { container, errors } = mount(() => h('box', { id: 'outer' }, [
+      h('text', { id: 'count' }, String(n.value)),
+      show.value ? h(Teleport, { to: 'nope', defer: true }, [h('box', { id: 'lost' })]) : null,
+      h('box', { id: 'after' }),
+    ]))
+    show.value = true; await nextTick()
+    expect(errors.map(String)).toEqual([expect.stringMatching(/\[Teleport\] 找不到目标 "nope".*<Teleport defer to="nope">/)])
+    const ids = () => tree(container).children![0]!.children!.map(c => c.id)
+    expect(ids()).toEqual(['count', 'after'])
+    n.value = 1; await nextTick()                         // later updates still render
+    expect(container.children[0]!.children.find(c => c.id === 'count')!.props.value).toBe('1')
+    show.value = false; await nextTick()                  // and the Teleport that never found its target unmounts
+    n.value = 2; await nextTick()
+    expect(ids()).toEqual(['count', 'after']); expect(container.children[0]!.children.find(c => c.id === 'count')!.props.value).toBe('2')
+    expect(postFlushRuns()).toBe(true)
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})   // a reporter that throws is logged, not rethrown
+    const boom = createGlassRenderer({ root: createFakeRoot(), onError: () => { throw new Error('reporter') } })
+    boom.createApp(() => h(Teleport, { to: 'nope', defer: true }, [h('box')])).mount(new Node('box'))
+    expect(err).toHaveBeenCalledWith('[glassui] the error reporter threw:', expect.objectContaining({ message: 'reporter' }), 'reporting:', expect.anything())
+    expect(postFlushRuns()).toBe(true)
+    err.mockRestore(); warn.mockRestore()
   })
   it('removing a focused, pressed node reconciles focus and releases the press (Review Focus 2)', async () => {
     const show = ref(true), clicks: string[] = []

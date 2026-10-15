@@ -1,5 +1,5 @@
 export const VUE_VERSION = '0.0.0'
 export { createGlassApp, type GlassApp, type GlassAppOptions } from './app'
-export { createGlassRenderer, setStyleLayer, HOST_TAGS, type HostTag, type StyleLayer } from './renderer'
+export { createGlassRenderer, setStyleLayer, HOST_TAGS, type GlassRendererOptions, type HostTag, type StyleLayer } from './renderer'
 export { GLASS_ROOT, GLASS_SURFACE, GLASS_OPTIONS } from './keys'
 export type { GlassRoot } from './root'
