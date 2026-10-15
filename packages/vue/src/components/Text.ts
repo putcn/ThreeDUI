@@ -34,6 +34,23 @@ function slotText(children: readonly unknown[] | undefined): string {
 }
 /** Whitespace a template leaves at a slot's edges (`<Text>\n  文字\n</Text>` condenses to " 文字 "), dropped as HTML does. */
 const EDGE_WS = /^[ \t\n\r\f]+|[ \t\n\r\f]+$/g
+const BLANK = /^[ \t\n\r\f]*$/
+/**
+ * Whether a default slot renders anything: text that is not all whitespace, or any element. Comments (a template's
+ * `<!-- … -->` in a dev build, a false `v-if`), empty children and empty fragments do not count.
+ */
+function hasContent(children: readonly unknown[] | undefined): boolean {
+  return (children ?? []).some(c => {
+    if (c == null || typeof c === 'boolean') return false
+    if (typeof c === 'string' || typeof c === 'number') return !BLANK.test(String(c))
+    if (Array.isArray(c)) return hasContent(c)
+    if (!isVNode(c)) return true
+    if (c.type === Comment) return false
+    if (c.type === TextVNode) return !BLANK.test(String(c.children ?? ''))
+    if (c.type === Fragment) return Array.isArray(c.children) && hasContent(c.children)
+    return true
+  })
+}
 /**
  * A fragment run's edge spaces as no-break spaces: each run is its own text node, and the text engine hangs a line's
  * trailing spaces outside its width (CSS-like), so "状态 " would lose the space before the next run.
@@ -74,7 +91,8 @@ export const Text = defineGlassComponent({
       ...(v.color !== undefined ? { color: v.color } : {}), ...(v.maxLines !== undefined ? { maxLines: v.maxLines } : {}),
       ...(v.align !== undefined ? { textAlign: v.align } : {}), ...(v.wrap !== undefined ? { wrap: v.wrap } : {}),
     }
-    if (v.value !== undefined && slots.default) throw new GlassUIError('Text', 'value 和默认插槽不能同时给出：二选一')
+    // a slot that renders nothing (a comment, whitespace) is no conflict: only one with content is
+    if (v.value !== undefined && slots.default && hasContent(slots.default())) throw new GlassUIError('Text', 'value 和默认插槽不能同时给出：二选一')
     if (!Array.isArray(v.value)) return h('text', { style }, v.value ?? slotText(slots.default?.()).replace(EDGE_WS, ''))
     // fragments: one text node per run in a row that wraps between runs; `align` places the row's runs
     if (v.maxLines !== undefined) throw new GlassUIError('Text.maxLines', '片段数组不支持 maxLines（各片段是独立的文字，无法一起截断）：用字符串 value')

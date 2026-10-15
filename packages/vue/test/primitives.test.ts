@@ -1,5 +1,5 @@
 import { it, expect, vi } from 'vitest'
-import { Fragment, h, nextTick, ref } from '@vue/runtime-core'
+import { createCommentVNode, createTextVNode, Fragment, h, nextTick, ref } from '@vue/runtime-core'
 import { createCanvas } from '@napi-rs/canvas'
 import { defaultTheme, hitTest, resolveColor, type Theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
@@ -197,6 +197,16 @@ it('Stack z: inside a pointerEvents \'none\' Box no layer is hit; the layer boxe
 it('Text: a slot\'s edge whitespace is trimmed (template condensing); value and a slot together are an error (C4)', () => {
   expect(first(mountGlass(() => h(Text, null, () => ['\n  很长的说明文字', ' 第二行  \n'])).c, 'text').props.value).toBe('很长的说明文字 第二行')
   expect(mountGlass(() => h(Text, { value: 'a' }, () => 'b')).errors[0]).toMatch(/\[Text\] value 和默认插槽不能同时给出：二选一/)
+})
+it('Text: value with a slot that renders nothing (a template comment, empty, whitespace, a false v-if) is no error; with content it is', () => {
+  // `<Text value="x"><!-- note --></Text>` in a dev build: the slot yields a comment vnode
+  for (const slot of [() => [createCommentVNode(' note ')], () => [], () => null, () => ['\n  ', createTextVNode(' ')], () => [false, h(Fragment, [])]]) {
+    const { c, errors } = mountGlass(() => h(Text, { value: 'x' }, slot))
+    expect(errors).toEqual([]); expect(first(c, 'text').props.value).toBe('x')
+  }
+  for (const slot of [() => [createCommentVNode('c'), ' y '], () => [h(Fragment, [createTextVNode('y')])], () => [h(Icon, { name: 'star' })]]) {
+    expect(mountGlass(() => h(Text, { value: 'x' }, slot)).errors).toEqual([expect.stringMatching(/\[Text\] value 和默认插槽不能同时给出：二选一/)])
+  }
 })
 it('Stack z: a v-if branch key and a v-for item key never collide; a keyed reorder in the v-for moves its layers (C6)', async () => {
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
