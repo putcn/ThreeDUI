@@ -11,6 +11,7 @@ import { PointerBridge, type CanvasLike } from './pointer'
 import { checkQualityTier, defaultTier, QUALITY, QualityController, type QualityProfile, type QualityTier } from './quality'
 import { FrameSampler, FrameScheduler } from './scheduler'
 import { projectPolygon } from './project'
+import { CameraRig, type CameraRigOptions } from './rig'
 
 /** The subset of `WebGPURenderer` the root drives (so tests can pass a stub). */
 export interface UIRenderer extends RendererLike {
@@ -96,6 +97,15 @@ export interface UIRoot {
    */
   removeSurface(surface: Surface): void
   /**
+   * A `CameraRig` on the root's camera (spatial spec §2.2): `focus` springs the camera square-on to a world Surface's rest
+   * pose, with pointer parallax; each `tick` updates it after the Surfaces' motion and before the screen layer and the
+   * lights follow the camera, with the viewport's aspect (`renderer.getSize`) and `anim.reducedMotion`. While it lives
+   * it writes the camera every tick: no other controller may drive the camera meanwhile. One live rig per root (a
+   * second throws a readable `GlassUIError` until the first is disposed); a perspective camera only; throws after
+   * `dispose`, which disposes the rig.
+   */
+  createCameraRig(opts?: CameraRigOptions): CameraRig
+  /**
    * Swaps the theme: the shared context's theme and text measure, the animation runtime's theme, then every Surface
    * restyled (`Surface.restyle`: fills, an opaque background, the glass, every node marked); emits `'theme'`. A theme
    * without `colors.light` / `colors.dark` tables throws a `GlassUIError` and changes nothing. A no-op after `dispose`.
@@ -107,12 +117,12 @@ export interface UIRoot {
    */
   setScheme(scheme: ColorScheme): void
   /**
-   * Surface motion, view culling, layout, animation, content passes, draw order and the shadow fit; `dt` in seconds.
-   * Surface motion steps and billboard world Surfaces turn to face the camera before any matrix is read; a world Surface
-   * out of view (`Surface.culled`) or faded out is neither drawn nor prepared, its content redrawn when it shows again.
-   * `prepare` is told whether the camera (its pose or projection), the Surface or its animation moved (the content RT's
-   * settle-to-shrink); a Surface's motion re-fits the shadows while it runs. Ends by resolving the `afterTick` promises.
-   * A no-op after `dispose`.
+   * Surface motion, the camera rig, view culling, layout, animation, content passes, draw order and the shadow fit; `dt`
+   * in seconds. Surface motion steps, then the camera rig (`createCameraRig`) moves the camera, and billboard world
+   * Surfaces turn to face it, before any matrix is read; a world Surface out of view (`Surface.culled`) or faded out is
+   * neither drawn nor prepared, its content redrawn when it shows again. `prepare` is told whether the camera (its pose
+   * or projection), the Surface or its animation moved (the content RT's settle-to-shrink); a Surface's motion re-fits
+   * the shadows while it runs. Ends by resolving the `afterTick` promises. A no-op after `dispose`.
    */
   tick(dt: number): void
   /**
@@ -196,7 +206,8 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  * scene, so the host's own shadows are affected too (they become VSM, transmitted). Saving and restoring the host's
  * settings is planned; `dispose` leaves them as the root set them.
  *
- * Each `tick`: every Surface's motion steps (`Surface.stepMotion`); the screen layer and the lights follow the camera;
+ * Each `tick`: every Surface's motion steps (`Surface.stepMotion`); the camera rig, if there is one, moves the camera
+ * (`createCameraRig`); the screen layer and the lights follow the camera;
  * billboard world Surfaces turn to face it; world Surfaces out of the view frustum are culled (`Surface.culled`); every
  * Surface ticks; glyphs evicted by a later Surface's are re-laid out; draw orders are assigned (screen Surfaces above
  * world ones, nearer above farther); the content passes of the shown Surfaces draw (a hidden one's wait for it to show
@@ -379,6 +390,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const lastSeen = new WeakMap<Surface, Matrix4>()
   const frustum = new Frustum(), viewProjection = new Matrix4()
   let lastFitted = -1, looping = false, disposed = false
+  /** The last `createCameraRig`'s (a disposed one stays until the next). */
+  let rig: CameraRig | null = null
   const scheduler = new FrameScheduler(), frames = new FrameSampler()
 
   /**
@@ -439,12 +452,23 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       return s
     },
     removeSurface(s) { if (forgetSurface(s)) s.dispose() },
+    createCameraRig(o) {
+      const scope = 'UIRoot.createCameraRig'
+      if (disposed) throw new GlassUIError(scope, 'root 已经 dispose')
+      if (rig && !rig.disposed) throw new GlassUIError(scope, '这个 root 已经有一个 CameraRig：先 dispose 旧的')
+      if (!('isPerspectiveCamera' in camera && camera.isPerspectiveCamera)) throw new GlassUIError(scope, 'CameraRig 只支持 PerspectiveCamera')
+      // the aspect from `size`: `tick` reads the renderer's size just before it updates the rig
+      rig = new CameraRig({ camera, canvas, aspect: () => size.x / size.y, reducedMotion: () => anim.reducedMotion }, o)
+      return rig
+    },
     tick(dt) {
       if (disposed) return
       // the Surfaces' own motion first: every matrix read below sees this tick's pose
       const animating = new Set<Surface>()
       for (const s of surfaces) if (s.stepMotion(dt)) animating.add(s)
       renderer.getSize(size)
+      // the camera rig aims at the Surfaces' rest poses with this size's aspect; the screen layer and lights follow it
+      if (rig && !rig.disposed) rig.update(dt)
       screen.update(camera, { width: size.x, height: size.y })   // also brings camera.matrixWorld up to date
       camera.getWorldPosition(lights.group.position); camera.getWorldQuaternion(lights.group.quaternion)
       lights.group.updateMatrixWorld(true)                         // the key light stays top-left-front of the view
@@ -540,6 +564,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       disposed = true
       if (looping) { looping = false; renderer.setAnimationLoop?.(null) }   // only a loop `autoTick` installed: the host may run its own
       pointer?.detach()
+      rig?.dispose()
       for (const stop of stopMedia) stop()
       if (pointer && canvas.style && touchAction !== undefined) canvas.style.touchAction = touchAction
       for (const s of [...surfaces]) root.removeSurface(s)

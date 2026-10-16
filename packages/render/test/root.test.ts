@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { Box3, PerspectiveCamera, Quaternion, RenderTarget, Scene, Texture, Vector2, Vector3, VSMShadowMap, type DirectionalLight } from 'three'
+import { Box3, OrthographicCamera, PerspectiveCamera, Quaternion, RenderTarget, Scene, Texture, Vector2, Vector3, VSMShadowMap, type DirectionalLight } from 'three'
 import type { WebGPURenderer } from 'three/webgpu'
 import { defaultTheme, GlassUIError, Node, resolveColor, type Theme } from '@glassui/core'
 import { createUIRoot, type UIRenderer, type UIRootOptions } from '../src/root'
@@ -708,6 +708,31 @@ describe('the root API for the Vue layer', () => {
     const p = root.screenFromPoint(c, 0, 0)!
     expect(p.x).toBeCloseTo(300, 3); expect(p.y).toBeCloseTo(250, 3)
     expect(f.model.width).toBe(800); expect(f.model.height).toBe(600)
+  })
+  it('createCameraRig: one live rig per root, perspective only, driven by tick', async () => {
+    const { root, camera } = await createRoot()
+    const rig = root.createCameraRig()
+    expect(() => root.createCameraRig()).toThrow(/\[UIRoot\.createCameraRig\].*已经有/)
+    const s = root.createSurface({ layer: 'world', width: 244, height: 244 }); s.position.set(2, 0, 0)
+    void rig.focus(s, { immediate: true }); root.tick(1 / 60)
+    expect(camera.position.x).toBeCloseTo(2)
+    rig.dispose(); expect(() => root.createCameraRig()).not.toThrow()
+    const o = base(); const ortho = await createUIRoot({ ...o, camera: new OrthographicCamera() })
+    expect(() => ortho.createCameraRig()).toThrow(/PerspectiveCamera/)
+  })
+  it('the rig moves the camera before the screen layer and the lights follow it; root.dispose disposes the rig', async () => {
+    const { root, camera } = await createRoot()
+    const rig = root.createCameraRig()
+    const s = root.createSurface({ layer: 'world', width: 244, height: 244 }); s.position.set(-3, 1, 0)
+    void rig.focus(s, { immediate: true }); root.tick(1 / 60)
+    expect(camera.position.x).toBeCloseTo(-3); expect(camera.position.y).toBeCloseTo(1)
+    // the same tick: the screen layer near · 4 in front of the camera where the rig put it, the lights on it
+    const ahead = new Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
+    expect(root.screen.position.distanceTo(camera.position.clone().addScaledVector(ahead, camera.near * 4))).toBeLessThan(1e-9)
+    expect(root.lights.group.position.distanceTo(camera.position)).toBeLessThan(1e-9)
+    root.dispose()
+    expect(rig.disposed).toBe(true)
+    expect(() => root.createCameraRig()).toThrow(/\[UIRoot\.createCameraRig\].*dispose/)
   })
 })
 

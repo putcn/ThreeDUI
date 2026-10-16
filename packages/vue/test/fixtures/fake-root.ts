@@ -1,9 +1,9 @@
-import { vi } from 'vitest'
+import { vi, type Mock } from 'vitest'
 import {
   AnimationRuntime, createSurface as createModel, createYogaLayout, defaultTheme, EventDispatcher, FocusManager, PointerTracker, resolveTextStyle,
   type ColorScheme, type MeasureFn, type Node, type SurfaceModel, type Theme,
 } from '@glassui/core'
-import type { CreateSurfaceOptions, Surface, UIRootEventMap } from '@glassui/render'
+import type { CameraRig, CreateSurfaceOptions, Surface, UIRootEventMap } from '@glassui/render'
 import type { GlassRoot } from '../../src/root'
 import { createFakeText } from './fake-text'
 
@@ -45,6 +45,14 @@ export interface FakeSurface {
   listenerCount(type: FakeSurfaceEvent['type']): number
 }
 
+/** The fake root's `CameraRig`: `focus` resolves `true` at once, `dispose` sets `disposed`; both are spies. */
+export interface FakeRig {
+  focus: Mock<(target: Surface, opts?: { immediate?: boolean }) => Promise<boolean>>
+  dispose: Mock<() => void>
+  parallax: boolean
+  disposed: boolean
+}
+
 export interface FakeRoot extends GlassRoot {
   /** Lays out every live Surface, runs the animation runtime, then resolves the `afterTick` waiters; dt in seconds. */
   tick(dt?: number): void
@@ -54,6 +62,8 @@ export interface FakeRoot extends GlassRoot {
   listenerCount(type: keyof UIRootEventMap): number
   /** Every Surface `createSurface` made, removed ones included, in creation order. */
   readonly surfacesMade: FakeSurface[]
+  /** Every rig `createCameraRig` made, disposed ones included, in creation order. */
+  readonly rigs: FakeRig[]
 }
 
 /**
@@ -67,7 +77,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     const t = resolveTextStyle(n, theme, scheme)
     return text.measure({ text: String(n.props.value ?? ''), font: { family: t.family, size: t.size, weight: t.weight }, lineHeight: t.lineHeight, letterSpacing: t.letterSpacing, maxLines: t.maxLines, wrap: t.wrap }, { maxWidth })
   }
-  const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = []
+  const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = [], rigs: FakeRig[] = []
   /** The pointer bridge's key target, as `PointerBridge`: `setActive` sets it, removing its Surface clears it. */
   const bridge: { active: FakeSurface | null; setActive(s: FakeSurface | null): void } = { active: null, setActive: vi.fn((s: FakeSurface | null) => { bridge.active = s }) }
   let waiters: (() => void)[] = []
@@ -114,8 +124,13 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     anim, text,
     surfaces: surfaces as unknown as readonly Surface[],
     pointer: bridge as unknown as GlassRoot['pointer'],
-    surfacesMade,
+    surfacesMade, rigs,
     createSurface: o => make(o) as unknown as Surface,
+    createCameraRig() {
+      const rig: FakeRig = { focus: vi.fn(async () => true), dispose: vi.fn(() => { rig.disposed = true }), parallax: true, disposed: false }
+      rigs.push(rig)
+      return rig as unknown as CameraRig
+    },
     removeSurface(s) {
       const f = s as unknown as FakeSurface
       if (!surfaces.includes(f)) return
