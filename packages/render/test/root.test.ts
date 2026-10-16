@@ -764,6 +764,43 @@ describe('the root API for the Vue layer', () => {
     for (let i = 0; i < 360; i++) root.tick(1 / 60)                                 // the light at rest too: quiet
     key.shadow.needsUpdate = false; root.tick(1 / 60); expect(key.shadow.needsUpdate).toBe(false)
   })
+  /** A root with no pointer bridge (only the rig listens on the canvas) and a rig focused at once on a world Surface. */
+  async function parallaxRoot(billboard: boolean) {
+    const { root, camera, renderer } = await createRoot({ pointer: false })
+    const rig = root.createCameraRig(), s = root.createSurface({ layer: 'world', width: 244, height: 244 })
+    const b = billboard ? root.createSurface({ layer: 'world', width: 100, height: 100, billboard: true }) : null
+    b?.position.set(0.4, 0.3, -1)                                                   // behind the target, in view (not culled)
+    void rig.focus(s, { immediate: true }); for (let i = 0; i < 3; i++) root.tick(1 / 60)
+    if (b) expect(b.culled).toBe(false)
+    const key = root.lights.key; key.shadow.needsUpdate = false; root.tick(1 / 60); expect(key.shadow.needsUpdate).toBe(false)   // at rest: quiet
+    const move = renderer.domElement.addEventListener.mock.calls.find(([t]) => t === 'pointermove')![1] as (e: unknown) => void
+    move({ clientX: 800, clientY: 0, pointerType: 'mouse' })                         // the pointer to the top right: the camera swings
+    return { root, camera, key }
+  }
+  it('a camera parallaxing under the anchored light leaves the shadow map alone', async () => {
+    const { root, camera, key } = await parallaxRoot(false)
+    const light = root.lights.group.matrixWorld.clone()
+    for (let i = 0; i < 30; i++) {
+      const view = camera.matrixWorld.clone(); key.shadow.needsUpdate = false; root.tick(1 / 60)
+      expect(camera.matrixWorld.equals(view)).toBe(false); expect(root.lights.group.matrixWorld.equals(light)).toBe(true)
+      expect(key.shadow.needsUpdate).toBe(false)
+    }
+  })
+  it('a camera move still refits a billboard: it turns with the camera', async () => {
+    const { root, camera, key } = await parallaxRoot(true)
+    for (let i = 0; i < 5; i++) {
+      const view = camera.matrixWorld.clone(); key.shadow.needsUpdate = false; root.tick(1 / 60)
+      expect(camera.matrixWorld.equals(view)).toBe(false); expect(key.shadow.needsUpdate).toBe(true)
+    }
+  })
+  it('with no rig a camera move still refits: the lights follow the camera', async () => {
+    const { root, camera } = await createRoot()                                      // no screen Surface: only the lights move
+    root.createSurface({ layer: 'world', width: 244, height: 244 }).position.set(0, 0, -3)
+    root.tick(1 / 60); root.tick(1 / 60)
+    const key = root.lights.key; key.shadow.needsUpdate = false; root.tick(1 / 60); expect(key.shadow.needsUpdate).toBe(false)
+    camera.position.set(0.5, 0.2, 0); camera.lookAt(0, 0, -3); root.tick(1 / 60)
+    expect(key.shadow.needsUpdate).toBe(true)
+  })
   it('createBarChart makes a BarChart; throws after dispose', async () => {
     expect((await createRoot()).root.createBarChart()).toBeInstanceOf(BarChart)
     const { root } = await createRoot()

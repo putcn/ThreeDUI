@@ -219,8 +219,9 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  * billboard world Surfaces turn to face it; world Surfaces out of the view frustum are culled (`Surface.culled`); every
  * Surface ticks; glyphs evicted by a later Surface's are re-laid out; draw orders are assigned (screen Surfaces above
  * world ones, nearer above farther); the content passes of the shown Surfaces draw (a hidden one's wait for it to show
- * again); the key light's shadow camera is re-fitted to every shown Surface when the camera, the lights, a Surface's pose
- * or its glass changed, or a Surface's motion runs (the map redraws only then); `afterTick` waiters resolve.
+ * again); the key light's shadow camera is re-fitted to every shown Surface when the lights, a Surface's pose or its
+ * glass changed, or a Surface's motion runs (the map redraws only then: a camera move alone redraws nothing unless the
+ * lights follow it or it turns a billboard); `afterTick` waiters resolve.
  */
 export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const { renderer, scene, camera } = opts
@@ -488,10 +489,11 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       if (lit) { lights.group.position.copy(lit.position); lights.group.quaternion.copy(lit.quaternion) }
       else { camera.getWorldPosition(lights.group.position); camera.getWorldQuaternion(lights.group.quaternion) }
       lights.group.updateMatrixWorld(true)
-      // the shadow fit follows the view and the lights; the content RTs also follow the projection (a zoom, a new aspect)
-      const viewMoved = !lastCamera.equals(camera.matrixWorld)
-      const cameraMoved = viewMoved || !lastProjection.equals(camera.projectionMatrix)
-      let changed = viewMoved || !lastLight.equals(lights.group.matrixWorld)
+      // the shadow fit follows the lights, not the view: the map is the light's view of the Surfaces (a camera move
+      // that turns a billboard is caught by its pose in `fitShadows`); the content RTs follow the camera's pose and
+      // projection (a zoom, a new aspect)
+      const cameraMoved = !lastCamera.equals(camera.matrixWorld) || !lastProjection.equals(camera.projectionMatrix)
+      let changed = !lastLight.equals(lights.group.matrixWorld)
       lastCamera.copy(camera.matrixWorld); lastProjection.copy(camera.projectionMatrix); lastLight.copy(lights.group.matrixWorld)
       camera.getWorldQuaternion(qCam)
       for (const s of surfaces) {
