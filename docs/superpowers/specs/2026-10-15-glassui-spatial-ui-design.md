@@ -177,7 +177,7 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 3. **仓储孪生**（Block `twin`，在总览右侧）：
    - 标题、仓库概况与图例（空闲 / 正常 / 繁忙 / 满载）。
    - `<Viewport3D>` 里是一座 3D 仓库：地面与通道线；6 排货架，每排 10 列、4 层库位，库位按占用率着色；一台 AGV 沿主通道循环行驶。仓库像桌面模型一样向观众倾斜，可以按住拖动、绕竖直轴旋转。
-   - 悬停某个库位：库位高亮、略微抬起；孪生前方浮出一块玻璃信息面板（独立的世界层 Surface，在孪生前方约 0.35 单位），显示库位号、SKU、数量、占用率。面板会折射后方的货架（§11.4）。
+   - 悬停某个库位：库位高亮、略微抬起；孪生前方浮出一块玻璃信息面板（独立的世界层 Surface，放在孪生的立体内容之外：货架凸出背板 190–250 pt，所以面板在孪生前方约 1.4 单位；不遮挡标题与图例；不投影，`castShadows: false`），显示库位号、SKU、数量、占用率。面板会折射后方的货架（§11.4）。
 4. **订单与告警**（Block `orders`，在总览左侧）：最近 8 条订单（单号、客户、件数、状态标签、时间），一张异常告警 Card。
 5. **切换**：点击旁边露出的 Block 切换焦点；非焦点 Block 后退（§11.2）。头像进入设置 Block（Task 19）；"退出登录"回到登录 Block。
 
@@ -283,6 +283,8 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 ### 11.6 实例化物体的命中（core + render，9K）
 
 - 射线命中 `InstancedMesh` 时，`SurfaceHit.target` 与事件对象多带 `instanceId`（命中的实例序号；不是实例化物体时缺省）。孪生的库位用一个 InstancedMesh 画，靠它知道悬停的是哪个库位。
+- 指针事件多带 `screenX`/`screenY`（指针在画布上的 CSS px；键盘、焦点事件缺省）。拖动 3D 物体时用屏幕位移，不用命中点：后者随指针下的几何体跳变。
+- Surface 多一个 `castShadows`（默认 true）：false 时它的玻璃与挂载物体都不投影。远离背板浮着的面板（孪生信息面板）用它避免在后面的 Block 上投出一大块灰影。
 
 ### 11.7 抬起的玻璃投下看得见的影子（render + core，9L）
 
