@@ -3,7 +3,7 @@ import {
   AnimationRuntime, createSurface as createModel, createYogaLayout, defaultTheme, EventDispatcher, FocusManager, GlassUIError, PointerTracker, resolveTextStyle,
   type ColorScheme, type MeasureFn, type Node, type SurfaceModel, type Theme,
 } from '@glassui/core'
-import type { Attach3DOptions, BarChart, BarChartData, BarMatrix, BarMatrixData, BarMatrixLabels, CameraRig, GridCell, CreateSurfaceOptions, PoseSpring, Surface, SurfaceCell, SurfaceChart, SurfaceChartData, SurfaceChartLabels, SurfacePose, UIRootEventMap, Viewport3DContext } from '@glassui/render'
+import type { Attach3DOptions, BarChart, BarChartData, BarMatrix, BarMatrixData, BarMatrixLabels, CameraRig, GridCell, CreateSurfaceOptions, ImeBridge, ImeField, ImeState, PoseSpring, Surface, SurfaceCell, SurfaceChart, SurfaceChartData, SurfaceChartLabels, SurfacePose, UIRootEventMap, Viewport3DContext } from '@glassui/render'
 import type { GlassRoot } from '../../src/root'
 import { createFakeText } from './fake-text'
 
@@ -122,7 +122,28 @@ export interface FakeBarMatrix {
   bars: BarMatrix['bars']
 }
 
+/**
+ * The fake root's IME bridge (`root.ime`): it records what a field hands it. `focus` makes the field `active` (every call
+ * kept in `focused`), `blur` records the field in `blurred` and clears `active` if it was the one, `sync` records the
+ * field's state in `synced` (composition always null, as the proxy holds none of the app's). `placed` is where the proxy
+ * would sit, the active caret's top through the root's `screenFromPoint`: set by `focus` and `reposition`, which the
+ * fake root's `tick` calls while a field is active, as the real root does.
+ */
+export interface FakeIme {
+  active: ImeField | null
+  readonly focused: ImeField[]
+  readonly synced: ImeState[]
+  readonly blurred: ImeField[]
+  placed: { x: number; y: number } | null
+  focus(f: ImeField): void
+  blur(f: ImeField): void
+  sync(f: ImeField): void
+  reposition(): void
+}
+
 export interface FakeRoot extends GlassRoot {
+  /** The recording bridge (`FakeIme`), typed as the render's `ImeBridge` for the components' sake. */
+  readonly ime: ImeBridge & FakeIme
   /** Lays out every live Surface, runs the animation runtime, then resolves the `afterTick` waiters and the pending `animateTo` promises; dt in seconds. */
   tick(dt?: number): void
   /** Emits a root event to the `on` listeners. */
@@ -143,7 +164,8 @@ export interface FakeRoot extends GlassRoot {
 
 /**
  * A `GlassRoot` for tests: the default theme in `light`, a real `AnimationRuntime` and yoga layout, the monospace fake
- * text engine; its Surfaces are `FakeSurface`s (typed as `Surface` through the `GlassRoot` API).
+ * text engine, a recording IME bridge (`FakeIme`); its Surfaces are `FakeSurface`s (typed as `Surface` through the
+ * `GlassRoot` API).
  */
 export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {}): FakeRoot {
   const theme = opts.theme ?? defaultTheme, scheme = opts.scheme ?? 'light'
@@ -157,6 +179,14 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
   const bridge: { active: FakeSurface | null; setActive(s: FakeSurface | null): void } = { active: null, setActive: vi.fn((s: FakeSurface | null) => { bridge.active = s }) }
   let waiters: (() => void)[] = []
   const listeners = new Map<string, Set<(e: never) => void>>()
+  const screenFromPoint = (s: Surface, x: number, y: number): { x: number; y: number } => ({ x: x + s.position.x, y: y + s.position.y })
+  const ime: FakeIme = {
+    active: null, focused: [], synced: [], blurred: [], placed: null,
+    focus(f) { this.active = f; this.focused.push(f); this.reposition() },
+    blur(f) { this.blurred.push(f); if (this.active === f) this.active = null },
+    sync(f) { this.synced.push({ value: f.value, selectionStart: f.selectionStart, selectionEnd: f.selectionEnd, composition: null }) },
+    reposition() { const f = this.active; if (!f) return; const c = f.caret(); this.placed = screenFromPoint(f.surface, c.x, c.y) },
+  }
 
   const make = (o: CreateSurfaceOptions): FakeSurface => {
     const { layer = 'screen', fill: _fill, center: _center, left: _left, top: _top, interactive, castToWorld: _cast, castShadows, contentScale: _scale, billboard, ...rest } = o
@@ -192,6 +222,8 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
         disposed = true
         anim.forget(model.root); layout.dispose(model.root)
         const i = surfaces.indexOf(s); if (i >= 0) surfaces.splice(i, 1)
+        // as the real root: the IME field goes with its Surface
+        if (ime.active && ime.active.surface === (s as unknown as Surface)) ime.blur(ime.active)
         dispatch({ type: 'dispose' })
       },
       get disposed() { return disposed },
@@ -217,7 +249,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     anim, text,
     surfaces: surfaces as unknown as readonly Surface[],
     pointer: bridge as unknown as GlassRoot['pointer'],
-    ime: null,
+    ime: ime as ImeBridge & FakeIme,
     surfacesMade, rigs, charts, surfaceCharts, barMatrices,
     createSurface: o => make(o) as unknown as Surface,
     createCameraRig() {
@@ -255,6 +287,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
         if (root.dirty.layout || root.dirty.tree) layout.compute(root, s.model.width, s.model.height, measure)
         anim.tick(root, dt, s.model.cornerRadius)
       }
+      ime.reposition()   // as the real root: the proxy follows the caret every tick
       const w = waiters; waiters = []
       for (const resolve of w) resolve()
     },
@@ -267,7 +300,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     },
     emit(type, e) { for (const fn of [...listeners.get(type) ?? []]) (fn as (e: UIRootEventMap[typeof type]) => void)(e) },
     listenerCount: type => listeners.get(type)?.size ?? 0,
-    screenFromPoint: (s, x, y) => ({ x: x + s.position.x, y: y + s.position.y }),
+    screenFromPoint,
   }
 }
 

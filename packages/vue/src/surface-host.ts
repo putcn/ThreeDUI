@@ -32,10 +32,13 @@ export function checkBackground(name: string, bg: string, theme: Theme, scheme: 
  * - On unmount, before the content unmounts (its blur and pointercancel listeners still run), the Surface is released
  *   and removed, or handed to `onUnmount` instead (a Block's leave), which then owns its removal.
  *
- * `release()` detaches the current Surface from the component without removing it: it cancels its press (the hover
- * leaves too), blurs its focused node, stops forwarding its errors and clears `surface`; it returns that Surface.
- * Disposing alone would leave those nodes pressed, hovered and focused for good, since the content outlives the
- * Surface (it moves into the next one, or is being unmounted).
+ * `release()` detaches the current Surface from the component without removing it: it clears `surface`, cancels the
+ * Surface's press (the hover leaves too), blurs its focused node and stops forwarding its errors; it returns that
+ * Surface. Disposing alone would leave those nodes pressed, hovered and focused for good, since the content outlives
+ * the Surface (it moves into the next one, or is being unmounted). `surface` is cleared first: the cancel and blur
+ * listeners see no Surface (an `<Input>` takes such a blur as its Surface being made again, and waits for the update to
+ * see whether it is focused in the next one), and a field the root's IME bridge holds is not this Surface's when the
+ * root removes it.
  */
 export function useRenderSurface(spec: () => { key: string; options: CreateSurfaceOptions } | null, opts: {
   onError: (e: Error) => void
@@ -56,9 +59,9 @@ export function useRenderSurface(spec: () => { key: string; options: CreateSurfa
     const s = surface.value
     if (!s) return null
     const focused = s.focus.current, held = { s, focused, visible: focused?.state.focusVisible ?? false, keys: root.pointer?.active === s }
+    surface.value = null
     s.pointer.cancel(); s.focus.focus(null)
     s.removeEventListener('error', forward)
-    surface.value = null
     return held
   }
   /** The node to focus in the new Surface once the Teleport has moved the content there (see the post watcher below). */

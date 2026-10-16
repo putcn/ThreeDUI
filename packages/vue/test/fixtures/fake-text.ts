@@ -3,6 +3,8 @@ import { AtlasManager, type CanvasFactory, type GlyphPlacement, type Line, type 
 
 /** A code unit's advance, pt: monospace, 0.6 × the font size. */
 const cw = (run: TextRun): number => 0.6 * run.font.size
+/** The advance of a code unit at 18 pt (a regular Input's font), pt. */
+export const CW = 0.6 * 18
 /** Line height, pt: the run's, or 1.3 × the font size rounded. */
 const lh = (run: TextRun): number => run.lineHeight ?? Math.round(1.3 * run.font.size)
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
