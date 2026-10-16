@@ -362,6 +362,36 @@ describe('screen position (Plan 3 Task 9K fix)', () => {
   })
 })
 
+describe('pointer buttons and Shift (Plan 3 Task 9P, spatial spec §12.5)', () => {
+  it('the tracker carries buttons / shiftKey onto every event of a call that names them, each only when given', () => {
+    const { tracker, d, btn } = scene(), got: unknown[] = []
+    for (const t of ['pointerenter', 'pointermove', 'pointerdown', 'pointerup', 'click', 'pointerleave', 'pointercancel', 'contextmenu'] as const) {
+      d.on(btn, t, e => got.push([t, 'buttons' in e ? e.buttons : '-', 'shiftKey' in e ? e.shiftKey : '-']))
+    }
+    tracker.move(70, 70, 'mouse', undefined, undefined, { buttons: 0, shiftKey: false })
+    tracker.down(70, 70, 'mouse', undefined, undefined, { buttons: 1, shiftKey: true })
+    tracker.move(71, 70, 'mouse', undefined, undefined, { buttons: 1 })
+    tracker.up(71, 70, 'mouse', undefined, undefined, { buttons: 0, shiftKey: true })
+    tracker.contextMenu(71, 70, 'mouse', undefined, { buttons: 2 })
+    tracker.move(72, 70, 'mouse', undefined, { x: 1, y: 2 }, { buttons: 2, shiftKey: false })   // a right drag's move
+    tracker.down(72, 70); tracker.cancel()                                                     // none named: absent, the cancel too
+    expect(got).toEqual([
+      ['pointerenter', 0, false], ['pointermove', 0, false], ['pointerdown', 1, true], ['pointermove', 1, '-'],
+      ['pointerup', 0, true], ['click', 0, true], ['contextmenu', 2, '-'], ['pointermove', 2, false],
+      ['pointerdown', '-', '-'], ['pointercancel', '-', '-'], ['pointerleave', '-', '-'],
+    ])
+  })
+  it('with a 3D target too, and the dispatcher copies both from the init (absent when the init has none)', () => {
+    const { tracker, d, btn, root } = scene(), obj = {}, got: UIEvent[] = []
+    d.on(btn, 'pointermove', e => got.push(e))
+    tracker.move(-50, -50, 'mouse', { node: btn, object: obj, instanceId: 3 }, { x: 5, y: 6 }, { buttons: 2, shiftKey: true })
+    expect(got[0]).toMatchObject({ object: obj, instanceId: 3, screenX: 5, screenY: 6, buttons: 2, shiftKey: true })
+    expect(d.dispatch(root, 'click', { buttons: 4, shiftKey: false })).toMatchObject({ buttons: 4, shiftKey: false })
+    const bare = d.dispatch(root, 'click', {})
+    expect(['buttons' in bare, 'shiftKey' in bare]).toEqual([false, false])
+  })
+})
+
 describe('element handlers, dblclick and contextmenu (Plan 3 seams)', () => {
   it('runs a node\'s element handler after the dispatcher\'s listeners, bubbling like them', () => {
     const d = new EventDispatcher(), root = new Node('box'), child = new Node('box'); root.appendChild(child)

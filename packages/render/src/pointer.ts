@@ -1,5 +1,5 @@
 import { Matrix4, Plane, Ray, Raycaster, Vector2, Vector3, type Camera, type Intersection, type Object3D } from 'three'
-import { scrollOffset, type Node, type PointerTarget, type PointerType, type ScreenPoint } from '@glassui/core'
+import { scrollOffset, type Node, type PointerKeys, type PointerTarget, type PointerType, type ScreenPoint } from '@glassui/core'
 import type { Surface } from './surface/surface'
 import type { Viewport3DAttachment } from './viewport'
 
@@ -135,7 +135,7 @@ export interface CanvasLike {
 }
 /** The fields of a DOM PointerEvent / WheelEvent / KeyboardEvent the bridge reads. */
 export interface BridgeEvent {
-  clientX?: number; clientY?: number; pointerType?: string; pointerId?: number; isPrimary?: boolean; button?: number
+  clientX?: number; clientY?: number; pointerType?: string; pointerId?: number; isPrimary?: boolean; button?: number; buttons?: number
   deltaX?: number; deltaY?: number; key?: string; shiftKey?: boolean; preventDefault?(): void
 }
 export type BridgeEventType = 'pointermove' | 'pointerdown' | 'pointerup' | 'pointercancel' | 'pointerleave' | 'wheel' | 'keydown' | 'keyup'
@@ -165,7 +165,9 @@ const FAR = -1e6
  * the move, down or up (the node takes the event while it can take the pointer, and the event carries `object`, the
  * hit `point`, and `instanceId` for an instanced one); a press captured by another Surface gets none.
  * Every pointer event it dispatches (moves, enters and leaves, presses, clicks, `contextmenu`, `wheel`, a cancel)
- * carries the pointer's place on the canvas, CSS px from its top-left, as `screenX` / `screenY`.
+ * carries the pointer's place on the canvas, CSS px from its top-left, as `screenX` / `screenY`, and the DOM event's
+ * `buttons` and `shiftKey` when it had them (spatial spec §12.5: a right drag, which presses nothing, is moves with
+ * `buttons & 2`).
  * `handle` is the testable core; `attach` wires the canvas events to it.
  */
 export class PointerBridge {
@@ -229,10 +231,10 @@ export class PointerBridge {
     return hit?.surface === s ? hit.target : undefined
   }
 
-  /** Makes `s` the hovered Surface, clearing the hover (and press-glow point) of the one it replaces (its leaves at `screen`). */
-  private hover(s: Surface | null, type: PointerType, screen: ScreenPoint): void {
+  /** Makes `s` the hovered Surface, clearing the hover (and press-glow point) of the one it replaces (its leaves at `screen`, with `keys`). */
+  private hover(s: Surface | null, type: PointerType, screen: ScreenPoint, keys?: PointerKeys): void {
     const prev = this.hovered
-    if (prev && prev !== s) { prev.pointer.move(FAR, FAR, type, undefined, screen); prev.setPointer(null) }
+    if (prev && prev !== s) { prev.pointer.move(FAR, FAR, type, undefined, screen, keys); prev.setPointer(null) }
     this.hovered = s
   }
 
@@ -262,15 +264,17 @@ export class PointerBridge {
   handle(type: BridgeEventType, e: BridgeEvent): void {
     if (e.isPrimary === false) return
     const ptype: PointerType = e.pointerType === 'touch' || e.pointerType === 'pen' || e.pointerType === 'xr' ? e.pointerType : 'mouse'
-    // the pointer's place on the canvas (keys have none: their cases never read it)
+    // the pointer's place on the canvas, and the buttons and Shift held, as the DOM event has them (keys have none:
+    // their cases never read them)
     const at = KEY_TYPES.includes(type) ? { x: 0, y: 0 } : this.screenOf(e)
+    const keys: PointerKeys = { ...(e.buttons !== undefined ? { buttons: e.buttons } : {}), ...(e.shiftKey !== undefined ? { shiftKey: e.shiftKey } : {}) }
     switch (type) {
       case 'pointermove': {
         const hit = this.cast(e)
         const s = this.pressing ? this.active : hit?.surface ?? null
-        this.hover(s, ptype, at)
+        this.hover(s, ptype, at, keys)
         const pt = s && this.pointOn(s, hit)
-        if (s && pt) { s.setPointer(pt); s.pointer.move(pt[0], pt[1], ptype, this.targetOn(s, hit), at) }
+        if (s && pt) { s.setPointer(pt); s.pointer.move(pt[0], pt[1], ptype, this.targetOn(s, hit), at, keys) }
         break
       }
       case 'pointerdown': {
@@ -278,7 +282,7 @@ export class PointerBridge {
           // a chorded button arrives as a move, so a held press here lost its up: drop it
           if (this.pressing) { this.active?.pointer.cancel(); this.pressing = false }
           const hit = this.cast(e)
-          if (hit) hit.surface.pointer.contextMenu(hit.x, hit.y, ptype, at)
+          if (hit) hit.surface.pointer.contextMenu(hit.x, hit.y, ptype, at, keys)
           break
         }
         if (e.button !== undefined && e.button !== 0) break
@@ -287,9 +291,9 @@ export class PointerBridge {
         if (this.pressing && this.active !== hit?.surface) this.active?.pointer.cancel()
         this.pressing = false
         this.setActive(hit?.surface ?? null)
-        this.hover(hit?.surface ?? null, ptype, at)
+        this.hover(hit?.surface ?? null, ptype, at, keys)
         if (!hit) break
-        hit.surface.setPointer([hit.x, hit.y]); hit.surface.pointer.down(hit.x, hit.y, ptype, hit.target, at)
+        hit.surface.setPointer([hit.x, hit.y]); hit.surface.pointer.down(hit.x, hit.y, ptype, hit.target, at, keys)
         // a pointerdown listener moved the keys elsewhere (`setActive`: a dialog opened): the press is over, nothing
         // to focus or capture here
         if (this.active !== hit.surface) { hit.surface.pointer.cancel(); hit.surface.setPointer(null); break }
@@ -306,20 +310,20 @@ export class PointerBridge {
         const s = this.pressing ? this.active : hit?.surface ?? null
         const captured = this.pressing
         this.pressing = false
-        if (s) { const [x, y] = this.pointOn(s, hit) ?? [FAR, FAR]; s.pointer.up(x, y, ptype, this.targetOn(s, hit), at) }
+        if (s) { const [x, y] = this.pointOn(s, hit) ?? [FAR, FAR]; s.pointer.up(x, y, ptype, this.targetOn(s, hit), at, keys) }
         // the tracker re-hovered `s` at the up; once released, a Surface it is not over loses the hover
-        this.hover(hit?.surface === s ? s : null, ptype, at)
+        this.hover(hit?.surface === s ? s : null, ptype, at, keys)
         if (captured && e.pointerId !== undefined) this.opts.canvas.releasePointerCapture?.(e.pointerId)
         break
       }
       case 'pointercancel': {
         if (this.pressing) this.active?.pointer.cancel()
         this.pressing = false
-        this.hover(null, ptype, at)
+        this.hover(null, ptype, at, keys)
         break
       }
       case 'pointerleave': {   // the pointer left the canvas; a captured press keeps receiving its moves
-        if (!this.pressing) this.hover(null, ptype, at)
+        if (!this.pressing) this.hover(null, ptype, at, keys)
         break
       }
       case 'wheel': {
@@ -329,7 +333,7 @@ export class PointerBridge {
         if (!s || !target) break
         const scrolled = applyWheel(target, finite(e.deltaX), finite(e.deltaY))
         const [x, y] = this.pointOn(s, hit) ?? [0, 0]
-        s.events.dispatch(target, 'wheel', { x, y, deltaX: finite(e.deltaX), deltaY: finite(e.deltaY), pointerType: ptype, screenX: at.x, screenY: at.y })
+        s.events.dispatch(target, 'wheel', { x, y, deltaX: finite(e.deltaX), deltaY: finite(e.deltaY), pointerType: ptype, screenX: at.x, screenY: at.y, ...keys })
         if (scrolled) e.preventDefault?.()
         break
       }

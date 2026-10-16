@@ -33,6 +33,14 @@ export interface UIEvent {
    * renderer's bridge); absent on the others (keys, focus) and wherever the caller gave none.
    */
   screenX?: number; screenY?: number
+  /**
+   * The mouse buttons held as the event happened, the DOM's `buttons` bitmask (1 primary, 2 secondary, 4 auxiliary): a
+   * drag with the right button held is moves with `buttons & 2` (spatial spec §12.5). Set on pointer events whose DOM
+   * event had it (by the renderer's bridge); absent otherwise.
+   */
+  buttons?: number
+  /** Whether Shift was held, on pointer events whose DOM event said (by the renderer's bridge); absent otherwise. */
+  shiftKey?: boolean
   propagationStopped: boolean
   /** Lets the remaining listeners on the current node run, then stops bubbling (DOM semantics). */
   stopPropagation(): void
@@ -73,6 +81,8 @@ export class EventDispatcher {
       ...(init.point !== undefined ? { point: init.point } : {}),
       ...(init.screenX !== undefined ? { screenX: init.screenX } : {}),
       ...(init.screenY !== undefined ? { screenY: init.screenY } : {}),
+      ...(init.buttons !== undefined ? { buttons: init.buttons } : {}),
+      ...(init.shiftKey !== undefined ? { shiftKey: init.shiftKey } : {}),
       propagationStopped: false,
       stopPropagation: () => { e.propagationStopped = true },   // a closure, so it also works destructured
     }
@@ -104,6 +114,9 @@ export interface PointerTarget { node: Node; object: unknown; instanceId?: numbe
 /** Where the pointer is on the canvas, CSS px from its top-left (`UIEvent.screenX` / `screenY`). */
 export interface ScreenPoint { x: number; y: number }
 
+/** The buttons and the Shift key held with a pointer event (`UIEvent.buttons` / `shiftKey`), each when known. */
+export interface PointerKeys { buttons?: number; shiftKey?: boolean }
+
 /** A second `click` this soon (ms) after the first, this close (pt), on the same node, also fires `dblclick`. */
 const DBLCLICK = { ms: 500, pt: 4 } as const
 
@@ -121,7 +134,8 @@ const DBLCLICK = { ms: 500, pt: 4 } as const
  * call dispatches carries `object` (and the target's `instanceId` and `point`, when it has them); otherwise the hit
  * test decides as usual and no event carries any of them. `move`, `down`, `up` and `contextMenu` may also name
  * `screen`, the pointer's place on the canvas: every event the call dispatches (and a later `cancel`'s) carries it as
- * `screenX` / `screenY`.
+ * `screenX` / `screenY`; and `keys`, the buttons and Shift held: every event the call dispatches (and a later `cancel`'s)
+ * carries those it names as `buttons` / `shiftKey`.
  * Call `cancel()` when the pointer is lost or leaves the Surface.
  */
 export class PointerTracker {
@@ -129,10 +143,10 @@ export class PointerTracker {
   private hoverPath: Node[] = []
   private pressPath: Node[] = []
   /**
-   * The last position, the 3D object (its instance, the point on it) it was on and its place on the canvas (each absent
-   * when none): the init of every event dispatched.
+   * The last position, the 3D object (its instance, the point on it) it was on, its place on the canvas and the buttons
+   * and Shift held (each absent when none): the init of every event dispatched.
    */
-  private last: Pick<UIEvent, 'x' | 'y' | 'pointerType' | 'object' | 'instanceId' | 'point' | 'screenX' | 'screenY'> = { x: 0, y: 0, pointerType: 'mouse' }
+  private last: Pick<UIEvent, 'x' | 'y' | 'pointerType' | 'object' | 'instanceId' | 'point' | 'screenX' | 'screenY' | 'buttons' | 'shiftKey'> = { x: 0, y: 0, pointerType: 'mouse' }
   private lastClick: { node: Node; t: number; x: number; y: number } | null = null
   private readonly now: () => number
 
@@ -147,14 +161,14 @@ export class PointerTracker {
   get hovered(): Node | null { return this.hoverPath[0] ?? null }
   get pressed(): Node | null { return this.pressPath[0] ?? null }
 
-  move(x: number, y: number, pointerType: PointerType = 'mouse', target?: PointerTarget, screen?: ScreenPoint): void {
-    const hit = this.locate(x, y, pointerType, target, screen)
+  move(x: number, y: number, pointerType: PointerType = 'mouse', target?: PointerTarget, screen?: ScreenPoint, keys?: PointerKeys): void {
+    const hit = this.locate(x, y, pointerType, target, screen, keys)
     this.hover(hit)
     if (hit) this.d.dispatch(hit, 'pointermove', this.last)
   }
 
-  down(x: number, y: number, pointerType: PointerType = 'mouse', target?: PointerTarget, screen?: ScreenPoint): void {
-    const hit = this.locate(x, y, pointerType, target, screen)
+  down(x: number, y: number, pointerType: PointerType = 'mouse', target?: PointerTarget, screen?: ScreenPoint, keys?: PointerKeys): void {
+    const hit = this.locate(x, y, pointerType, target, screen, keys)
     this.hover(hit)
     this.release()   // a press whose up was lost
     if (!hit) return
@@ -163,8 +177,8 @@ export class PointerTracker {
     this.d.dispatch(hit, 'pointerdown', this.last)
   }
 
-  up(x: number, y: number, pointerType: PointerType = 'mouse', target?: PointerTarget, screen?: ScreenPoint): void {
-    const hit = this.locate(x, y, pointerType, target, screen)
+  up(x: number, y: number, pointerType: PointerType = 'mouse', target?: PointerTarget, screen?: ScreenPoint, keys?: PointerKeys): void {
+    const hit = this.locate(x, y, pointerType, target, screen, keys)
     const was = this.pressed
     this.release()
     this.hover(hit)
@@ -179,8 +193,8 @@ export class PointerTracker {
   }
 
   /** A secondary-button press: `contextmenu` at the hit node; no press state (the DOM presses nothing either). */
-  contextMenu(x: number, y: number, pointerType: PointerType = 'mouse', screen?: ScreenPoint): void {
-    const hit = this.locate(x, y, pointerType, undefined, screen)
+  contextMenu(x: number, y: number, pointerType: PointerType = 'mouse', screen?: ScreenPoint, keys?: PointerKeys): void {
+    const hit = this.locate(x, y, pointerType, undefined, screen, keys)
     if (hit) this.d.dispatch(hit, 'contextmenu', this.last)
   }
 
@@ -194,10 +208,14 @@ export class PointerTracker {
 
   /**
    * The node at (x, y), or `target`'s while it is reachable (then `last` carries its object, instance and point);
-   * records `last`, with `screen` when given.
+   * records `last`, with `screen` and the `keys` named when given.
    */
-  private locate(x: number, y: number, pointerType: PointerType, target?: PointerTarget, screen?: ScreenPoint): Node | null {
-    const at = screen ? { screenX: screen.x, screenY: screen.y } : {}
+  private locate(x: number, y: number, pointerType: PointerType, target?: PointerTarget, screen?: ScreenPoint, keys?: PointerKeys): Node | null {
+    const at = {
+      ...(screen ? { screenX: screen.x, screenY: screen.y } : {}),
+      ...(keys?.buttons !== undefined ? { buttons: keys.buttons } : {}),
+      ...(keys?.shiftKey !== undefined ? { shiftKey: keys.shiftKey } : {}),
+    }
     if (target && pointerReachable(target.node, this.root)) {
       this.last = {
         x, y, pointerType, object: target.object,

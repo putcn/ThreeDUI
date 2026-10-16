@@ -205,6 +205,28 @@ describe('PointerBridge.handle', () => {
       ['wheel', 203, 142], ['contextmenu', 204, 143], ['pointerleave', -5, -15],
     ])
   })
+  it('pointer events carry the DOM\'s buttons and shiftKey when it had them (spatial spec §12.5); a right drag is moves with buttons & 2', () => {
+    const { btn, bridge, canvas } = scene(), got: unknown[] = []
+    for (const t of ['pointerenter', 'pointermove', 'pointerdown', 'pointerup', 'click', 'wheel', 'contextmenu', 'pointerleave'] as const) {
+      btn.setHandler(t, e => got.push([t, 'buttons' in e ? e.buttons : '-', 'shiftKey' in e ? e.shiftKey : '-']))
+    }
+    bridge.handle('pointermove', { clientX: 200, clientY: 140, pointerType: 'mouse', buttons: 0, shiftKey: false })
+    bridge.handle('pointerdown', { clientX: 200, clientY: 140, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 1, shiftKey: true })
+    bridge.handle('pointermove', { clientX: 201, clientY: 140, pointerType: 'mouse', pointerId: 1, buttons: 1, shiftKey: true })
+    bridge.handle('pointerup', { clientX: 201, clientY: 140, pointerType: 'mouse', pointerId: 1, button: 0, buttons: 0, shiftKey: false })
+    bridge.handle('wheel', { clientX: 201, clientY: 140, deltaY: 10, buttons: 0, shiftKey: true })
+    // the right button: its down only dispatches contextmenu (no press, no capture); the moves that follow say it is held
+    bridge.handle('pointerdown', { clientX: 202, clientY: 140, pointerType: 'mouse', pointerId: 1, button: 2, buttons: 2, shiftKey: false })
+    expect(btn.state.pressed).toBe(false); expect(canvas.setPointerCapture).toHaveBeenCalledTimes(1)
+    bridge.handle('pointermove', { clientX: 210, clientY: 145, pointerType: 'mouse', pointerId: 1, buttons: 2, shiftKey: false })
+    bridge.handle('pointermove', { clientX: 220, clientY: 150, pointerType: 'mouse', pointerId: 1 })   // a bridge event without them
+    bridge.handle('pointermove', { clientX: 5, clientY: 5, pointerType: 'mouse', buttons: 2, shiftKey: true })   // off the button
+    expect(got).toEqual([
+      ['pointerenter', 0, false], ['pointermove', 0, false], ['pointerdown', 1, true], ['pointermove', 1, true],
+      ['pointerup', 0, false], ['click', 0, false], ['wheel', 0, true], ['contextmenu', 2, false],
+      ['pointermove', 2, false], ['pointermove', '-', '-'], ['pointerleave', 2, true],
+    ])
+  })
   it('routes move/down/up into the surface tracker and emits click', () => {
     const { s, btn, bridge, canvas } = scene()
     const click = vi.fn(); s.events.on(btn, 'click', click)
