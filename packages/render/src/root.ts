@@ -12,6 +12,7 @@ import { checkQualityTier, defaultTier, QUALITY, QualityController, type Quality
 import { FrameSampler, FrameScheduler } from './scheduler'
 import { projectPolygon } from './project'
 import { CameraRig, type CameraRigOptions } from './rig'
+import { BarChart } from './chart/bar'
 
 /** The subset of `WebGPURenderer` the root drives (so tests can pass a stub). */
 export interface UIRenderer extends RendererLike {
@@ -105,6 +106,11 @@ export interface UIRoot {
    * `dispose`, which disposes the rig.
    */
   createCameraRig(opts?: CameraRigOptions): CameraRig
+  /**
+   * A new bar chart (spatial spec §2.5), for `Surface.attach3D` with its `update` as the attachment's. It is the
+   * caller's: the root neither holds nor disposes it (`BarChart.dispose`). Throws after `dispose`.
+   */
+  createBarChart(): BarChart
   /**
    * Swaps the theme: the shared context's theme and text measure, the animation runtime's theme, then every Surface
    * restyled (`Surface.restyle`: fills, an opaque background, the glass, every node marked); emits `'theme'`. A theme
@@ -460,6 +466,10 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       // the aspect from `size`: `tick` reads the renderer's size just before it updates the rig
       rig = new CameraRig({ camera, canvas, aspect: () => size.x / size.y, reducedMotion: () => anim.reducedMotion }, o)
       return rig
+    },
+    createBarChart() {
+      if (disposed) throw new GlassUIError('UIRoot.createBarChart', 'root 已经 dispose')
+      return new BarChart()
     },
     tick(dt) {
       if (disposed) return

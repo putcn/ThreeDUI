@@ -7,6 +7,7 @@ import { createUIRoot, type UIRenderer, type UIRootOptions } from '../src/root'
 import { fillColors, type Surface } from '../src/surface/surface'
 import { toColor } from '../src/color'
 import type { QualityTier } from '../src/quality'
+import { BarChart } from '../src/chart/bar'
 
 // Type-level guard (checked by `pnpm typecheck`): the real renderer satisfies the stub-able subset.
 export const asUIRenderer = (r: WebGPURenderer): UIRenderer => r
@@ -733,6 +734,12 @@ describe('the root API for the Vue layer', () => {
     root.dispose()
     expect(rig.disposed).toBe(true)
     expect(() => root.createCameraRig()).toThrow(/\[UIRoot\.createCameraRig\].*dispose/)
+  })
+  it('createBarChart makes a BarChart; throws after dispose', async () => {
+    expect((await createRoot()).root.createBarChart()).toBeInstanceOf(BarChart)
+    const { root } = await createRoot()
+    root.dispose()
+    expect(() => root.createBarChart()).toThrow(/\[UIRoot\.createBarChart\].*dispose/)
   })
 })
 

@@ -3,7 +3,7 @@ import {
   AnimationRuntime, createSurface as createModel, createYogaLayout, defaultTheme, EventDispatcher, FocusManager, PointerTracker, resolveTextStyle,
   type ColorScheme, type MeasureFn, type Node, type SurfaceModel, type Theme,
 } from '@glassui/core'
-import type { CameraRig, CreateSurfaceOptions, Surface, UIRootEventMap } from '@glassui/render'
+import type { BarChart, BarChartData, CameraRig, CreateSurfaceOptions, Surface, UIRootEventMap, Viewport3DContext } from '@glassui/render'
 import type { GlassRoot } from '../../src/root'
 import { createFakeText } from './fake-text'
 
@@ -53,6 +53,15 @@ export interface FakeRig {
   disposed: boolean
 }
 
+/** The fake root's `BarChart`: every method a spy (`update` returns false: nothing moves), no bars. */
+export interface FakeChart {
+  set: Mock<(data: BarChartData) => void>
+  hover: Mock<(index: number | null) => void>
+  update: Mock<(dt: number, ctx: Viewport3DContext) => boolean>
+  dispose: Mock<() => void>
+  bars: BarChart['bars']
+}
+
 export interface FakeRoot extends GlassRoot {
   /** Lays out every live Surface, runs the animation runtime, then resolves the `afterTick` waiters; dt in seconds. */
   tick(dt?: number): void
@@ -64,6 +73,8 @@ export interface FakeRoot extends GlassRoot {
   readonly surfacesMade: FakeSurface[]
   /** Every rig `createCameraRig` made, disposed ones included, in creation order. */
   readonly rigs: FakeRig[]
+  /** Every chart `createBarChart` made, in creation order. */
+  readonly charts: FakeChart[]
 }
 
 /**
@@ -77,7 +88,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     const t = resolveTextStyle(n, theme, scheme)
     return text.measure({ text: String(n.props.value ?? ''), font: { family: t.family, size: t.size, weight: t.weight }, lineHeight: t.lineHeight, letterSpacing: t.letterSpacing, maxLines: t.maxLines, wrap: t.wrap }, { maxWidth })
   }
-  const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = [], rigs: FakeRig[] = []
+  const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = [], rigs: FakeRig[] = [], charts: FakeChart[] = []
   /** The pointer bridge's key target, as `PointerBridge`: `setActive` sets it, removing its Surface clears it. */
   const bridge: { active: FakeSurface | null; setActive(s: FakeSurface | null): void } = { active: null, setActive: vi.fn((s: FakeSurface | null) => { bridge.active = s }) }
   let waiters: (() => void)[] = []
@@ -124,12 +135,17 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     anim, text,
     surfaces: surfaces as unknown as readonly Surface[],
     pointer: bridge as unknown as GlassRoot['pointer'],
-    surfacesMade, rigs,
+    surfacesMade, rigs, charts,
     createSurface: o => make(o) as unknown as Surface,
     createCameraRig() {
       const rig: FakeRig = { focus: vi.fn(async () => true), dispose: vi.fn(() => { rig.disposed = true }), parallax: true, disposed: false }
       rigs.push(rig)
       return rig as unknown as CameraRig
+    },
+    createBarChart() {
+      const chart: FakeChart = { set: vi.fn(), hover: vi.fn(), update: vi.fn(() => false), dispose: vi.fn(), bars: [] }
+      charts.push(chart)
+      return chart as unknown as BarChart
     },
     removeSurface(s) {
       const f = s as unknown as FakeSurface
