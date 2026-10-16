@@ -1,6 +1,6 @@
 import { ref, watch, type Ref } from '@vue/runtime-core'
 import type { Node, PointerType, Style, UIEvent } from '@glassui/core'
-import { useRoot } from './inject'
+import { useRoot, useSurfaceRef } from './inject'
 
 /** A control's largest hover tilt about each axis (spec §8.3: at most 3°), radians. */
 const CONTROL_TILT = 3 * Math.PI / 180
@@ -33,12 +33,6 @@ export function controlStyle(opts: { pressScale?: number } = {}): Style {
   }
 }
 
-/**
- * A toggle's label (Switch, Checkbox): 20 pt at weight 500 in the label colour, 16 pt from its control, as the
- * reference's "Remember me" and terms line beside the 62 pt switch and the 44 pt checkbox.
- */
-export const TOGGLE_LABEL = { size: 20, weight: 500, color: 'label', gap: 16 } as const
-
 export interface GlassControlOptions {
   /** While true the control ignores everything; turning it on drops the lift, the tilt and a Space press it has. */
   disabled: Readonly<Ref<boolean>>
@@ -50,6 +44,9 @@ export interface GlassControlOptions {
   lift?: number
 }
 
+/** Element handlers by `on*` name (`h(tag, { ...handlers })`). */
+export type ControlHandlers = Record<string, (e: UIEvent) => void>
+
 /**
  * A control's interaction (spec §8.3) on its host node `el`: `handlers` go onto the host (`h(tag, { ref: el, ...handlers })`).
  * - A mouse or pen over the node lifts it by `lift` and tilts it toward the pointer (`tiltToward`, at most 3° about
@@ -59,23 +56,35 @@ export interface GlassControlOptions {
  *   (`state.pressed`) on keydown and activates on its keyup. A keyup without its keydown here, or after a blur, does not.
  * - `pressing` is true while a press is held on the node with the pointer over it (a press dragged off and back counts
  *   again), or while Space is down: what a control animates its own parts by (the Switch's knob).
- * - While `disabled` everything is ignored.
+ * - `label` goes onto a node that stands for the control, as an HTML `<label>` does (a toggle's label; not inside the
+ *   host, whose own handlers already cover it): a press held on it presses the control (`state.pressed` and
+ *   `pressing`), dragged off it lets go and back on presses again; its click focuses the control without the ring, as a
+ *   press on the control does, and activates it.
+ * - While `disabled` everything is ignored; turning it on lets go of a Space or label press without activating.
  */
-export function useGlassControl(el: Readonly<Ref<Node | null | undefined>>, opts: GlassControlOptions): { handlers: Record<string, (e: UIEvent) => void>; pressing: Ref<boolean> } {
-  const root = useRoot(), pressing = ref(false)
+export function useGlassControl(el: Readonly<Ref<Node | null | undefined>>, opts: GlassControlOptions): { handlers: ControlHandlers; label: ControlHandlers; pressing: Ref<boolean> } {
+  const root = useRoot(), surface = useSurfaceRef(), pressing = ref(false)
   /** Space went down on this control: its keyup activates. */
   let spaceDown = false
+  /** A press on a `label` node is held over it. */
+  let labelDown = false
   const lift = opts.lift ?? LIFT
   const hovers = (e: UIEvent): boolean => !opts.disabled.value && (e.pointerType === 'mouse' || e.pointerType === 'pen')
   const settle = (): void => { const n = el.value; if (n) { n.elevation = 0; n.tilt = { x: 0, y: 0 } } }
-  /** Lets go of a Space press without activating. */
+  /** Lets go of a Space press without activating (a label's press, if one is held, keeps the control pressed). */
   const dropSpace = (): void => {
     if (!spaceDown) return
-    spaceDown = false; pressing.value = false
-    el.value?.setState({ pressed: false })
+    spaceDown = false; pressing.value = labelDown
+    el.value?.setState({ pressed: labelDown })
   }
-  watch(opts.disabled, off => { if (off) { settle(); dropSpace(); pressing.value = false } })
-  const handlers: Record<string, (e: UIEvent) => void> = {
+  /** Holds (or lets go of) the press a label gives the control; a Space press keeps it pressed meanwhile. */
+  const labelPress = (on: boolean): void => {
+    if (labelDown === on) return
+    labelDown = on; pressing.value = on || spaceDown
+    el.value?.setState({ pressed: on || spaceDown })
+  }
+  watch(opts.disabled, off => { if (off) { settle(); labelPress(false); dropSpace(); pressing.value = false } })
+  const handlers: ControlHandlers = {
     onPointerenter(e) {
       const n = el.value
       if (!n || opts.disabled.value) return
@@ -106,5 +115,19 @@ export function useGlassControl(el: Readonly<Ref<Node | null | undefined>>, opts
     },
     onBlur() { dropSpace() },
   }
-  return { handlers, pressing }
+  const label: ControlHandlers = {
+    onPointerdown() { if (!opts.disabled.value) labelPress(true) },
+    // the tracker keeps the label pressed while the press is held, dragged off and back included
+    onPointerenter(e) { if (!opts.disabled.value && e.currentTarget.state.pressed) labelPress(true) },
+    onPointerleave() { labelPress(false) },
+    onPointerup() { labelPress(false) },
+    onPointercancel() { labelPress(false) },
+    onClick(e) {
+      if (opts.disabled.value) return
+      const n = el.value
+      if (n) surface.value?.focus.focus(n, { visible: false })
+      opts.onActivate({ pointerType: e.pointerType })
+    },
+  }
+  return { handlers, label, pressing }
 }

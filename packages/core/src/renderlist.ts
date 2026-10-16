@@ -71,6 +71,22 @@ const SHADOW_Z_BELOW_POOL = 0.05
  */
 export const FOCUS_RING = { width: 2.5, offset: 3, color: 'accent' } as const
 
+/** The light pool under glass (spec §5.5: its transmitted halo, in the glow colour or white): its strength clear and glowing. */
+const POOL = { clear: 0.28, glow: 0.5 } as const
+
+/**
+ * The pool under glass with `glow`: clear glass's (white at `POOL.clear`), moving to the glow's colour at `POOL.glow`
+ * as the glow's strength rises to 1 (a glow of 1 or more pools in full). A glow of strength 0 (a switch that is off)
+ * pools exactly as clear glass does, and a glow fading in or out (its animated strength) moves the pool with it.
+ */
+function poolOf(glow: ResolvedGlass['glow']): { color: RGBA; strength: number } {
+  const w = glow ? Math.min(1, Math.max(0, glow.strength)) : 0
+  const c = glow?.color ?? [1, 1, 1, 1]
+  // c·w + 1·(1 − w): exactly white at w = 0 and exactly the glow colour at w = 1
+  const mix = (v: number, from: number): number => v * w + from * (1 - w)
+  return { color: [mix(c[0], 1), mix(c[1], 1), mix(c[2], 1), mix(c[3], 1)], strength: mix(POOL.glow, POOL.clear) }
+}
+
 /** `o` without its `undefined` entries, so optional fields stay absent under exactOptionalPropertyTypes. */
 function defined<T extends Record<string, unknown>>(o: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
   return Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as { [K in keyof T]?: Exclude<T[K], undefined> }
@@ -164,7 +180,7 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
       rl.glass.push({ ...base, radius, z: sortKey(myZ, 'glass'), params })
       rl.decorations.push(
         { ...base, kind: 'rim', radius, cornerExponent: params.cornerExponent, color: [1, 1, 1, 1], strength: 1, z: sortKey(myZ, 'rim') },
-        { ...base, kind: 'pool', radius, cornerExponent: params.cornerExponent, color: params.glow ? params.glow.color : [1, 1, 1, 1], strength: params.glow ? 0.5 : 0.28, z: sortKey(myZ, 'pool') },
+        { ...base, kind: 'pool', radius, cornerExponent: params.cornerExponent, ...poolOf(params.glow), z: sortKey(myZ, 'pool') },
       )
       const height = elevation - parent.face   // the shadow falls on the face it stands on
       if (height > 0) rl.decorations.push({ ...base, elevation: height, kind: 'shadow', radius, cornerExponent: params.cornerExponent, color: [0, 0, 0, 1], strength: 1, z: sortKey(myZ, 'pool') - SHADOW_Z_BELOW_POOL })

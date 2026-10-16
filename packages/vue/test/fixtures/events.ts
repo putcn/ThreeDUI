@@ -22,7 +22,7 @@ export function fire(node: Node, type: UIEventType, init: Partial<Pick<UIEvent, 
 
 /**
  * Dispatches `type` at `node` through core's own `EventDispatcher`, as a Surface does: `node`'s handler, then each
- * ancestor's (a click on a label reaches the row that holds the handler), with core's bubbling rules (`pointerenter`,
+ * ancestor's (a click on a label's text reaches the box that holds the handler), with core's bubbling rules (`pointerenter`,
  * `pointerleave`, `focus` and `blur` stay on `node`), `stopPropagation`, and `localX`/`localY` relative to each handling
  * node. `init` as `fire`'s, less the local coordinates. Throws when no handler on the path ran, so a test never passes
  * by firing into nothing. Returns the event.

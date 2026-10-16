@@ -1,11 +1,13 @@
 import { it, expect } from 'vitest'
 import { h, nextTick, ref } from '@vue/runtime-core'
-import { absoluteRect, defaultTheme, resolveColor, type Node } from '@glassui/core'
+import { absoluteRect, buildRenderList, defaultTheme, resolveColor, type Node } from '@glassui/core'
 import type { CanvasLike } from '@glassui/text'
 import { glassComponents } from '../src/define'
 import { Switch } from '../src/components/Switch'
 import { Checkbox } from '../src/components/Checkbox'
 import { Surface } from '../src/components/Surface'
+import { Button } from '../src/components/Button'
+import { Stack } from '../src/components/Stack'
 import { Text } from '../src/components/Text'
 import { controlStyle } from '../src/control'
 import { glowingTint } from '../src/colors'
@@ -40,7 +42,7 @@ it('Checkbox shows a check, or a dash when indeterminate; the label toggles too'
   const v = ref(false)
   const { c } = mountGlass(() => h(Checkbox, { checked: v.value, label: '同意条款', 'onUpdate:checked': (x: boolean) => { v.value = x } }))
   expect(all(c, 'image')).toHaveLength(0)
-  bubble(first(c, 'text'), 'click'); await nextTick()            // the label's click bubbles to the row's handler, as core dispatches it
+  bubble(first(c, 'text'), 'click'); await nextTick()            // the label's click bubbles to its box's handler, as core dispatches it
   expect(v.value).toBe(true); expect(all(c, 'image')).toHaveLength(1)
   const d = mountGlass(() => h(Checkbox, { checked: false, indeterminate: true })).c
   expect(all(d, 'image')).toHaveLength(1)                       // the minus icon
@@ -166,7 +168,7 @@ it('Checkbox: a click on the box, Enter and Space toggle it; from indeterminate 
     bubble(first(p.c, 'glass'), 'click'); expect(p.got).toEqual(['update:true', 'change:true'])
   }
 })
-it('through a Surface: a press on the Checkbox label clicks the row and toggles it once; the check scales in through GlassTransition', async () => {
+it('through a Surface: a press on the Checkbox label clicks the label and toggles it once; the check scales in through GlassTransition', async () => {
   const root = createFakeRoot(), v = ref(false)
   mountGlass(() => h(Surface, { width: 500, height: 200 }, () => [h(Checkbox, { id: 'cb', label: '我已阅读并同意服务条款', checked: v.value, 'onUpdate:checked': (x: boolean) => { v.value = x } })]), { root })
   await flush(); root.tick()
@@ -212,5 +214,104 @@ it('Switch and Checkbox are registered with complete manifest metadata', () => {
     for (const [k, s] of Object.entries(m.props.shape)) expect((s as { description?: string }).description, `${name}.${k}`).toMatch(/[一-鿿]/)
     expect(Object.keys(m.events!)).toEqual(['update:checked', 'change']); expect(Object.keys(m.slots!)).toEqual(['default'])
     expect(JSON.stringify(m.mistakes)).toMatch(/v-model:checked/)
+  }
+})
+
+// ── fix round 1 ──
+
+it('V1: an off Switch pools as clear glass, with no accent anywhere; on, the glow\'s pool; turning off fades it back', async () => {
+  const root = createFakeRoot(), on = ref(false)
+  mountGlass(() => h(Surface, { width: 400, height: 200 }, () => [h(Switch, { id: 'sw', checked: on.value })]), { root })
+  await flush(); root.tick()
+  const s = root.surfacesMade[0]!, sw = first(byId(s.root, 'sw')!, 'glass')
+  const pool = () => buildRenderList(s.model, root.theme, 'light').decorations.find(d => d.kind === 'pool' && d.node === sw)!
+  const settle = () => { root.tick(); for (let i = 0; i < 600 && sw.visual; i++) root.tick() }
+  expect(pool()).toMatchObject({ color: [1, 1, 1, 1], strength: 0.28 })
+  on.value = true; await nextTick(); settle()
+  expect(pool()).toMatchObject({ color: resolveColor('accent', defaultTheme, 'light'), strength: 0.5 })
+  on.value = false; await nextTick(); root.tick()                      // a frame ticks, then draws
+  for (let i = 0; i < 60 && pool().strength >= 0.5; i++) root.tick()   // full until the fading glow (from 1.1) drops below 1
+  expect(sw.visual).not.toBeNull()                                      // mid-fade: on its way, not dropped
+  expect(pool().strength).toBeGreaterThan(0.28); expect(pool().strength).toBeLessThan(0.5)
+  settle()
+  expect(pool()).toMatchObject({ color: [1, 1, 1, 1], strength: 0.28 })
+})
+it('M1: the Checkbox toggles from its box and its label only: a click in its stretched row\'s empty space does nothing', async () => {
+  const root = createFakeRoot(), got: boolean[] = []
+  mountGlass(() => h(Surface, { width: 600, height: 200 }, () => [
+    h(Stack, { style: { width: 600 } }, () => [h(Checkbox, { id: 'cb', label: '同意', 'onUpdate:checked': (x: boolean) => got.push(x) })]),
+  ]), { root })
+  await flush(); root.tick()
+  const s = root.surfacesMade[0]!, row = byId(s.root, 'cb')!, r = absoluteRect(row), l = absoluteRect(first(row, 'text'))
+  expect(r.x + r.width).toBeGreaterThan(l.x + l.width + 300)          // the column stretched the row far past its label
+  const click = (x: number, y: number) => { s.pointer.down(x, y); s.pointer.up(x, y) }
+  click(r.x + r.width - 20, r.y + r.height / 2)
+  expect(got).toEqual([])
+  expect(() => bubble(row, 'click')).toThrow(/no click handler/)
+  const b = absoluteRect(first(row, 'glass'))
+  click(b.x + b.width / 2, b.y + b.height / 2); click(l.x + l.width / 2, l.y + l.height / 2)
+  expect(got).toEqual([true, true])                                   // uncontrolled here: each click asks for true
+})
+it('M2: the Switch manifest warns that a stretched row packs the switch right, and says how to keep it left', () => {
+  const m = glassComponents().find(g => g.glass.name === 'Switch')!.glass
+  expect(JSON.stringify(m.mistakes)).toMatch(/拉.*靠右.*align=\\"start\\"/)
+})
+it('M3: a press on a label presses the control (the knob stretches) until it is released, leaves or is cancelled; dragged back while held, it presses again; disabled, nothing', async () => {
+  for (const comp of [Switch, Checkbox]) {
+    const disabled = ref(false)
+    const { c } = mountGlass(() => h(comp, { label: '标签', checked: true, disabled: disabled.value }))
+    const box = first(c, 'glass'), text = first(c, 'text'), label = text.parent!
+    const knob = () => comp === Switch ? first(box, 'image').style.width : undefined
+    bubble(text, 'pointerdown'); await nextTick()
+    expect(box.state.pressed).toBe(true); if (comp === Switch) expect(knob()).toBe(66)
+    bubble(text, 'pointerup'); await nextTick()
+    expect(box.state.pressed).toBe(false); if (comp === Switch) expect(knob()).toBe(56)
+    bubble(text, 'pointerdown'); fire(label, 'pointerleave'); expect(box.state.pressed).toBe(false)
+    label.setState({ pressed: true }); fire(label, 'pointerenter'); expect(box.state.pressed).toBe(true)   // the tracker still holds it
+    fire(label, 'pointercancel'); expect(box.state.pressed).toBe(false)
+    label.setState({ pressed: false }); fire(label, 'pointerenter'); expect(box.state.pressed).toBe(false)  // a mere hover is no press
+    disabled.value = true; await nextTick()
+    bubble(text, 'pointerdown'); expect(box.state.pressed).toBe(false)
+  }
+})
+it('M3: through a Surface, pressing a label shows its control pressed; the click toggles it and focuses it without the ring, as a press on it would', async () => {
+  for (const comp of [Switch, Checkbox]) {
+    const root = createFakeRoot(), v = ref(false)
+    mountGlass(() => h(Surface, { width: 600, height: 300 }, () => [h(Stack, { align: 'start', gap: 20 }, () => [
+      h(Button, { id: 'other', label: 'Other' }),
+      h(comp, { id: 't', label: '我已阅读并同意', checked: v.value, 'onUpdate:checked': (x: boolean) => { v.value = x } }),
+    ])]), { root })
+    await flush(); root.tick()
+    const s = root.surfacesMade[0]!, row = byId(s.root, 't')!, box = first(row, 'glass'), r = absoluteRect(first(row, 'text'))
+    s.focus.focus(byId(s.root, 'other')!, { visible: true })
+    const [x, y] = [r.x + r.width / 2, r.y + r.height / 2]
+    s.pointer.down(x, y); s.focus.focusFromPointer(s.pointer.pressed)          // as the render's pointer bridge does
+    expect(box.state.pressed).toBe(true)
+    s.pointer.up(x, y); await nextTick()
+    expect(v.value).toBe(true)
+    expect(s.focus.current).toBe(box); expect(box.state).toMatchObject({ pressed: false, focused: true, focusVisible: false })
+  }
+})
+it('M3: a disabled toggle\'s label click neither toggles nor focuses it', async () => {
+  const root = createFakeRoot(), got: boolean[] = []
+  mountGlass(() => h(Surface, { width: 400, height: 200 }, () => [h(Checkbox, { id: 't', label: '不可用', disabled: true, 'onUpdate:checked': (x: boolean) => got.push(x) })]), { root })
+  await flush(); root.tick()
+  const s = root.surfacesMade[0]!, r = absoluteRect(first(byId(s.root, 't')!, 'text')), [x, y] = [r.x + r.width / 2, r.y + r.height / 2]
+  s.pointer.down(x, y); s.focus.focusFromPointer(s.pointer.pressed); s.pointer.up(x, y)
+  expect(got).toEqual([]); expect(s.focus.current).toBeNull()
+})
+it('M6: a Switch disabled mid-press (a pointer, its label, or Space) returns its knob to its rest width and place', async () => {
+  const presses: [string, (sw: Node, label: Node) => void][] = [
+    ['pointer', sw => fire(sw, 'pointerdown')], ['label', (_, label) => bubble(label, 'pointerdown')], ['space', sw => fire(sw, 'keydown', { key: ' ' })],
+  ]
+  for (const [how, press] of presses) {
+    const disabled = ref(false)
+    const { c } = mountGlass(() => h(Switch, { checked: true, label: '记住我', disabled: disabled.value }))
+    const sw = first(c, 'glass'), knob = first(sw, 'image')
+    press(sw, first(c, 'text')); await nextTick()
+    expect(knob.style, how).toMatchObject({ left: 67, width: 66 })
+    disabled.value = true; await nextTick()
+    expect(knob.style, how).toMatchObject({ left: 77, width: 56 }); expect(knob.props.src, how).toBe(knobCanvas(56, 48, napiCanvas))
+    if (how !== 'pointer') expect(sw.state.pressed, how).toBe(false)     // the tracker's own press is the tracker's to end
   }
 })

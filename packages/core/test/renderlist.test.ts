@@ -142,6 +142,22 @@ describe('buildRenderList rules', () => {
     })
   })
 
+  it('pools a glow by its strength: at 0 as clear glass (white, 0.28: an off switch), from 1 up in its colour at 0.5, in between in between', () => {
+    const glow = (id: string, left: number, strength: number) => box('glass', id, { left, width: 100, height: 40, glass: { glow: { color: 'accent', strength } } })
+    const s = layout(surface(glow('off', 0, 0), glow('half', 110, 0.5), glow('one', 220, 1), glow('on', 330, 1.1), box('glass', 'clear', { left: 440, width: 100, height: 40 })))
+    const rl = buildRenderList(s, theme, 'light')
+    const pool = (id: string) => rl.decorations.find(d => d.kind === 'pool' && d.node.id === id)!
+    const accent = resolveColor('accent', theme, 'light')
+    expect(pool('off')).toMatchObject({ color: [1, 1, 1, 1], strength: 0.28 })
+    expect(pool('off').color).toEqual(pool('clear').color); expect(pool('off').strength).toBe(pool('clear').strength)
+    for (const id of ['one', 'on']) expect(pool(id)).toMatchObject({ color: accent, strength: 0.5 })
+    expect(pool('half').strength).toBeCloseTo(0.39, 12)
+    pool('half').color.forEach((c, i) => expect(c).toBeCloseTo((accent[i]! + 1) / 2, 12))
+    // a glow animating out (its visual strength) pools by where it has got to
+    const off = s.root.children[0]!; off.setVisual({ glass: { glowStrength: 0.25 } })
+    expect(buildRenderList(s, theme, 'light').decorations.find(d => d.kind === 'pool' && d.node === off)!.strength).toBeCloseTo(0.335, 12)
+  })
+
   it('gives capsules a circular corner exponent unless one is set; rim and pool carry their glass\'s exponent', () => {
     const s = layout(surface(
       box('glass', 'pill', { width: 100, height: 40, radius: 'capsule' }),

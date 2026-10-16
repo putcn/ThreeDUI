@@ -1,12 +1,12 @@
-import { computed, h, shallowRef } from '@vue/runtime-core'
+import { h, shallowRef } from '@vue/runtime-core'
 import { z } from 'zod'
 import type { Node, Style } from '@glassui/core'
 import { glowingTint } from '../colors'
-import { controlStyle, TOGGLE_LABEL, useGlassControl } from '../control'
+import { controlStyle } from '../control'
 import { defineGlassComponent } from '../define'
 import { knobCanvas } from '../icons'
 import { useCanvasFactory, useScheme, useTheme } from '../inject'
-import { Text } from './Text'
+import { toggleLabel, toggleRow, useToggle } from './toggle'
 
 /** The press, lift, tilt and glint every control shares. */
 const CONTROL = controlStyle()
@@ -27,7 +27,7 @@ const UNTINTED = '#ffffff'
 
 export const Switch = defineGlassComponent({
   name: 'Switch',
-  description: '开关（Liquid Glass 控件）：136 × 62 的胶囊玻璃，上面一颗白色圆形旋钮。受控组件：显示的永远是 checked，用 v-model:checked 双向绑定，点击只发出新值。打开时旋钮在右，玻璃发出强调色的光并染上强调色，光在旋钮处柔和地截止；关闭时旋钮在左，是清玻璃。切换时旋钮滑过去，发光与染色随之渐变；按住时旋钮朝中间拉长到 58 pt（外侧边缘不动）。点击开关或标签、Enter、空格（按下时显示按压，松开时切换）都会切换，依次发出 update:checked 与 change；可以用 Tab 聚焦，键盘聚焦时显示焦点环。label（或默认插槽）在开关左侧，右对齐、相距 16 pt（参考稿的 "Remember me"）；行被父容器拉宽时整行靠右。鼠标、触控笔悬停时上浮 6 pt、朝指针倾斜（最多 3°）、高光增强；按下缩到 0.96；触屏没有悬停效果，减少动态效果时不倾斜。disabled 时整行变淡、不响应、不在 Tab 顺序里。',
+  description: '开关（Liquid Glass 控件）：136 × 62 的胶囊玻璃，上面一颗白色圆形旋钮。受控组件：显示的永远是 checked，用 v-model:checked 双向绑定，点击只发出新值。打开时旋钮在右，玻璃发出强调色的光并染上强调色，光在旋钮处柔和地截止；关闭时旋钮在左，是清玻璃。切换时旋钮滑过去，发光与染色随之渐变；按住时旋钮朝中间拉长到 58 pt（外侧边缘不动）。点击开关或标签、Enter、空格（按下时显示按压，松开时切换）都会切换，依次发出 update:checked 与 change；按住标签时开关显示按压，点标签还会让开关获得焦点（不显示焦点环），同 HTML 的 label。可以用 Tab 聚焦，键盘聚焦时显示焦点环。label（或默认插槽）在开关左侧，右对齐、相距 16 pt（参考稿的 "Remember me"）；行被父容器拉宽时整行靠右（开关贴在右边）。鼠标、触控笔悬停时上浮 6 pt、朝指针倾斜（最多 3°）、高光增强；按下缩到 0.96；触屏没有悬停效果，减少动态效果时不倾斜。disabled 时整行变淡、不响应、不在 Tab 顺序里。',
   props: z.object({
     checked: z.boolean().default(false).describe('是否打开；用 v-model:checked 双向绑定（受控：组件自己不改它，只发出新值）'),
     disabled: z.boolean().default(false).describe('禁用：整行（开关与标签）变淡到 0.4，不响应指针和键盘，不在 Tab 顺序里'),
@@ -47,17 +47,12 @@ export const Switch = defineGlassComponent({
     { mistake: '<Switch v-model="on" />', fix: '<Switch v-model:checked="on" />：开关的值叫 checked，不是 modelValue' },
     { mistake: '<Switch label="通知" />（没有绑定，以为点了会自己变）', fix: 'Switch 是受控的，显示的永远是 checked：用 v-model:checked="notify"，或 :checked 加 @update:checked 自己接住新值' },
     { mistake: '<Switch v-model:checked="on" @click="save" />', fix: '@change="save"：change 也覆盖 Enter、空格与点标签，禁用时不发；@click 落到外层的行上，禁用时照样触发' },
+    { mistake: '<Stack><Switch v-model:checked="wifi" label="Wi-Fi" /></Stack>（以为开关在左边）', fix: '纵向 Stack 默认 align stretch，会把开关这一行拉满，行内靠右排（参考稿 "Remember me" 的排法：开关贴在右边，标签右对齐紧挨它）；要放在左边就给父容器 align="start"（或 center），或只给这个开关 :style="{ alignSelf: \'flex-start\' }"' },
   ],
 }, (p, { slots, emit }) => {
   const scheme = useScheme(), theme = useTheme(), createCanvas = useCanvasFactory()
   const el = shallowRef<Node | null>(null)
-  /** The props, null while they are invalid (the render throws that error; nothing here should throw it again). */
-  const valid = computed(() => { try { return p.value } catch { return null } })
-  const inert = computed(() => !valid.value || valid.value.disabled)
-  const { handlers, pressing } = useGlassControl(el, {
-    disabled: inert,
-    onActivate: () => { const next = !p.value.checked; emit('update:checked', next); emit('change', next) },
-  })
+  const { handlers, label, pressing, inert } = useToggle(el, p, emit, v => !v.checked)
 
   return () => {
     const v = p.value, t = theme.value, m = t.metrics, W = m.switchWidth, H = m.switchHeight
@@ -79,16 +74,11 @@ export const Switch = defineGlassComponent({
       src: knobCanvas(size, m.knob, createCanvas, stretch),
       style: { position: 'absolute', left, top: (H - size) / 2, width, height: size, transition: KNOB_TRANSITION },
     })
-    const content = slots.default ? slots.default() : v.label !== undefined
-      ? [h(Text, { value: v.label, size: TOGGLE_LABEL.size, weight: TOGGLE_LABEL.weight, color: TOGGLE_LABEL.color, align: 'right' })]
-      : null
-    // the label, right-aligned against the switch; a click on it toggles too (the switch's own click does not reach it)
-    const label = content ? h('box', { style: { flexShrink: 1, alignItems: 'flex-end' }, onClick: handlers.onClick }, content) : null
-    return h('box', {
-      style: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: TOGGLE_LABEL.gap, disabled: { opacity: 0.4 } }, disabled: v.disabled,
-    }, [
-      label,
+    // the label, right-aligned against the switch, packed right with it; a sibling of the glass, so its click and the
+    // switch's own never both reach one handler
+    return toggleRow(v.disabled, [
+      toggleLabel(slots, v.label, label, 'right'),
       h('glass', { ref: el, style, tabIndex: v.disabled ? -1 : 0, disabled: v.disabled, ...handlers }, [knob]),
-    ])
+    ], { justifyContent: 'flex-end' })
   }
 })

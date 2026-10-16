@@ -1,12 +1,12 @@
-import { computed, h, shallowRef } from '@vue/runtime-core'
+import { h, shallowRef } from '@vue/runtime-core'
 import { z } from 'zod'
 import type { Node, Style } from '@glassui/core'
-import { controlStyle, TOGGLE_LABEL, useGlassControl } from '../control'
+import { controlStyle } from '../control'
 import { defineGlassComponent } from '../define'
 import { useTheme } from '../inject'
 import { GlassTransition } from '../transition'
 import { Icon } from './Icon'
-import { Text } from './Text'
+import { toggleLabel, toggleRow, useToggle } from './toggle'
 
 /** The press (to 0.9, as the reference's checkbox), lift, tilt and glint. */
 const CONTROL = controlStyle({ pressScale: 0.9 })
@@ -17,7 +17,7 @@ const MARK = { size: 30, color: 'accent', weight: 0.14 } as const
 
 export const Checkbox = defineGlassComponent({
   name: 'Checkbox',
-  description: '复选框（Liquid Glass 控件）：44 × 44、圆角 12 的清玻璃方块，选中时里面是强调色的对勾（缩放淡入），indeterminate 时是一条横线（不论 checked）。受控组件：显示的永远是 checked，用 v-model:checked 双向绑定，点击只发出新值。整行（方块与标签）都能点：点方块或标签、方块聚焦时按 Enter、空格（按下时显示按压，松开时切换）都会切换，依次发出 update:checked 与 change；indeterminate 时切换总是发出 true，父组件收到后自己把 indeterminate 清掉（例如"全选"）。label（或默认插槽）在方块右侧，相距 16 pt。可以用 Tab 聚焦方块，键盘聚焦时显示焦点环；鼠标、触控笔悬停在方块上时上浮 6 pt、朝指针倾斜（最多 3°）、高光增强，按下缩到 0.9；触屏没有悬停效果，减少动态效果时不倾斜。disabled 时整行变淡、不响应、不在 Tab 顺序里。',
+  description: '复选框（Liquid Glass 控件）：44 × 44、圆角 12 的清玻璃方块，选中时里面是强调色的对勾（缩放淡入），indeterminate 时是一条横线（不论 checked）。受控组件：显示的永远是 checked，用 v-model:checked 双向绑定，点击只发出新值。点方块或标签、方块聚焦时按 Enter、空格（按下时显示按压，松开时切换）都会切换，依次发出 update:checked 与 change；同 HTML 的 label，按住标签时方块显示按压，点标签还会让方块获得焦点（不显示焦点环）；行被父容器拉宽后多出的空白不响应点击。indeterminate 时切换总是发出 true，父组件收到后自己把 indeterminate 清掉（例如"全选"）。label（或默认插槽）在方块右侧，相距 16 pt。可以用 Tab 聚焦方块，键盘聚焦时显示焦点环；鼠标、触控笔悬停在方块上时上浮 6 pt、朝指针倾斜（最多 3°）、高光增强，按下缩到 0.9；触屏没有悬停效果，减少动态效果时不倾斜。disabled 时整行变淡、不响应、不在 Tab 顺序里。',
   props: z.object({
     checked: z.boolean().default(false).describe('是否选中；用 v-model:checked 双向绑定（受控：组件自己不改它，只发出新值）'),
     indeterminate: z.boolean().default(false).describe('部分选中：显示横线，不论 checked；此时切换发出 checked = true，由父组件清掉 indeterminate'),
@@ -42,14 +42,7 @@ export const Checkbox = defineGlassComponent({
 }, (p, { slots, emit }) => {
   const theme = useTheme()
   const el = shallowRef<Node | null>(null)
-  /** The props, null while they are invalid (the render throws that error; nothing here should throw it again). */
-  const valid = computed(() => { try { return p.value } catch { return null } })
-  const inert = computed(() => !valid.value || valid.value.disabled)
-  // the row takes the click (the box's and the label's bubble to it); the box takes the hover, the keys and the press
-  const { handlers: { onClick, ...box } } = useGlassControl(el, {
-    disabled: inert,
-    onActivate: () => { const v = p.value, next = v.indeterminate || !v.checked; emit('update:checked', next); emit('change', next) },
-  })
+  const { handlers, label, inert } = useToggle(el, p, emit, v => v.indeterminate || !v.checked)
 
   return () => {
     const v = p.value, m = theme.value.metrics
@@ -61,14 +54,10 @@ export const Checkbox = defineGlassComponent({
     }
     // one Icon (its name swaps between the dash and the check in place); the transition scales it in and out
     const mark = v.indeterminate || v.checked ? [h(Icon, { name: v.indeterminate ? 'minus' : 'check', ...MARK })] : []
-    const content = slots.default ? slots.default() : v.label !== undefined
-      ? [h(Text, { value: v.label, size: TOGGLE_LABEL.size, weight: TOGGLE_LABEL.weight, color: TOGGLE_LABEL.color })]
-      : null
-    return h('box', {
-      style: { flexDirection: 'row', alignItems: 'center', gap: TOGGLE_LABEL.gap, disabled: { opacity: 0.4 } }, disabled: v.disabled, onClick,
-    }, [
-      h('glass', { ref: el, style, tabIndex: v.disabled ? -1 : 0, disabled: v.disabled, ...box }, [h(GlassTransition, { preset: 'scale' }, () => mark)]),
-      content ? h('box', { style: { flexShrink: 1 } }, content) : null,
+    // the box and its label each take their own clicks (siblings: never both for one click); the row takes none
+    return toggleRow(v.disabled, [
+      h('glass', { ref: el, style, tabIndex: v.disabled ? -1 : 0, disabled: v.disabled, ...handlers }, [h(GlassTransition, { preset: 'scale' }, () => mark)]),
+      toggleLabel(slots, v.label, label),
     ])
   }
 })
