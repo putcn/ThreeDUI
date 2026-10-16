@@ -7,7 +7,7 @@
 // Drag the background to orbit (world and both only); the form stays put, the world Surface moves with the scene. The
 // spatial scene's Space drives the camera itself (no orbit there); click an unfocused Block to focus it.
 
-import { Color, PerspectiveCamera, Raycaster, Scene, Vector2 } from 'three'
+import { Color, PerspectiveCamera, Raycaster, Scene, Vector2, type Mesh } from 'three'
 import { WebGPURenderer } from 'three/webgpu'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { absoluteRect, type Node, type Rect } from '@glassui/core'
@@ -17,7 +17,8 @@ import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
 import Gallery from './gallery/Gallery.vue'
 import Spatial from './scenes/Spatial.vue'
-import { createHostLights, createWall } from './wall'
+import { ARC } from './scenes/spatial-arc'
+import { createCurvedWall, createHostLights, createWall } from './wall'
 import { buildSignup, SIGNUP } from './signup'
 import { buildWorld } from './world'
 
@@ -63,14 +64,20 @@ hostScene.background = new Color(0xd9d4d2)   // only seen past the wall's edges 
 const camera = new PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 50)
 camera.position.set(0, 0.55, 7.3)
 camera.lookAt(0, -0.05, 0)
-// the spatial scene's camera swings round the arc to face each Block: a wall 2.5× the size and further back fills its views
-hostScene.add(createWall(mode === 'spatial' ? { scale: 2.5, z: -4 } : {}), ...createHostLights())
+// the spatial scene's camera swings round its arc: its backdrop is a curved wall round the arc, added once the Blocks
+// stand (`spatialWall`)
+if (mode !== 'spatial') hostScene.add(createWall())
+hostScene.add(...createHostLights())
 
 const orbit = mode === 'world' || mode === 'both'
-const controls = new OrbitControls(camera, renderer.domElement)
-controls.target.set(0, -0.05, 0)
-controls.enableDamping = true
-controls.enabled = orbit
+// none in the spatial scene: its Space's camera rig writes the camera pose every tick, and OrbitControls' update (its
+// `lookAt`) would fight it
+const controls = mode === 'spatial' ? null : new OrbitControls(camera, renderer.domElement)
+if (controls) {
+  controls.target.set(0, -0.05, 0)
+  controls.enableDamping = true
+  controls.enabled = orbit
+}
 
 const hud = document.getElementById('hud')
 if (hud) hud.hidden = !liveHud
@@ -119,6 +126,7 @@ async function start(): Promise<UIRoot> {
     // detached: everything teleports into the Blocks' own Surfaces
     createGlassApp(Spatial, { root, motion }, { initialFocus: params.get('focus') ?? undefined }).mount()
     surfaces.push(...root.surfaces)
+    hostScene.add(spatialWall(surfaces))
   }
   handle.root = root
   handle.surfaces = surfaces
@@ -134,8 +142,10 @@ async function start(): Promise<UIRoot> {
   // The first frame is drawn here, not on the first animation frame: `ready` must not depend on rAF (a hidden or
   // occluded tab gets none), and it then resolves with shaders compiled and the first content passes drawn.
   const step = (t: number): void => {
-    controls.enableZoom = !root.pointer?.hovered   // a wheel over a Surface is the UI's
-    controls.update()
+    if (controls) {
+      controls.enableZoom = !root.pointer?.hovered   // a wheel over a Surface is the UI's
+      controls.update()
+    }
     root.frame(t)                                    // ticks the UI and renders the host scene, then the UI over it
   }
   step(performance.now())
@@ -161,6 +171,18 @@ async function start(): Promise<UIRoot> {
     }
   })
   return root
+}
+
+/**
+ * The spatial scene's backdrop: a curved wall about the arc's centre (0, 0, ARC.radius), ARC.radius + 6 out, 11 tall
+ * like the plane (a focus pose sees no more than |y| ≈ 3.9), spanning the Blocks' arc angles (read off their rest
+ * poses, so it follows a retuned arc) plus 38° on each side: past its outermost Blocks a focus pose sees up to 26° at
+ * 16:9 and 32° at 21:9, the rig's ±2.5° parallax included. At the default arc (radius 7) that is −38° to 93°: 131°,
+ * an arc of about 30 units (the plane is 16).
+ */
+function spatialWall(blocks: readonly Surface[]): Mesh {
+  const angles = blocks.map(s => -s.restPose.rotation[1]), side = 38 * Math.PI / 180
+  return createCurvedWall({ center: [0, 0, ARC.radius], radius: ARC.radius + 6, from: Math.min(...angles) - side, to: Math.max(...angles) + side, height: 11 })
 }
 
 /** See `PlaygroundHandle.rectOf`: the node's Surface-pt rect (`absoluteRect`), its corners and centre projected (`screenFromPoint`). */
@@ -197,7 +219,7 @@ function rectOf(id: string): NodeRect | null {
  * world Surface going.
  */
 function guardOrbit(root: UIRoot): void {
-  if (!orbit) return
+  if (!orbit || !controls) return
   const canvas = renderer.domElement, raycaster = new Raycaster(), ndc = new Vector2()
   addEventListener('pointerdown', e => {
     if (e.target !== canvas || !e.isPrimary) return

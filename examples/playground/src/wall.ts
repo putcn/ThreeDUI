@@ -1,16 +1,14 @@
-import { DirectionalLight, HemisphereLight, Mesh, PlaneGeometry, type Object3D } from 'three'
+import { BackSide, CylinderGeometry, DirectionalLight, HemisphereLight, Mesh, PlaneGeometry, type Object3D } from 'three'
 import { MeshStandardNodeMaterial, type Node } from 'three/webgpu'
 import { Fn, float, length, mix, smoothstep, uv, vec2, vec3 } from 'three/tsl'
 
 type ColorNode = Node<'vec3'>
 
 /**
- * The backdrop wall (ported from `spikes/glass3d/main.ts`): a soft pastel gradient with colour blobs, a diagonal light
- * beam (so refraction has gradients to bend) and a vignette. 16 × 11 units (times `scale`, default 1) at z = `z`
- * (default −2.5); it neither casts nor receives shadows. It lives in the host scene, so it is lit by `createHostLights`,
- * not by the UI's lights.
+ * The backdrop's material (ported from `spikes/glass3d/main.ts`): a soft pastel gradient with colour blobs, a diagonal
+ * light beam (so refraction has gradients to bend) and a vignette, over uv (u across, v up).
  */
-export function createWall(opts: { scale?: number; z?: number } = {}): Mesh {
+function pastelMaterial(): MeshStandardNodeMaterial {
   const material = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 })
   material.colorNode = Fn(() => {
     const q = uv()
@@ -31,10 +29,45 @@ export function createWall(opts: { scale?: number; z?: number } = {}): Mesh {
     const vignette = float(1).sub(smoothstep(0.4, 1.0, length(q.sub(vec2(0.45, 0.62))).mul(0.9)))
     return c.mul(0.95).mul(float(0.8).add(vignette.mul(0.25)))
   })()
-  const k = opts.scale ?? 1
-  const wall = new Mesh(new PlaneGeometry(16 * k, 11 * k), material)
+  return material
+}
+
+/**
+ * The backdrop wall: the pastel material on a 16 × 11 unit plane at z = −2.5; it neither casts nor receives shadows. It
+ * lives in the host scene, so it is lit by `createHostLights`, not by the UI's lights.
+ */
+export function createWall(): Mesh {
+  const wall = new Mesh(new PlaneGeometry(16, 11), pastelMaterial())
   wall.name = 'wall'
-  wall.position.z = opts.z ?? -2.5
+  wall.position.z = -2.5
+  wall.castShadow = false
+  wall.receiveShadow = false
+  return wall
+}
+
+/**
+ * The backdrop for a camera that swings round an arc (the spatial scene): the pastel material on the inside of an
+ * open cylinder segment about the vertical axis through `center`, `radius` from it and `height` tall. `from` / `to` are
+ * angles in radians as a Space's arc measures them: 0 straight back from `center` (towards −z), rightwards positive.
+ * u runs along the segment, left to right as seen from inside, and v up it, as on the plane; keep the arc length,
+ * `radius × (to − from)`, near the plane's 16 units (at most about 32) for the blobs to keep their density.
+ *
+ * Every normal is the plane's (towards +z once `BackSide` turns it): lit by the host key from the front-left, the true
+ * inward normals would darken the wall to about a third of its brightness round the curve, while the same light as the
+ * plane keeps the pastel as bright all the way round. Neither casts nor receives shadows.
+ */
+export function createCurvedWall(opts: { center: [number, number, number]; radius: number; from: number; to: number; height: number }): Mesh {
+  const { center, radius, from, to, height } = opts
+  // three's cylinder puts angle φ at (sin φ, ·, cos φ): the arc's θ (towards (sin θ, ·, −cos θ)) is φ = π − θ, so the
+  // segment starts at the right end (θ = to) and u runs right to left: flipped below
+  const geometry = new CylinderGeometry(radius, radius, height, Math.max(8, Math.ceil((to - from) / (Math.PI / 96))), 1, true, Math.PI - to, to - from)
+  const uvs = geometry.getAttribute('uv'), normals = geometry.getAttribute('normal')
+  for (let i = 0; i < uvs.count; i++) { uvs.setX(i, 1 - uvs.getX(i)); normals.setXYZ(i, 0, 0, -1) }
+  const material = pastelMaterial()
+  material.side = BackSide
+  const wall = new Mesh(geometry, material)
+  wall.name = 'wall'
+  wall.position.set(...center)
   wall.castShadow = false
   wall.receiveShadow = false
   return wall

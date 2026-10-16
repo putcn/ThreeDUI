@@ -96,10 +96,11 @@ it('warns once when the content is taller than the Block', async () => {
   expect(warn.mock.calls.filter(c => /\[Block "a"\] 内容高 .*超出 block 高 100pt/.test(String(c[0])))).toHaveLength(1)
   warn.mockRestore()
 })
-it('Card: a nested glass box, concentric, with a title; style overrides', () => {
+it('Card: a nested glass box, 24 pt corners, with a title; style overrides', () => {
   const { c } = mountGlass(() => h(Card, { title: '本周活跃', style: { padding: 16 } }, () => [h(Text, { value: '12' })]))
   const card = first(c, 'box')
-  expect(card.style).toMatchObject({ bg: 'glass', radius: 'concentric', gap: 12, padding: 16, glass: { thickness: 12 } })
+  // fix round 1 (CP3 ruling): radius 'xl' (24 pt) instead of the brief's 'concentric'
+  expect(card.style).toMatchObject({ bg: 'glass', radius: 'xl', gap: 12, padding: 16, glass: { thickness: 12 } })
   expect(tree(card).children![0]).toMatchObject({ type: 'text', value: '本周活跃' })
 })
 it('unmounting the Space mid-flight disposes the rig and, after the flights, every Surface', async () => {
@@ -174,16 +175,47 @@ it('a Block with its own position stands off the arc; a rest-pose change springs
   expect(c!.animations.at(-1)!.target.position![0]).toBeCloseTo(arcSlots([4, 2], 7, 0.5)[1]!.position[0])   // a wider `a` moves `c` on
   expect(a!.model.width).toBe(976); expect(a!.animations).toHaveLength(1)    // a's own slot is unchanged: no flight
 })
-it('a Card is concentric with its Block: the Block radius less its inset, through boxes that are concentric too', () => {
+it('a Card has 24 pt corners in any layout; a concentric child still resolves against the Block', () => {
   const root = createFakeRoot()
   mountGlass(() => h(Space, null, () => [h(Block, { name: 'a', width: 880, height: 620, radius: 56 }, () => [
     h(Card, { id: 'direct' }),
-    h(Stack, { direction: 'horizontal', style: { radius: 'concentric' } }, () => [h(Card, { id: 'row' })]),
-    h(Stack, () => [h(Card, { id: 'plain' })]),
+    h(Stack, { direction: 'horizontal', gap: 16 }, () => [h(Card, { id: 'row1', style: { flexGrow: 1 } }), h(Card, { id: 'row2', style: { flexGrow: 1 } })]),
+    h(Card, { id: 'concentric', style: { radius: 'concentric' } }),
+    h(Card, { id: 'own', style: { radius: 10 } }),
   ])]), { root })
   root.tick()
   const radius = Object.fromEntries(buildRenderList(root.surfacesMade[0]!.model, defaultTheme, 'light').glass.map(g => [g.node.id, g.radius]))
-  expect(radius).toEqual({ direct: 16, row: 16, plain: 0 })     // 56 − the 40 pt padding; a box with no radius ends the chain
+  // the Block's content box carries its radius: a concentric child gets 56 − the 40 pt padding
+  expect(radius).toEqual({ direct: 24, row1: 24, row2: 24, concentric: 16, own: 10 })
+})
+it('a renamed Block registers under its new name; a rename onto a taken name is reported and keeps the old one', async () => {
+  const root = createFakeRoot(), name = ref('a'), focus = ref('b')
+  const m = mountGlass(() => h(Space, { focus: focus.value }, () => [h(Block, { key: 'k', name: name.value, width: 488, height: 244 }), blocks(['b'])[0]]), { root }); await flush()
+  const [a, b] = root.surfacesMade, rig = root.rigs[0]!
+  name.value = 'a2'; await nextTick(); await flush()
+  focus.value = 'a'; await nextTick(); await flush()
+  expect(m.errors.join()).toMatch(/\[Space\.focus\] 没有名为 "a" 的 Block。允许值：b, a2/)     // 'a' left, 'a2' joined
+  m.errors.length = 0
+  focus.value = 'a2'; await nextTick(); await flush()
+  expect(m.errors).toEqual([]); expect(rig.focus).toHaveBeenLastCalledWith(a, { immediate: false })
+  name.value = 'b'; await nextTick(); await flush()
+  expect(m.errors.join()).toMatch(/\[Block\.name\] 重名的 Block "b"/)
+  m.errors.length = 0
+  focus.value = 'b'; await nextTick(); await flush()
+  focus.value = 'a2'; await nextTick(); await flush()                          // still registered as a2
+  expect(m.errors).toEqual([]); expect(rig.focus).toHaveBeenLastCalledWith(a, { immediate: false })
+  expect(rig.focus.mock.calls.map(c => c[0])).toEqual([b, a, b, a])
+})
+it('Block.background: an unknown colour is reported with the allowed values; nothing is made, or the Block stays', async () => {
+  const root = createFakeRoot()
+  const bad = mountGlass(() => h(Space, null, () => blocks(['a'], { background: 'glas' })), { root })
+  expect(bad.errors[0]).toMatch(/\[Block\.background\] 未知背景 "glas".*允许值：none, glass, .*你可能想要：glass/)
+  expect(root.surfacesMade).toHaveLength(0)
+  const r2 = createFakeRoot(), bg = ref('glass')
+  const m = mountGlass(() => h(Space, null, () => blocks(['a'], { background: bg.value })), { root: r2 })
+  bg.value = 'fil'; await nextTick()
+  expect(m.errors.join()).toMatch(/\[Block\.background\] 未知背景 "fil".*你可能想要：fill/)
+  expect(r2.surfacesMade).toHaveLength(1); expect(r2.surfacesMade[0]!.disposed).toBe(false)
 })
 it('Space, Block and Card are registered with complete manifest metadata', () => {
   for (const name of ['Space', 'Block', 'Card']) {
@@ -197,4 +229,5 @@ it('Space, Block and Card are registered with complete manifest metadata', () =>
   expect(mistakes('Space')).toMatch(/OrbitControls/); expect(mistakes('Space')).toMatch(/focus/)
   expect(mistakes('Block')).toMatch(/Space 外/); expect(mistakes('Block')).toMatch(/:width=\\"400\\"/); expect(mistakes('Block')).toMatch(/pointerEvents: 'auto'/)
   expect(mistakes('Card')).toMatch(/玻璃 Box/)
+  for (const e of glassComponents().find(g => g.glass.name === 'Block')!.glass.examples) expect(e).toMatch(/^<Space\b[^]*<\/Space>$/)   // never the first mistake
 })

@@ -62,8 +62,8 @@ export const Block = defineGlassComponent({
   slots: { default: 'Block 的内容（纵向排列，padding 40、gap 24）' },
   examples: [
     '<Space v-model:focus="page"><Block name="login" :width="488" :height="560"><Text value="登录" size="3xl" :weight="700" /><Text value="欢迎回来" color="secondaryLabel" /></Block><Block name="home" :width="880" :height="620"><Text value="首页" size="3xl" :weight="700" /></Block></Space>',
-    '<Block name="stats" :width="880" :height="400" tw="justify-center"><Stack direction="horizontal" :gap="16"><Card title="本周活跃" :style="{ flexGrow: 1 }"><Text value="1,284" size="3xl" :weight="700" /></Card><Card title="完成任务" :style="{ flexGrow: 1 }"><Text value="36" size="3xl" :weight="700" /></Card></Stack></Block>',
-    '<Block v-if="open" name="detail" :width="560" :height="480" :position="[3, 0, 2]" :rotation="[0, -0.6, 0]" :leave-to="{ position: [4, 0, 0], opacity: 0 }"><Text value="详情" size="2xl" :weight="700" /></Block>',
+    '<Space><Block name="stats" :width="880" :height="400" tw="justify-center"><Stack direction="horizontal" :gap="16"><Card title="本周活跃" :style="{ flexGrow: 1, flexBasis: 0 }"><Text value="1,284" size="3xl" :weight="700" /></Card><Card title="完成任务" :style="{ flexGrow: 1, flexBasis: 0 }"><Text value="36" size="3xl" :weight="700" /></Card></Stack></Block></Space>',
+    '<Space><Block name="list" :width="560" :height="480"><Text value="列表" size="2xl" :weight="700" /></Block><Block v-if="open" name="detail" :width="560" :height="480" :position="[3, 0, 2]" :rotation="[0, -0.6, 0]" :leave-to="{ position: [4, 0, 0], opacity: 0 }"><Text value="详情" size="2xl" :weight="700" /></Block></Space>',
   ],
   mistakes: [
     { mistake: '<Block> 放在 Space 外（直接放在页面或 <Surface> 里）', fix: 'Block 只能是 <Space> 的直接子项：<Space><Block name="a" …>…</Block></Space>' },

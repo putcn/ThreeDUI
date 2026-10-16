@@ -4,6 +4,7 @@
 // `?focus=<name>` picks the first focus (default login).
 import { ref } from 'vue'
 import { Block, Card, Space, Stack, Text } from '@glassui/vue'
+import { ARC } from './spatial-arc'
 
 const props = defineProps<{ initialFocus?: string }>()
 const focus = ref(props.initialFocus ?? 'login')
@@ -16,7 +17,7 @@ const stats = [
 </script>
 
 <template>
-  <Space v-model:focus="focus">
+  <Space v-model:focus="focus" :radius="ARC.radius" :gap="ARC.gap">
     <Block name="login" :width="488" :height="560">
       <Text value="登录" size="3xl" :weight="700" />
       <Text value="邮箱 name@example.com" color="secondaryLabel" />
@@ -25,8 +26,7 @@ const stats = [
 
     <Block name="landing" :width="880" :height="620">
       <Text value="欢迎回来" size="3xl" :weight="700" />
-      <!-- concentric: the Cards' radius resolves against their parent's, so the row passes the Block's on -->
-      <Stack direction="horizontal" :gap="16" :style="{ radius: 'concentric' }">
+      <Stack direction="horizontal" :gap="16">
         <Card v-for="s in stats" :key="s.title" :title="s.title" :style="{ flexGrow: 1, flexBasis: 0 }">
           <Text :value="s.value" size="3xl" :weight="700" />
           <Text :value="s.note" size="sm" color="secondaryLabel" />
