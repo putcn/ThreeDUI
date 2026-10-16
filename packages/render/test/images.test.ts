@@ -4,7 +4,7 @@ import { Vector2, Vector3, Texture, TextureLoader, RenderTarget, Mesh, NormalBle
 import type { MeshBasicNodeMaterial } from 'three/webgpu'
 import { Node, IDENTITY, scaleAbout, type ClipRect, type ImageInstance } from '@glassui/core'
 import { ImageSet, IMAGE_ATTRS, defaultImageLoader } from '../src/image/images'
-import { AA_MARGIN_PT } from '../src/flat'
+import { AA_MARGIN_PT, type SurfaceUniforms } from '../src/flat'
 import { instanceMatrix } from '../src/transform'
 import { srgbToLinear } from '../src/color'
 import type { InstanceBuffer } from '../src/instances'
@@ -211,9 +211,9 @@ describe('image material', () => {
   // the fragment at quad-local q (units) of a 100 × 100 pt image (1 × 1 units) grown by the AA margin, footprint 1 pt
   // per pixel (aa = 0.0075 units), through a sampler that records the uv and returns `texel` (by default from a straight
   // sRGB-tagged texture, which the hardware decodes: the shader passes its sample through)
-  const frag = (inst: ImageInstance, qx: number, qy: number, t = tex(SRGBColorSpace, false), texel = [0.2, 0.4, 0.6, 0.5]) => {
+  const frag = (inst: ImageInstance, qx: number, qy: number, t = tex(SRGBColorSpace, false), texel = [0.2, 0.4, 0.6, 0.5], uniforms: SurfaceUniforms = su) => {
     const uvs: number[][] = []
-    const set = new ImageSet(su, () => t); set.update([inst], s)
+    const set = new ImageSet(uniforms, () => t); set.update([inst], s)
     const mesh = set.container.children[0] as Mesh, m = mesh.material as MeshBasicNodeMaterial
     const sample = (got: unknown, uv: readonly number[]) => { expect(got).toBe(t); uvs.push([...uv]); return texel }
     const grow = (2 * AA_MARGIN_PT) / s.ptPerUnit
@@ -225,6 +225,11 @@ describe('image material', () => {
     const a = { ...img('a', 'a.png'), radius: 0 }
     close(frag(a, -0.5, 0.5).uv, [0, 1]); close(frag(a, 0.5, -0.5).uv, [1, 0]); close(frag(a, 0, 0).uv, [0.5, 0.5])
     close(frag({ ...a, rect: { ...a.rect, width: 200 } }, 0.5, 0.25).uv, [0.75, 0.75])   // a 2 × 1 rect
+  })
+  it('fades with the whole Surface: alpha × su.opacity', () => {
+    const a = img('a', 'a.png'), t = tex(SRGBColorSpace, false)
+    const full = frag(a, 0, 0, t).rgba[3]!, half = frag(a, 0, 0, t, undefined, { ...su, opacity: uniform(0.5) }).rgba[3]!
+    expect(full).toBeGreaterThan(0); expect(half).toBeCloseTo(full / 2, 12)
   })
   it('colours by the sample; opacity = SDF coverage × sample alpha × instance opacity, antialiased past the edge', () => {
     const a = img('a', 'a.png')   // a capsule: radius 0.5 units, n = 2 (a circle)

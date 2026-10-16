@@ -32,9 +32,10 @@ function decal(fv: FlatVertex): MeshBasicNodeMaterial {
 
 /**
  * Thin bright outline + lower/top bands inside the superellipse (the spike's `rimDecal`), drawn over its glass:
- * alpha = min(1, outline · 0.75 + lower + top) · coverage · strength · opacity, colour `iColor`. The outline is a
- * `RIM_OUTLINE_PT` band just inside the edge, fading over aa + ¼ of its width; coverage is antialiased over ±0.75 px
- * (`fwidth`), the quad extending `AA_MARGIN_PT` beyond the rect so its outer half is rasterised.
+ * alpha = min(1, outline · 0.75 + lower + top) · coverage · strength · opacity · the Surface's opacity (`su.opacity`),
+ * colour `iColor`. The outline is a `RIM_OUTLINE_PT` band just inside the edge, fading over aa + ¼ of its width;
+ * coverage is antialiased over ±0.75 px (`fwidth`), the quad extending `AA_MARGIN_PT` beyond the rect so its outer half
+ * is rasterised.
  *
  * Varyings: `flatVertex`'s three + `iShape`, `iColor` = 5.
  */
@@ -55,7 +56,7 @@ export function createRimMaterial(g: InstancedBufferGeometry, su: SurfaceUniform
   const lower = float(0.42).mul(exp(y01.mul(-21))).mul(float(1).sub(smoothstep(0.30, 0.45, y01)))   // edge0 < edge1 (GLSL rule)
   const top = float(0.22).mul(smoothstep(0.65, 1.0, y01))
   m.colorNode = color.rgb
-  m.opacityNode = min(float(1), outline.mul(RIM_OUTLINE_ALPHA).add(lower).add(top)).mul(cover).mul(strength).mul(opacity)
+  m.opacityNode = min(float(1), outline.mul(RIM_OUTLINE_ALPHA).add(lower).add(top)).mul(cover).mul(strength).mul(opacity).mul(su.opacity ?? float(1))
   return m
 }
 

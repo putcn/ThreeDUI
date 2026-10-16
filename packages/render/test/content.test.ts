@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { Color, HalfFloatType, LinearFilter, LinearMipmapLinearFilter, LinearSRGBColorSpace, RenderTarget, UnsignedByteType, Vector3 } from 'three'
 import type { WebGPURenderer } from 'three/webgpu'
-import { contentRTSize, ContentPass, type RendererLike } from '../src/surface/content'
+import { contentRTSize, ContentPass, rtTarget, RT_SETTLE_FRAMES, type RendererLike } from '../src/surface/content'
 
 // Type-level guard (checked by `pnpm typecheck`): the real renderer satisfies the stub-able subset.
 export const asRendererLike = (r: WebGPURenderer): RendererLike => r
@@ -17,6 +17,22 @@ describe('contentRTSize', () => {
   })
 })
 
+describe('rtTarget', () => {
+  const sz = (width: number, height: number) => ({ width, height })
+  const moving = { settled: false, fresh: false }
+  it('a fresh RT takes exactly what is needed', () => expect(rtTarget(sz(1, 1), sz(640, 384), { settled: false, fresh: true })).toEqual(sz(640, 384)))
+  it('grows with 25 % headroom on the 64 step, per axis', () => {
+    expect(rtTarget(sz(640, 384), sz(704, 384), moving)).toEqual(sz(896, 384))   // ceil(704 × 1.25 / 64) × 64
+    expect(rtTarget(sz(896, 384), sz(832, 384), moving)).toEqual(sz(896, 384))   // within the headroom: kept
+  })
+  it('shrinks only once settled', () => {
+    expect(rtTarget(sz(896, 384), sz(640, 320), moving)).toEqual(sz(896, 384))
+    expect(rtTarget(sz(896, 384), sz(640, 320), { settled: true, fresh: false })).toEqual(sz(640, 320))
+  })
+  it('never passes the cap', () => expect(rtTarget(sz(3840, 64), sz(4000, 64), moving).width).toBe(4096))
+  it('settles after 30 still frames', () => expect(RT_SETTLE_FRAMES).toBe(30))
+})
+
 describe('ContentPass', () => {
   it('allocates the target with mipmaps and resizes only on change', () => {
     const p = new ContentPass()
@@ -24,8 +40,9 @@ describe('ContentPass', () => {
     expect(p.texture).toBe(p.target.texture)
     expect(p.texture.minFilter).toBe(LinearMipmapLinearFilter); expect(p.texture.magFilter).toBe(LinearFilter)
     expect(p.texture.colorSpace).toBe(LinearSRGBColorSpace)
+    expect([p.width, p.height]).toEqual([1, 1])
     expect(p.resize(256, 128)).toBe(true); expect(p.resize(256, 128)).toBe(false)
-    expect(p.target.width).toBe(256)
+    expect(p.target.width).toBe(256); expect([p.width, p.height]).toEqual([256, 128])
     expect(new ContentPass({ type: 'half' }).target.texture.type).toBe(HalfFloatType)
   })
   it('switches the texel type in place, re-allocating the target only on a change', () => {

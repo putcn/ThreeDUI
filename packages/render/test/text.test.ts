@@ -8,6 +8,7 @@ import { createMeasureFn, runFor } from '../src/text/measure'
 import { AtlasPages } from '../src/text/pages'
 import { GlyphBatch, GLYPH_ATTRS } from '../src/text/batch'
 import { createGlyphMaterial } from '../src/text/material'
+import type { SurfaceUniforms } from '../src/flat'
 import { instanceMatrix } from '../src/transform'
 import { srgbToLinear } from '../src/color'
 import type { InstanceBuffer } from '../src/instances'
@@ -175,11 +176,11 @@ describe('GlyphBatch', () => {
 
 describe('glyph material', () => {
   // the fragment at quad vertex (x, y) of glyph 0, through a sampler that records the uv and returns alpha 0.8
-  const frag = (inst: TextInstance, x: number, y: number) => {
+  const frag = (inst: TextInstance, x: number, y: number, uniforms: SurfaceUniforms = su()) => {
     const b = new GlyphBatch(engine, new AtlasPages(engine.atlas)); b.update([inst], s)
     const { geometry, buffer } = only(b)
     const page = new Texture(), uvs: number[][] = []
-    const m = createGlyphMaterial(geometry, su(), page)
+    const m = createGlyphMaterial(geometry, uniforms, page)
     const sample = (tex: unknown, uv: readonly number[]) => { expect(tex).toBe(page); uvs.push([...uv]); return [1, 1, 1, 0.8] }
     const at = { ...packed(buffer), position: [x, y, 0], uv: [x + 0.5, y + 0.5] }
     return { rgba: [...evalNode(m.colorNode, at), ...evalNode(m.opacityNode, at, undefined, undefined, sample)], uv: uvs[0]!, iUV: buffer.get(0, 'iUV') }
@@ -193,6 +194,10 @@ describe('glyph material', () => {
   it('colours by the linear text colour; opacity = page alpha × colour alpha × instance opacity', () => {
     const { rgba } = frag(text('A', { color: [1, 0.5, 0, 0.6], opacity: 0.5 }), 0, 0)
     rgba.forEach((c, k) => expect(c).toBeCloseTo([1, srgbToLinear(0.5), 0, 0.8 * 0.6 * 0.5][k]!, 6))
+  })
+  it('fades with the whole Surface: alpha × su.opacity', () => {
+    const full = frag(text('A'), 0, 0).rgba[3]!, half = frag(text('A'), 0, 0, { ...su(), opacity: uniform(0.5) }).rgba[3]!
+    expect(full).toBeGreaterThan(0); expect(half).toBeCloseTo(full / 2, 12)
   })
   it('masks by the instance clip', () => {
     const clip: ClipRect = { x: 0, y: 0, width: 100, height: 300, radius: 0, transform: IDENTITY }

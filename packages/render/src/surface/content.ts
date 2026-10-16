@@ -8,6 +8,22 @@ export function contentRTSize(projectedPx: { width: number; height: number }, dp
   return { width: fit(projectedPx.width), height: fit(projectedPx.height) }
 }
 
+/** Frames a Surface and the camera must hold still before its content RT shrinks to what it needs (`rtTarget`). */
+export const RT_SETTLE_FRAMES = 30
+
+/**
+ * The content RT's next size, per axis, from the size it `have`s and the size it `need`s (`contentRTSize`; spatial spec
+ * §2.1): a `fresh` RT (the Surface's first `prepare`) gets exactly `need`; a growth gets `need` × 1.25 rounded up to
+ * `step` (at most `cap`), so a Surface flying closer re-allocates at most once per 25 % instead of every step; a
+ * shrink waits until `settled` (`RT_SETTLE_FRAMES` still frames), then goes to exactly `need`; otherwise `have` stays.
+ */
+export function rtTarget(have: { width: number; height: number }, need: { width: number; height: number }, opts: { settled: boolean; fresh: boolean; step?: number; cap?: number }): { width: number; height: number } {
+  const { settled, fresh, step = 64, cap = 4096 } = opts
+  const axis = (h: number, n: number): number =>
+    fresh || n === h ? n : n > h ? Math.min(cap, Math.ceil(n * 1.25 / step) * step) : settled ? n : h
+  return { width: axis(have.width, need.width), height: axis(have.height, need.height) }
+}
+
 /** The subset of `WebGPURenderer` the render passes call (so tests can pass a stub). */
 export interface RendererLike {
   setRenderTarget(rt: RenderTarget | null): void
@@ -49,6 +65,9 @@ export class ContentPass {
     })
   }
   get texture(): Texture { return this.target.texture }
+  /** The target's size in texels. */
+  get width(): number { return this.target.width }
+  get height(): number { return this.target.height }
 
   /**
    * Switches the texel type (a quality change). The texture stays the same object, so materials keep sampling it; the

@@ -1,8 +1,8 @@
-import { AddEquation, Box3, Color, CustomBlending, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Vector2, Vector3, type Camera, type Material, type Object3DEventMap, type Texture } from 'three'
+import { AddEquation, Box3, Color, CustomBlending, Euler, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Quaternion, Vector2, Vector3, type Camera, type Material, type Object3DEventMap, type Texture } from 'three'
 import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { float, screenUV, texture, uniform, uv, vec2 } from 'three/tsl'
 import {
-  apply, buildRenderList, createSurface, effectiveStyle, EventDispatcher, FocusManager, hitTest, PointerTracker, resolveColor,
+  apply, buildRenderList, createSurface, effectiveStyle, EventDispatcher, FocusManager, GlassUIError, hitTest, PointerTracker, resolveColor,
   type AnimationRuntime, type ColorScheme, type GlassInstance, type LayoutEngine, type MeasureFn, type Node, type RenderList, type RGBA, type SurfaceModel, type Theme, type UIEventType,
 } from '@glassui/core'
 import type { TextEngine } from '@glassui/text'
@@ -18,7 +18,8 @@ import { createGlyphMaterial } from '../text/material'
 import type { AtlasPages } from '../text/pages'
 import { ImageSet } from '../image/images'
 import type { SurfaceUniforms } from '../flat'
-import { ContentPass, contentRTSize, type RendererLike } from './content'
+import { ContentPass, contentRTSize, rtTarget, RT_SETTLE_FRAMES, type RendererLike } from './content'
+import { checkOpacity, SurfaceMotion, type PoseSpring, type ResolvedPose, type SurfacePose } from './motion'
 import { KawasePyramid } from '../blur/kawase'
 import { SurfaceLuma } from '../luma'
 import { liftFor, partition, type Partition } from './partition'
@@ -77,6 +78,8 @@ export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as 
  */
 const NO_FROST = { level: 0, lift: 0 } as const
 
+const blankPose = (): ResolvedPose => ({ position: new Vector3(), quaternion: new Quaternion(), scale: new Vector3(1, 1, 1), opacity: 1 })
+
 /** Element handler types (`Node.handlers`) that make a node take the pointer on a `'none'` Surface. */
 const POINTER_HANDLERS: readonly UIEventType[] = ['pointerdown', 'pointerup', 'pointermove', 'pointerenter', 'pointerleave', 'click', 'dblclick', 'contextmenu', 'wheel']
 
@@ -130,17 +133,19 @@ export function fillColors(theme: Theme, scheme: ColorScheme, opts: { contrast?:
  * The content quad's material: the content RT on the Surface plane, lit (it receives the glass's shadows) but not
  * shadow-casting. The RT holds premultiplied colour (see `ContentPass`), so it composites premultiplied: source factor
  * One (the colour already carries its alpha), alpha "over"; the alpha test (α ≤ 0.02) discards the empty texels, so the
- * depth the quad writes stays on its content.
+ * depth the quad writes stays on its content. `su.opacity` (the whole Surface's) fades it: premultiplied, it scales the
+ * colour and the alpha alike.
  *
  * Orientation: three's render-target textures have v = 0 at the image's TOP row on both backends (WebGPU natively; the
  * GLSL builder flips render-target reads to match), while the quad's `PlaneGeometry` uv has v = 1 at its top edge, so
  * the quad samples at (u, 1 − v). (`texture(tex, uv)` rather than `.sample(uv)`: no uv-matrix uniform.)
  */
-export function createContentMaterial(content: Texture): MeshStandardNodeMaterial {
+export function createContentMaterial(content: Texture, su?: SurfaceUniforms): MeshStandardNodeMaterial {
   const m = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 })
   const sample = texture(content, vec2(uv().x, uv().y.oneMinus()))
-  m.colorNode = sample.rgb
-  m.opacityNode = sample.a
+  const fade = su?.opacity ?? float(1)
+  m.colorNode = sample.rgb.mul(fade)
+  m.opacityNode = sample.a.mul(fade)
   m.transparent = true; m.depthWrite = true; m.alphaTest = 0.02; m.toneMapped = false
   m.blending = CustomBlending; m.premultipliedAlpha = false
   m.blendEquation = AddEquation; m.blendSrc = OneFactor; m.blendDst = OneMinusSrcAlphaFactor
@@ -183,6 +188,12 @@ function createCaptureProbe(capture: ScreenCapture): Mesh<PlaneGeometry, MeshBas
  * across Surfaces. No `Group` sits below it. The glass material takes its mesh-local z = 0 as the content plane, so
  * everything on that plane is a child of `plane` (an `Object3D` at z = `contentPlaneZ`: the background slab's
  * thickness, 0 without one) and instance matrices stay plane-relative.
+ *
+ * Motion (spatial spec §2.1): `animateTo` springs a world Surface's position, rotation, scale and opacity (a screen
+ * Surface's opacity only; `SurfaceMotion`), stepped by the root every tick (`stepMotion`) before it reads a matrix.
+ * `opacity` fades the whole Surface: every draw on its plane multiplies its alpha by it (`su.opacity`), the content
+ * pass's draws never (the RT is faded once, on its quad). Below 1 the content quad writes no depth; at 0, or while the
+ * root has `culled` it (out of view), `layer` is hidden: nothing draws, captures or takes the pointer.
  */
 export class Surface extends Object3D<SurfaceEventMap> {
   readonly model: SurfaceModel
@@ -225,7 +236,20 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The content RT must be redrawn (`prepare` does it). */
   contentDirty = true
   private readonly ctx: SurfaceContext
-  private readonly su: SurfaceUniforms
+  /** The plane draws' uniforms, the Surface's opacity included. */
+  private readonly su: Required<SurfaceUniforms>
+  /** The content pass's: `su` without the opacity (the RT is faded once, on its quad). */
+  private readonly suContent: SurfaceUniforms
+  private readonly motion: SurfaceMotion
+  /** `opacity` and `culled`. */
+  private fade = 1
+  private hidden = false
+  /** `prepare`s since the Surface or the camera last moved (capped at `RT_SETTLE_FRAMES`); whether one has sized the RT. */
+  private stillFrames = 0
+  private sized = false
+  /** Scratch poses: the Object3D's own (`pose`) and where its motion ends (`restPose`). */
+  private readonly now = blankPose()
+  private readonly resting = blankPose()
   private readonly contentScale: number
   /** The quality this Surface's draws were built for: `ctx.quality` at construction, then the last `setQuality`. */
   private quality: QualitySettings
@@ -273,7 +297,9 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.contentScale = opts.contentScale ?? 1
     this.pointer = new PointerTracker(this.model.root, this.events, ctx.theme)
     this.focus = new FocusManager(this.model.root, this.events)
-    this.su = { size: uniform(new Vector2()), ptPerUnit: uniform(this.model.ptPerUnit) }
+    this.su = { size: uniform(new Vector2()), ptPerUnit: uniform(this.model.ptPerUnit), opacity: uniform(1) }
+    this.suContent = { size: this.su.size, ptPerUnit: this.su.ptPerUnit }
+    this.motion = new SurfaceMotion(ctx.theme)
     this.quality = ctx.quality
     this.contentPass = new ContentPass({ type: this.quality.contentType })
     this.seenEpoch = ctx.text.atlas.epoch
@@ -293,7 +319,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     }
     this.layer.add(this.plane)
 
-    this.contentMesh = new Mesh(new PlaneGeometry(1, 1), this.own(createContentMaterial(this.contentPass.texture)))
+    this.contentMesh = new Mesh(new PlaneGeometry(1, 1), this.own(createContentMaterial(this.contentPass.texture, this.su)))
     this.contentMesh.receiveShadow = true; this.contentMesh.castShadow = false; this.contentMesh.renderOrder = SURFACE_ORDER.content; this.contentMesh.frustumCulled = false
     // the raycast hit's way back to its Surface; not enumerable, so `toJSON`/`clone` (which stringify userData) skip the cycle
     Object.defineProperty(this.contentMesh.userData, 'surface', { value: this, enumerable: false })
@@ -308,12 +334,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.foregroundImages = new ImageSet(this.su)
     this.plane.add(this.foregroundImages.container)
 
-    const panelMesh = new Mesh(this.panels.geometry, this.own(createPanelMaterial(this.panels.geometry, this.su)))
+    const panelMesh = new Mesh(this.panels.geometry, this.own(createPanelMaterial(this.panels.geometry, this.suContent)))
     panelMesh.renderOrder = CONTENT_ORDER.panels; panelMesh.frustumCulled = false
-    const poolMesh = new Mesh(this.pools.geometry, this.own(createPoolMaterial(this.pools.geometry, this.su)))
+    const poolMesh = new Mesh(this.pools.geometry, this.own(createPoolMaterial(this.pools.geometry, this.suContent)))
     poolMesh.renderOrder = CONTENT_ORDER.pools; poolMesh.frustumCulled = false
     this.contentText = new GlyphBatch(ctx.text, ctx.pages)
-    this.contentImages = new ImageSet(this.su)
+    this.contentImages = new ImageSet(this.suContent)
     this.contentPass.scene.add(panelMesh, poolMesh, this.contentImages.container)
 
     this.applySize()
@@ -428,17 +454,17 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /**
    * Re-reads the theme, the scheme and increased contrast from the shared context (the root changed them): the pointer
-   * tracker's theme, the 'fill' glass mode's colours, an opaque background's clear colour, the background slab (its
-   * optics come from `theme.glass`), the glass draws (rebuilt through `buildGlass`, so a 'none' Surface keeps its
-   * behind-capture and a glass one its screen capture), and every node marked for layout, paint and text (a text
-   * style's size and colour may come from the theme) with the content redrawn. A throw fails the Surface instead of
-   * propagating; a failed or disposed Surface ignores it.
+   * tracker's and the motion's theme (its spring presets), the 'fill' glass mode's colours, an opaque background's clear
+   * colour, the background slab (its optics come from `theme.glass`), the glass draws (rebuilt through `buildGlass`, so
+   * a 'none' Surface keeps its behind-capture and a glass one its screen capture), and every node marked for layout,
+   * paint and text (a text style's size and colour may come from the theme) with the content redrawn. A throw fails the
+   * Surface instead of propagating; a failed or disposed Surface ignores it.
    */
   restyle(): void {
     if (this.error || this.isDisposed) return
     try {
       const { theme, scheme } = this.ctx
-      this.pointer.theme = theme
+      this.pointer.theme = theme; this.motion.theme = theme
       const bg = this.model.background
       if (bg !== 'glass' && bg !== 'none') { toColor(resolveColor(bg, theme, scheme), this.contentClear.color); this.contentClear.alpha = 1 }
       this.applySize()
@@ -454,6 +480,71 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** This Surface's place among the others (the `layer` group's `renderOrder`): higher draws later. */
   get drawOrder(): number { return this.layer.renderOrder }
   set drawOrder(v: number) { this.layer.renderOrder = v }
+
+  /**
+   * The whole Surface's visual opacity, 0–1 (default 1): every draw on its plane multiplies its alpha by it. Setting it
+   * jumps (a running opacity animation carries on from its own value at the next `stepMotion`). Below 1 the content quad
+   * writes no depth (a fading Surface must not punch holes into what draws after it); at 0 `layer` is hidden. Anything
+   * outside [0, 1] throws a readable `GlassUIError`.
+   */
+  get opacity(): number { return this.fade }
+  set opacity(v: number) { checkOpacity('Surface.opacity', v); this.fade = v; this.applyFade() }
+  /** Out of the camera's view: the root sets it on every world Surface each tick; `layer` is hidden while it is true. */
+  get culled(): boolean { return this.hidden }
+  set culled(v: boolean) { this.hidden = v; this.applyFade() }
+
+  private applyFade(): void {
+    this.su.opacity.value = this.fade
+    ;(this.contentMesh.material as Material).depthWrite = this.fade >= 1
+    this.layer.visible = this.fade > 0 && !this.hidden
+  }
+
+  /**
+   * Springs the channels `target` names (spatial spec §2.1; `SurfaceMotion`): position (world units), rotation (an XYZ
+   * Euler, radians; along the short arc), scale and opacity; the root steps them every tick. Default spring
+   * `POSE_SPRING`; `spring` takes a theme preset, `{ response, dampingFraction }` or a `SpringConfig`. A retarget keeps
+   * the named channels' velocity and ends the older call's promise `false`; the promise resolves `true` when all of
+   * the call's channels settle. `immediate` (or `anim.reducedMotion` now) writes the end pose at the next step and
+   * resolves `true` then. On a failed or disposed Surface it resolves `false` at once. A screen Surface may animate
+   * `opacity` only (the screen layer places it); a position, rotation or scale throws, as does a bad pose or spring
+   * (a readable `GlassUIError`).
+   */
+  animateTo(target: SurfacePose, opts: { spring?: PoseSpring; immediate?: boolean } = {}): Promise<boolean> {
+    if (this.error || this.isDisposed) return Promise.resolve(false)
+    if (this.model.placement === 'screen' && (target.position !== undefined || target.rotation !== undefined || target.scale !== undefined)) {
+      throw new GlassUIError('Surface.animateTo', '屏幕层 Surface 只能动画 opacity：位置与缩放由屏幕层摆放')
+    }
+    return this.motion.to(target, this.pose(), { ...opts, immediate: opts.immediate === true || this.ctx.anim.reducedMotion })
+  }
+
+  /**
+   * Advances the running animation by `dt` s and writes it into `position`, `quaternion`, `scale` and `opacity`; the
+   * root calls it every tick, before it reads any matrix. True while some channel still moves; false (doing nothing)
+   * when none does, or on a failed or disposed Surface.
+   */
+  stepMotion(dt: number): boolean {
+    if (this.error || this.isDisposed || !this.motion.active) return false
+    const p = this.pose(), more = this.motion.step(dt, p)
+    this.position.copy(p.position); this.quaternion.copy(p.quaternion); this.scale.copy(p.scale)
+    if (p.opacity !== this.fade) this.opacity = p.opacity
+    return more
+  }
+
+  /**
+   * Where the running animation ends (the current pose for the channels not moving): what a camera aims at while the
+   * Surface is still on its way. Fresh arrays; `rotation` is the XYZ Euler of the target quaternion.
+   */
+  get restPose(): { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number]; opacity: number } {
+    const r = this.motion.rest(this.pose(), this.resting), e = new Euler().setFromQuaternion(r.quaternion)
+    return { position: [r.position.x, r.position.y, r.position.z], rotation: [e.x, e.y, e.z], scale: [r.scale.x, r.scale.y, r.scale.z], opacity: r.opacity }
+  }
+
+  /** The Object3D's own position, quaternion and scale and the current opacity, in the scratch pose `now`. */
+  private pose(): ResolvedPose {
+    const p = this.now
+    p.position.copy(this.position); p.quaternion.copy(this.quaternion); p.scale.copy(this.scale); p.opacity = this.fade
+    return p
+  }
 
   /** Surface size in pt; marks layout (the root's style size) and the content RT. A no-op on a disposed Surface. */
   setSize(width: number, height: number): void {
@@ -600,15 +691,18 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private layoutText(p: Partition): void {
     this.foregroundText.update(p.foreground.text, this.model, t => liftFor(p, t.node))
     this.contentText.update(p.content.text, this.model)
-    this.syncGlyphMeshes(this.foregroundText, this.foregroundGlyphs, this.plane, SURFACE_ORDER.glyphs)
-    this.syncGlyphMeshes(this.contentText, this.contentGlyphs, this.contentPass.scene, CONTENT_ORDER.glyphs)
+    this.syncGlyphMeshes(this.foregroundText, this.foregroundGlyphs, this.plane, SURFACE_ORDER.glyphs, this.su)
+    this.syncGlyphMeshes(this.contentText, this.contentGlyphs, this.contentPass.scene, CONTENT_ORDER.glyphs, this.suContent)
   }
 
-  /** One mesh per atlas page per batch, made when the page first has glyphs (a page batch is never dropped). */
-  private syncGlyphMeshes(batch: GlyphBatch, meshes: Map<number, Mesh>, parent: Object3D, renderOrder: number): void {
+  /**
+   * One mesh per atlas page per batch, made when the page first has glyphs (a page batch is never dropped), with `su`
+   * (the plane's, or the content pass's: `suContent`).
+   */
+  private syncGlyphMeshes(batch: GlyphBatch, meshes: Map<number, Mesh>, parent: Object3D, renderOrder: number, su: SurfaceUniforms): void {
     for (const [page, pb] of batch.perPage) {
       if (meshes.has(page)) continue
-      const mesh = new Mesh(pb.geometry, this.own(createGlyphMaterial(pb.geometry, this.su, this.ctx.pages.textures[page]!)))
+      const mesh = new Mesh(pb.geometry, this.own(createGlyphMaterial(pb.geometry, su, this.ctx.pages.textures[page]!)))
       mesh.renderOrder = renderOrder; mesh.frustumCulled = false
       parent.add(mesh); meshes.set(page, mesh)
     }
@@ -639,22 +733,28 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /**
    * Sizes the content RT (and the pyramid) for the Surface's projected size — `dpr × max(quality.contentScale, 1/dpr) ×
-   * contentScale` texels per CSS px, so never below one texel per CSS px from the quality alone — and redraws it when
-   * dirty (a resize makes it dirty). Then the pyramid, when the RT changed since it was last drawn and the Surface has
-   * glass instances to sample it (its only input is the content RT; without glass its 9 passes are skipped until glass
-   * appears). Then the luma (`SurfaceLuma.update`, not in the 'fill' glass mode), from the content RT's own mips: on a
+   * contentScale` texels per CSS px, so never below one texel per CSS px from the quality alone — through `rtTarget`:
+   * the first `prepare` takes exactly that, a growth 25 % more, and a shrink waits until `moving` (the root: the camera,
+   * the Surface or its animation moved this tick) has been false for `RT_SETTLE_FRAMES` calls in a row. Then redraws it
+   * when dirty (a resize makes it dirty). Then the pyramid, when the RT changed since it was last drawn and the Surface
+   * has glass instances to sample it (its only input is the content RT; without glass its 9 passes are skipped until
+   * glass appears). Then the luma (`SurfaceLuma.update`, not in the 'fill' glass mode), from the content RT's own mips: on a
    * redraw and while its smoothing settles after one; on a glass Surface drawn with `camera` (the root passes its
    * own), every frame, over the slab's screen capture too (frosted as the slab frosts it); likewise on a 'none' Surface
    * with a behind-capture, over that (unfrosted). A throw fails the Surface instead of propagating; a failed or disposed
    * Surface does nothing.
    */
-  prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number, camera?: Camera): void {
+  prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number, camera?: Camera, moving = false): void {
     if (this.error || this.isDisposed) return
     try {
       // the quality's scale caps supersampling: the RT never drops below one texel per CSS px (it is what the content
       // quad displays), so it only bites above DPR 1; the Surface's own `contentScale` multiplies the result
       const floor = dpr > 0 ? 1 / dpr : 1
-      const size = contentRTSize(projectedPx, dpr, { scale: Math.max(this.quality.contentScale, floor) * this.contentScale })
+      const need = contentRTSize(projectedPx, dpr, { scale: Math.max(this.quality.contentScale, floor) * this.contentScale })
+      // a Surface flying closer re-allocates at most once per 25 %, and one flying away keeps its RT until it settles
+      this.stillFrames = moving ? 0 : Math.min(RT_SETTLE_FRAMES, this.stillFrames + 1)
+      const size = rtTarget(this.contentPass, need, { settled: this.stillFrames >= RT_SETTLE_FRAMES, fresh: !this.sized })
+      this.sized = true
       if (this.contentPass.resize(size.width, size.height)) this.contentDirty = true
       this.pyramid?.resize(size.width, size.height)
       const redrawn = this.contentDirty
@@ -681,14 +781,15 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * Stops the Surface for good: `error` set (`e`, made an `Error` if it is not one), hidden (`visible = false`), no more
    * frames (`tick`, `prepare` and the rebuilds do nothing), then one `{ type: 'error', error }` event (a throwing
    * listener is logged, never rethrown: this runs inside frames). It never ticks again, so its nodes' animation state is
-   * dropped (`AnimationRuntime.forget`) and their `whenSettled` promises resolve. The first failure stands: a failed or
-   * disposed Surface ignores it. Its own frames call it when they throw; the root, when its render isolation blames it.
+   * dropped (`AnimationRuntime.forget`) and their `whenSettled` promises resolve, and its own motion stops (a pending
+   * `animateTo` resolves `false`). The first failure stands: a failed or disposed Surface ignores it. Its own frames
+   * call it when they throw; the root, when its render isolation blames it.
    */
   markFailed(e: unknown): void {
     if (this.error || this.isDisposed) return
     this.error = e instanceof Error ? e : new Error(String(e))
     this.visible = false; this.needsFrame = false
-    this.ctx.anim.forget(this.root)
+    this.ctx.anim.forget(this.root); this.motion.stop()
     // a throwing listener must not escape the frame either
     try { this.dispatchEvent({ type: 'error', error: this.error }) } catch (le) { console.error('[glassui] an "error" listener threw:', le) }
   }
@@ -714,6 +815,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     if (this.isDisposed) return
     this.isDisposed = true   // first: a throw below must not lead to anything being freed twice
     try {
+      this.motion.stop()   // a pending `animateTo` resolves false
       this.ctx.anim.forget(this.root)
       this.ctx.layout.dispose(this.root)
       this.contentPass.dispose(); this.pyramid?.dispose(); this.luma.dispose()

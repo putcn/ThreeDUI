@@ -808,6 +808,71 @@ describe('Surface', () => {
   })
 })
 
+describe('Surface motion', () => {
+  const world = () => new Surface({ id: 'w', width: 400, height: 300, ptPerUnit: 100, placement: 'world' }, ctx)
+  const quadAlpha = (s: Surface) => evalNode((s.contentMesh.material as MeshStandardNodeMaterial).opacityNode, { uv: [0.5, 0.5] }, undefined, undefined, () => [1, 1, 1, 1])[0]!
+  it('animateTo moves a world Surface and fades its plane draws; restPose is the target', async () => {
+    const s = world(), done = s.animateTo({ position: [1, 0, 0], opacity: 0.5 })
+    expect(s.restPose.position).toEqual([1, 0, 0]); expect(s.restPose.opacity).toBe(0.5)
+    s.stepMotion(1 / 60); expect(s.position.x).toBeGreaterThan(0)
+    for (let i = 0; i < 180; i++) s.stepMotion(1 / 60)
+    expect(s.position.x).toBe(1); expect(s.opacity).toBe(0.5); expect(quadAlpha(s)).toBeCloseTo(0.5)
+    await expect(done).resolves.toBe(true)
+  })
+  it('below opacity 1 the content quad stops writing depth; at 0 the layer hides', () => {
+    const s = world(), m = s.contentMesh.material as MeshStandardNodeMaterial
+    s.opacity = 0.5; expect(m.depthWrite).toBe(false); expect(s.layer.visible).toBe(true)
+    s.opacity = 1; expect(m.depthWrite).toBe(true)
+    s.opacity = 0; expect(s.layer.visible).toBe(false)
+    s.opacity = 0.2; s.culled = true; expect(s.layer.visible).toBe(false)
+    s.culled = false; expect(s.layer.visible).toBe(true)
+  })
+  it('reduced motion jumps; a failed or disposed Surface resolves false at once; dispose ends a running one false', async () => {
+    const s = world(); ctx.anim.reducedMotion = true
+    try { const p = s.animateTo({ position: [3, 0, 0] }); s.stepMotion(1 / 60); expect(s.position.x).toBe(3); await expect(p).resolves.toBe(true) }
+    finally { ctx.anim.reducedMotion = false }
+    const d = world(); d.dispose(); await expect(d.animateTo({ opacity: 0 })).resolves.toBe(false)
+    const f = world(); f.markFailed(new Error('x')); await expect(f.animateTo({ opacity: 0 })).resolves.toBe(false)
+    const g = world(), running = g.animateTo({ opacity: 0 }); g.dispose(); await expect(running).resolves.toBe(false)
+  })
+  it('a screen Surface animates opacity only', () => {
+    const s = new Surface({ width: 10, height: 10, ptPerUnit: 1, placement: 'screen' }, ctx)
+    expect(() => s.animateTo({ position: [1, 0, 0] })).toThrow(/\[Surface\.animateTo\].*屏幕层/)
+    expect(() => s.animateTo({ opacity: 0.5 })).not.toThrow()
+  })
+  it('a direct write between animations is where the next one starts', () => {
+    const s = world(); s.position.set(5, 0, 0)
+    void s.animateTo({ position: [6, 0, 0] }); s.stepMotion(1 / 60)
+    expect(s.position.x).toBeGreaterThan(5); expect(s.position.x).toBeLessThan(6)
+  })
+  it('the opacity reaches every plane draw and no content-pass draw (the content RT is faded once, on its quad)', () => {
+    const { s, btn } = signup()
+    const glass = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, ctx)
+    s.root.appendChild(image('photo', new Texture(), 300, 30)); btn.appendChild(image('icon', new Texture(), 8, 8, 32, 32))
+    s.tick(1 / 60)
+    const fade = (x: Surface) => (x as unknown as { su: { opacity: unknown } }).su.opacity
+    const reads = (x: Surface, m: Mesh) => materialGraph(m.material as Material).some(n => n === fade(x))
+    const plane = meshes(s).filter(m => m.name !== 'capture-probe'), content = meshes(s.contentPass.scene)
+    const { content: quad, glassBack, glassFront, rims, images, glyphs } = SURFACE_ORDER
+    expect(new Set(plane.map(m => m.renderOrder))).toEqual(new Set([quad, glassBack, glassFront, rims, images, glyphs]))
+    for (const m of plane) expect(reads(s, m)).toBe(true)
+    expect(content.length).toBeGreaterThanOrEqual(4)                       // panels, pools, the photo, content glyphs
+    for (const m of content) expect(reads(s, m)).toBe(false)
+    const slab = meshes(glass).filter(m => m.renderOrder === SURFACE_ORDER.slab)
+    expect(slab).toHaveLength(2); for (const m of slab) expect(reads(glass, m)).toBe(true)
+  })
+  it('prepare grows the content RT with headroom and shrinks it only after 30 still frames', () => {
+    const s = world(), r = stubRenderer(), size = () => [s.contentPass.width, s.contentPass.height]
+    s.tick(1 / 60)
+    s.prepare(r, { width: 400, height: 300 }, 1); expect(size()).toEqual([448, 320])                      // fresh: what it needs
+    s.prepare(r, { width: 500, height: 300 }, 1, undefined, true); expect(size()).toEqual([640, 320])     // 512 × 1.25 → 640
+    for (let i = 0; i < 29; i++) s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(size()).toEqual([640, 320])                                                                     // 29 still frames: kept
+    s.prepare(r, { width: 400, height: 300 }, 1); expect(size()).toEqual([448, 320])                      // the 30th: shrinks
+    s.prepare(r, { width: 400, height: 300 }, 1, undefined, true); expect(size()).toEqual([448, 320])
+  })
+})
+
 describe('Surface: the dual-Kawase pyramid (quality.blur = \'kawase\')', () => {
   const kawase = (q: Partial<SurfaceContext['quality']> = {}): SurfaceContext => ({ ...ctx, quality: { ...ctx.quality, blur: 'kawase', ...q } })
   /** A stub renderer recording the target of every draw. */
@@ -833,7 +898,8 @@ describe('Surface: the dual-Kawase pyramid (quality.blur = \'kawase\')', () => {
     expect(r.render).toHaveBeenCalledTimes(10)                      // a clean content RT: the pyramid is current
     s.prepare(r, { width: 800, height: 300 }, 1)                     // a resize redraws both
     expect(r.render).toHaveBeenCalledTimes(20)
-    expect(levels.map(l => l.width)).toEqual([416, 208, 104, 52])   // 800 → 832
+    expect(s.contentPass.width).toBe(1088)                          // 800 → 832, grown with 25 % headroom (rtTarget)
+    expect(levels.map(l => l.width)).toEqual([544, 272, 136, 68])
   })
   it('a background slab never samples the pyramid; a \'mip\' Surface has none', () => {
     const glass = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, kawase()), r = recording()

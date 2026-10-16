@@ -1,4 +1,4 @@
-import { Box3, Group, Matrix4, Quaternion, Scene, Vector2, Vector3, VSMShadowMap, type OrthographicCamera, type PerspectiveCamera, type Texture } from 'three'
+import { Box3, Frustum, Group, Matrix4, Quaternion, Scene, Vector2, Vector3, VSMShadowMap, type OrthographicCamera, type PerspectiveCamera, type Texture } from 'three'
 import { AnimationRuntime, createYogaLayout, defaultTheme, GlassUIError, type ColorScheme, type Theme } from '@glassui/core'
 import { SystemFontEngine, type CanvasFactory, type TextEngine } from '@glassui/text'
 import { Surface, type SurfaceContext, type SurfaceOptions } from './surface/surface'
@@ -107,8 +107,11 @@ export interface UIRoot {
    */
   setScheme(scheme: ColorScheme): void
   /**
-   * Layout, animation, content passes, draw order and the shadow fit; `dt` in seconds. Billboard world Surfaces turn to
-   * face the camera before their matrices are read. Ends by resolving the `afterTick` promises. A no-op after `dispose`.
+   * Surface motion, view culling, layout, animation, content passes, draw order and the shadow fit; `dt` in seconds.
+   * Surface motion steps and billboard world Surfaces turn to face the camera before any matrix is read; a world Surface
+   * out of view (`Surface.culled`) or faded out is neither drawn nor prepared, its content redrawn when it shows again.
+   * `prepare` is told whether the camera, the Surface or its animation moved (the content RT's settle-to-shrink). Ends by
+   * resolving the `afterTick` promises. A no-op after `dispose`.
    */
   tick(dt: number): void
   /**
@@ -192,10 +195,12 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  * scene, so the host's own shadows are affected too (they become VSM, transmitted). Saving and restoring the host's
  * settings is planned; `dispose` leaves them as the root set them.
  *
- * Each `tick`: the screen layer and the lights follow the camera; billboard world Surfaces turn to face it; every
+ * Each `tick`: every Surface's motion steps (`Surface.stepMotion`); the screen layer and the lights follow the camera;
+ * billboard world Surfaces turn to face it; world Surfaces out of the view frustum are culled (`Surface.culled`); every
  * Surface ticks; glyphs evicted by a later Surface's are re-laid out; draw orders are assigned (screen Surfaces above
- * world ones, nearer above farther); the content passes draw; the key light's shadow camera is re-fitted to every
- * Surface when the camera, a Surface's pose or its glass changed (the map redraws only then); `afterTick` waiters resolve.
+ * world ones, nearer above farther); the content passes of the shown Surfaces draw (a hidden one's wait for it to show
+ * again); the key light's shadow camera is re-fitted to every shown Surface when the camera, a Surface's pose or its
+ * glass changed (the map redraws only then); `afterTick` waiters resolve.
  */
 export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const { renderer, scene, camera } = opts
@@ -270,7 +275,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     const i = surfaces.indexOf(s)
     if (i < 0) return false
     surfaces.splice(i, 1)
-    pointer?.forget(s); screen.unplace(s); lastPose.delete(s)
+    pointer?.forget(s); screen.unplace(s); lastPose.delete(s); lastSeen.delete(s)
     return true
   }
 
@@ -369,6 +374,9 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3(), point = new Vector3(), view = new Vector3()
   const qCam = new Quaternion(), qParent = new Quaternion()
   const lastCamera = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
+  /** Each Surface's `matrixWorld` at its last `prepare` (whether it moved since: the content RT's settle count). */
+  const lastSeen = new WeakMap<Surface, Matrix4>()
+  const frustum = new Frustum(), viewProjection = new Matrix4()
   let lastFitted = -1, looping = false, disposed = false
   const scheduler = new FrameScheduler(), frames = new FrameSampler()
 
@@ -396,10 +404,10 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   /**
    * Re-fits the key light's shadow camera to every drawn Surface (screen and world together, so the margin is
    * proportional to their union: screen Surfaces are tiny in world units) when `changed` or a Surface moved, appeared or
-   * went away; the fit marks the map for redraw.
+   * went away; the fit marks the map for redraw. A Surface faded out (opacity 0) or culled draws nothing: it is left out.
    */
   function fitShadows(changed: boolean): void {
-    const drawn = surfaces.filter(s => !s.error && s.visible)
+    const drawn = surfaces.filter(s => !s.error && s.visible && s.layer.visible)
     for (const s of drawn) {
       const last = lastPose.get(s)
       if (!last) { lastPose.set(s, s.matrixWorld.clone()); changed = true } else if (!last.equals(s.matrixWorld)) { last.copy(s.matrixWorld); changed = true }
@@ -432,11 +440,15 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     removeSurface(s) { if (forgetSurface(s)) s.dispose() },
     tick(dt) {
       if (disposed) return
+      // the Surfaces' own motion first: every matrix read below sees this tick's pose
+      const animating = new Set<Surface>()
+      for (const s of surfaces) if (s.stepMotion(dt)) animating.add(s)
       renderer.getSize(size)
       screen.update(camera, { width: size.x, height: size.y })   // also brings camera.matrixWorld up to date
       camera.getWorldPosition(lights.group.position); camera.getWorldQuaternion(lights.group.quaternion)
       lights.group.updateMatrixWorld(true)                         // the key light stays top-left-front of the view
-      let changed = !lastCamera.equals(camera.matrixWorld)
+      const cameraMoved = !lastCamera.equals(camera.matrixWorld)
+      let changed = cameraMoved
       lastCamera.copy(camera.matrixWorld)
       camera.getWorldQuaternion(qCam)
       for (const s of surfaces) {
@@ -445,14 +457,25 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
         if (s.billboard) s.quaternion.copy(s.parent ? s.parent.getWorldQuaternion(qParent).invert() : qParent.identity()).multiply(qCam)
         s.updateWorldMatrix(true, true)
       }
+      // view culling: a world Surface whose bounds miss the view frustum draws, captures and prepares nothing this tick
+      frustum.setFromProjectionMatrix(viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse), camera.coordinateSystem, camera.reversedDepth)
+      for (const s of surfaces) if (s.model.placement === 'world') s.culled = !frustum.intersectsBox(s.glassBounds.applyMatrix4(s.matrixWorld))
       const epoch = text.atlas.epoch
       each(s => s.tick(dt))
       // the pages are shared: a later Surface's glyphs may have evicted an earlier one's this tick
       if (text.atlas.epoch !== epoch) each(s => s.refreshText())
-      for (const s of surfaces) if (!s.error && (s.contentDirty || s.needsFrame)) changed = true   // rebuilt or animating
+      // rebuilt or animating; a hidden Surface's content waits for it to show again
+      for (const s of surfaces) if (!s.error && s.layer.visible && (s.contentDirty || s.needsFrame)) changed = true
       assignDrawOrders()
       const dpr = renderer.getPixelRatio()
-      each(s => s.prepare(renderer, projectedPx(s), dpr, camera))   // a glass Surface's luma projects its glass with it
+      each(s => {
+        if (!s.layer.visible) return   // faded out or culled: its content stays dirty and redraws when it shows again
+        // moving (the camera, the Surface, or its animation): the content RT may grow but not shrink (`rtTarget`)
+        const last = lastSeen.get(s), moved = !last || !last.equals(s.matrixWorld)
+        if (last) last.copy(s.matrixWorld); else lastSeen.set(s, s.matrixWorld.clone())
+        // a glass Surface's luma projects its glass with the camera
+        s.prepare(renderer, projectedPx(s), dpr, camera, cameraMoved || moved || animating.has(s))
+      })
       fitShadows(changed)
       settleAfterTick()
     },

@@ -58,8 +58,9 @@ export const defaultImageLoader: ImageLoader = src => {
 /**
  * An image quad: the texture stretched over the rect, cut to its rounded corners by the superellipse SDF, unlit and
  * alpha-blended (normal blending of a straight linear colour: the content RT is premultiplied by construction).
- * Opacity = coverage × sample alpha × instance opacity, coverage antialiased over ±0.75 px (`fwidth`); the quad extends
- * `AA_MARGIN_PT` beyond the rect so the outer half of the ramp is rasterised, and the clip discards.
+ * Opacity = coverage × sample alpha × instance opacity × the Surface's opacity (`su.opacity`: foreground images; the
+ * content pass's have none), coverage antialiased over ±0.75 px (`fwidth`); the quad extends `AA_MARGIN_PT` beyond the
+ * rect so the outer half of the ramp is rasterised, and the clip discards.
  *
  * The colour, by the texture's state when the material is made: a premultiplied texture's sample has alpha divided out
  * (as the panel does). A texture `defaultImageLoader` made holds untagged sRGB bytes and is decoded to linear after that
@@ -94,7 +95,7 @@ export function createImageMaterial(g: InstancedBufferGeometry, su: SurfaceUnifo
   const sample = texture(tex, fv.q.div(fv.size).add(0.5))
   const rgb = tex.premultiplyAlpha ? sample.rgb.div(max(sample.a, 1e-6)) : sample.rgb
   m.colorNode = srgbBytes.has(tex) ? srgbToLinearNode(rgb) : rgb
-  m.opacityNode = cover.mul(sample.a).mul(opacity)
+  m.opacityNode = cover.mul(sample.a).mul(opacity).mul(su.opacity ?? float(1))
   return m
 }
 

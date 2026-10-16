@@ -1,5 +1,5 @@
-import { BackSide, DataTexture, FrontSide, RGBAFormat, UnsignedByteType, type Color, type InstancedBufferGeometry, type Texture, type Vector2 } from 'three'
-import { MeshPhysicalNodeMaterial, ViewportDepthTextureNode, ViewportTextureNode, type Node, type NodeFrame, type TextureNode, type UniformNode } from 'three/webgpu'
+import { BackSide, DataTexture, FrontSide, RGBAFormat, UnsignedByteType, type Color, type InstancedBufferGeometry, type Texture } from 'three'
+import { MeshPhysicalNodeMaterial, ViewportDepthTextureNode, ViewportTextureNode, type Node, type NodeFrame, type TextureNode } from 'three/webgpu'
 import {
   attribute, float, vec2, vec3, vec4, uniform, texture, varying, positionView, positionViewDirection, normalView,
   transformNormalToView, negateOnBackSide, modelViewMatrix, cameraProjectionMatrix, viewportMipTexture,
@@ -10,6 +10,7 @@ import { GLASS_ATTRS } from './batch'
 import { FILL, FROST } from './frost'
 import { slabVertex } from './vertex'
 import { sdfNode } from '../panel/sdf'
+import type { SurfaceUniforms } from '../flat'
 
 /**
  * How glass sees its backdrop (the quality tiers' "玻璃" column, spec §5.6):
@@ -33,8 +34,8 @@ export interface GlassMaterialOptions {
   /** `'panel'`: refract the Surface's content RT (class 2). `'screen'`: refract what is already on screen (class 3). */
   backdrop: 'panel' | 'screen'
   side: 'front' | 'back'
-  /** Surface size in units (W, H) and its pt per unit. */
-  surface: { size: UniformNode<'vec2', Vector2>; ptPerUnit: UniformNode<'float', number> }
+  /** Surface size in units (W, H), its pt per unit and its whole opacity (`SurfaceUniforms`; the alpha's last factor). */
+  surface: SurfaceUniforms
   /** The content RT texture (panel only; required there); `setContent` swaps it. */
   content?: Texture | undefined
   /**
@@ -389,7 +390,9 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   if (keep) m.specularIntensityNode = keep                               // F0 and F90 both scale by it: no specular, no env
   // 'fill': the lit shell is the fill too, so the (1 − FILL.alpha) of it that shows does not wash the colour out
   m.colorNode = fill ? c : tint.mul(tint).mul(0.6)
-  m.opacityNode = opacity
+  // × the whole Surface's opacity; the shadow below keeps the instance's alone: it lands on the Surface's own content
+  // face, which fades with the Surface
+  m.opacityNode = opacity.mul(o.surface.opacity ?? float(1))
 
   // press glow around the touch point (centred slab uv), light leaking at the steep rims, and the inner glow layer
   const dt = slabUV.sub(0.5).sub(touch)

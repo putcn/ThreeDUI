@@ -312,6 +312,11 @@ const pins = (o: { opacity?: number; tint?: [number, number, number]; absorption
 describe('createGlassMaterial: quality modes (spec §5.6)', () => {
   const panel = () => { const b = new GlassBatch(); b.update([inst], s); return { geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface, content: new Texture() } as const }
   const screenOpts = () => { const b = new GlassBatch(); b.update([inst], s); return { geometry: b.geometry, K: b.K, backdrop: 'screen', side: 'front', surface } as const }
+  it('fades with the whole Surface: the front face\'s alpha × su.opacity', () => {
+    const full = evalNode(createGlassMaterial(panel()).material.opacityNode, pins({ opacity: 0.8 }))[0]!
+    const half = evalNode(createGlassMaterial({ ...panel(), surface: { ...surface, opacity: uniform(0.5) } }).material.opacityNode, pins({ opacity: 0.8 }))[0]!
+    expect(full).toBeCloseTo(0.8, 6); expect(half).toBeCloseTo(full / 2, 12)
+  })
   it('refract (default) bends the ray per colour channel; without dispersion once', () => {
     expect(refractions(createGlassMaterial(panel()).material)).toBe(3)
     expect(refractions(createGlassMaterial({ ...panel(), mode: 'refract' }).material)).toBe(3)

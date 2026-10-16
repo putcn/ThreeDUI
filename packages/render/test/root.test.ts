@@ -596,6 +596,42 @@ describe('the root API for the Vue layer', () => {
     void root.afterTick().then(() => { late = true })        // after dispose: at once
     await Promise.resolve(); expect(late).toBe(true)
   })
+  it('steps Surface motion in tick and tells prepare when a Surface or the camera moves', async () => {
+    const { root, camera } = await createRoot()
+    camera.position.set(0, 0, 5)
+    const s = root.createSurface({ layer: 'world', width: 100, height: 100 })
+    const prep = vi.spyOn(s, 'prepare'), moving = () => prep.mock.calls.at(-1)![4]
+    root.tick(1 / 60); root.tick(1 / 60); expect(moving()).toBe(false)
+    camera.position.z = 4; root.tick(1 / 60); expect(moving()).toBe(true)
+    root.tick(1 / 60); expect(moving()).toBe(false)
+    void s.animateTo({ position: [0.5, 0, 0] }); root.tick(1 / 60)
+    expect(moving()).toBe(true); expect(s.position.x).toBeGreaterThan(0)
+  })
+  it('a world Surface out of view is neither drawn nor prepared, and redraws when it comes back', async () => {
+    const { root, camera } = await createRoot()
+    camera.position.set(0, 0, 5); camera.lookAt(0, 0, 0)
+    const s = root.createSurface({ layer: 'world', width: 100, height: 100 }); root.tick(1 / 60)
+    expect(s.culled).toBe(false); expect(s.contentDirty).toBe(false)
+    s.contentDirty = true; camera.lookAt(0, 0, 10); root.tick(1 / 60)
+    expect(s.culled).toBe(true); expect(s.layer.visible).toBe(false); expect(s.contentDirty).toBe(true)
+    camera.lookAt(0, 0, 0); root.tick(1 / 60)
+    expect(s.layer.visible).toBe(true); expect(s.contentDirty).toBe(false)
+  })
+  it('the shadow fit counts only the Surfaces it draws: a hidden or culled one leaves it', async () => {
+    const { root, camera } = await createRoot()
+    camera.position.set(0, 0, 5); camera.lookAt(0, 0, 0)
+    const a = root.createSurface({ layer: 'world', width: 100, height: 100 })
+    const b = root.createSurface({ layer: 'world', width: 100, height: 100 }); b.position.set(3, 0, 0)
+    root.tick(1 / 60)
+    const shadowSpan = () => { const c = root.lights.key.shadow.camera; return Math.hypot(c.right - c.left, c.top - c.bottom) }
+    const both = shadowSpan()
+    b.opacity = 0; root.tick(1 / 60)
+    expect(shadowSpan()).toBeLessThan(both * 0.5)                     // a alone: one 0.4-unit Surface instead of 3.4 units
+    b.opacity = 1; root.tick(1 / 60); expect(shadowSpan()).toBeCloseTo(both)
+    b.position.set(0, 0, 10); root.tick(1 / 60); expect(b.culled).toBe(true)   // behind the camera
+    expect(shadowSpan()).toBeLessThan(both * 0.5)
+    expect(a.culled).toBe(false)
+  })
   it('a billboard world Surface faces the camera after a tick', async () => {
     const { root, camera } = await createRoot()
     const s = root.createSurface({ layer: 'world', width: 100, height: 100, billboard: true })

@@ -5,10 +5,11 @@ import { flatVertex, type SurfaceUniforms } from '../flat'
 
 /**
  * Unlit glyph quads sampling one atlas page's alpha (spec §5.5: readability first, no lighting): colour `iColor.rgb`,
- * opacity = page alpha × `iColor.a` × instance opacity (`iMisc.x`), masked by the instance clip. The quad maps 1:1
- * onto the glyph's atlas slot, which already carries the engine's padding, so it needs no AA margin and the quad's
- * `uv` is the glyph-local uv (with a margin it would be `q / size + 0.5`). `iUV` is the slot as the atlas reports it
- * (top-left origin, v down) and the page texture is flipped (`AtlasPages`), so the slot is sampled at (u, 1 − v).
+ * opacity = page alpha × `iColor.a` × instance opacity (`iMisc.x`) × the Surface's opacity (`su.opacity`: foreground
+ * glyphs; the content pass's have none), masked by the instance clip. The quad maps 1:1 onto the glyph's atlas slot,
+ * which already carries the engine's padding, so it needs no AA margin and the quad's `uv` is the glyph-local uv (with
+ * a margin it would be `q / size + 0.5`). `iUV` is the slot as the atlas reports it (top-left origin, v down) and the
+ * page texture is flipped (`AtlasPages`), so the slot is sampled at (u, 1 − v).
  *
  * Varyings: `flatVertex`'s clip pair + `iUV`, `iColor`, `iMisc` + the quad uv `vGlyphUV` = 6.
  */
@@ -26,6 +27,6 @@ export function createGlyphMaterial(g: InstancedBufferGeometry, su: SurfaceUnifo
   m.colorNode = color.rgb
   // `texture(page, uv)` rather than `texture(page).sample(uv)`: the latter keeps the texture's uv matrix (a uniform and
   // a multiply per fragment, identity for an atlas page)
-  m.opacityNode = texture(page, vec2(u, float(1).sub(v))).a.mul(color.a).mul(misc.x)
+  m.opacityNode = texture(page, vec2(u, float(1).sub(v))).a.mul(color.a).mul(misc.x).mul(su.opacity ?? float(1))
   return m
 }

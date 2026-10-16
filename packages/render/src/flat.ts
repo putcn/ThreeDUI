@@ -3,8 +3,12 @@ import type { Node, UniformNode } from 'three/webgpu'
 import { attribute, varying, vec2, vec3, vec4, float, dot, abs, max, min, length, select } from 'three/tsl'
 import { GlassUIError } from '@glassui/core'
 
-/** The Surface's size in units (W, H) and its pt per unit, as uniforms the Surface owns. */
-export interface SurfaceUniforms { size: UniformNode<'vec2', Vector2>; ptPerUnit: UniformNode<'float', number> }
+/**
+ * The Surface's size in units (W, H) and its pt per unit, as uniforms the Surface owns; `opacity`, the whole Surface's
+ * (`Surface.opacity`), which every draw on its plane multiplies its alpha by. The content pass's draws get these without
+ * it: the content RT is faded once, on its quad, never twice. Absent: 1.
+ */
+export interface SurfaceUniforms { size: UniformNode<'vec2', Vector2>; ptPerUnit: UniformNode<'float', number>; opacity?: UniformNode<'float', number> }
 
 /** The instance attributes `flatVertex` itself reads: the rect, the matrix rows and the clip (transform.ts). */
 const FLAT_ATTRS = ['iRect', 'iMat0', 'iMat1', 'iMat2', 'iClipRect', 'iClipInv', 'iClipT'] as const

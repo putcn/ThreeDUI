@@ -4,7 +4,7 @@ import { Vector2, Vector3, NormalBlending, CustomBlending, AddEquation, SrcAlpha
 import { Node, IDENTITY, scaleAbout, type ClipRect, type DecorationInstance } from '@glassui/core'
 import { DecorationBatch, DECOR_ATTRS } from '../src/decoration/batch'
 import { createRimMaterial, createPoolMaterial, rimProfile, RIM_OUTLINE_PT, RIM_OUTLINE_ALPHA } from '../src/decoration/material'
-import { AA_MARGIN_PT } from '../src/flat'
+import { AA_MARGIN_PT, type SurfaceUniforms } from '../src/flat'
 import { instanceMatrix } from '../src/transform'
 import { srgbToLinear } from '../src/color'
 import { evalNode } from './fixtures/tsl-eval'
@@ -113,9 +113,9 @@ describe('DecorationBatch', () => {
 describe('rim material', () => {
   // fragment output at quad-local q (units; the 1 × 0.4 capsule, quad grown by the AA margin) for a footprint of
   // `px` units per pixel: [r, g, b, opacity]
-  const frag = (inst: DecorationInstance, qx: number, qy: number, px = 0.01) => {
+  const frag = (inst: DecorationInstance, qx: number, qy: number, px = 0.01, uniforms: SurfaceUniforms = su()) => {
     const b = new DecorationBatch('rim'); b.update([inst], s)
-    const m = createRimMaterial(b.geometry, su())
+    const m = createRimMaterial(b.geometry, uniforms)
     const grow = (2 * AA_MARGIN_PT) / s.ptPerUnit
     const at = { ...packed(b), position: [qx / (1 + grow), qy / (0.4 + grow), 0] }
     return [...evalNode(m.colorNode, at, undefined, px), ...evalNode(m.opacityNode, at, undefined, px)]
@@ -145,6 +145,10 @@ describe('rim material', () => {
   })
   it('colours by the linear instance colour', () => {
     close(frag({ ...rim, color: [1, 0.5, 0, 1] }, 0, y(0.0675)).slice(0, 3), [1, srgbToLinear(0.5), 0])
+  })
+  it('fades with the whole Surface: alpha × su.opacity', () => {
+    const full = frag(rim, 0, y(0.0675))[3]!, half = frag(rim, 0, y(0.0675), 0.01, { ...su(), opacity: uniform(0.5) })[3]!
+    expect(full).toBeGreaterThan(0); expect(half).toBeCloseTo(full / 2, 12)
   })
 })
 
