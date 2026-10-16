@@ -80,7 +80,13 @@ surface.attach3D(node: Node, object: Object3D, opts?: {
   depth?: number                                        // pt，物体离开内容面的最大高度，用于阴影拟合；默认 = 节点宽度
   update?: (dt: number, ctx: Viewport3DContext) => boolean   // 每次 tick 调用；返回 true 表示还需要下一帧
 }): () => void                                          // 卸下
-interface Viewport3DContext { width: number; height: number; reducedMotion: boolean; theme: Theme; scheme: ColorScheme }
+interface Viewport3DContext {
+  width: number; height: number; reducedMotion: boolean; theme: Theme; scheme: ColorScheme
+  eye?: readonly [number, number, number]               // 对焦位姿的相机，在锚点坐标系里（pt）；不知道视图时缺省
+}
+surface.focusView: { fovDeg: number; aspect: number; margin: number } | null   // root 每次 tick 写入
+rig.margin: number                                      // 只读：对焦时每边留的边距比例（CameraRigOptions.margin）
+RIG_MARGIN = 0.08                                       // 没有 rig 时用的默认边距
 ```
 
 - **坐标系**：物体挂在一个锚点 Group 下。原点在节点盒子的中心，z = 0 在它所贴的面上：最近的玻璃祖先（如 Card）的顶面，没有则是内容面；x 向右、y 向上、z 朝外，1 个局部单位 = 1 pt。每次 `tick` 在布局之后按节点的 `worldRect` 更新锚点。
@@ -92,6 +98,11 @@ interface Viewport3DContext { width: number; height: number; reducedMotion: bool
 - **光照与阴影**：物体在 UI 场景里，受 UI 灯光照射；`castShadow` 打开，投影落在背板与 Card 上。阴影相机的拟合范围把 `depth` 算进去。
 - **命中**：射线同时测试内容 quad 与已挂物体（递归），取最近者。命中挂载物体时，事件派发给挂载的节点，事件对象多一个 `object`（命中的 Object3D；在 core 里类型为 `unknown`）。节点的悬停范围是"盒子区域 ∪ 物体"：射线落在物体上，即使它在内容面上的投影已出了盒子，也仍算在节点内；`pointermove` 每次带上当前的 `object`（落在盒子空白处时缺省）。
 - `update` 返回 true 时 root 继续出帧（`needsFrame`）。
+- **对焦视点 `eye`（Task 9P）**：
+  - `root.tick` 每次 tick 把一个视图对象写给每个世界层 Surface 的 `focusView`：相机的有效竖直 fov、视口宽高比、rig 的 `margin`（没有 rig 时用 `RIG_MARGIN`，即 rig 的默认值 0.08）。这个对象在 root 里只有一个，每次 tick 改写其中的值。正交相机没有透视可拟合，`focusView` 为 `null`。
+  - Surface 用它算出对焦距离：内容面中心沿法线到对焦位姿相机的距离，换算成这个 Surface 自己的 pt，交给附件（`Viewport3DStep.focus`，pt；不知道视图时缺省）。拟合距离与尺寸成正比，所以均匀的静止缩放（如非焦点 Block 的 0.96）会抵消，直接用 Surface 自身的尺寸。
+  - 附件再把它换成 `Viewport3DContext.eye`：对焦位姿的相机在锚点坐标系里的位置，即从盒子中心回到 Surface 的轴线、再向外 `focus − 面高`。它跟随静止位姿，不跟随实际相机（没有视差，也不随飞行）；不知道视图时缺省。`eye` 元组是附件自己的，每次 tick 改写：要保留就复制其中的值。
+  - **用途**：盒子偏离画面中心时，朝观者立起的内容在透视下会向外投射，越出盒子（9P 检查中，总览右侧 Card 里的矩阵越出 Card 约 90 px）。3D 图表（`FrameChart`：`SurfaceChart`、`BarMatrix`）因此按 Block 对焦时看到的样子拟合自己的盒子：从 `eye` 把轮廓（底板、满高时的曲面或柱子的角、立着的刻度，以及悬停柱子抬起的高度）投到玻璃上，平移使投影在盒子里居中，缩放（不超过 1）使它离每条边至少 16 pt。`eye` 的变化小于其距离的 2 % 时不重新拟合（Card 悬停抬起 16 pt 不会让图表"呼吸"）。
 
 ### 2.4 render：嵌套玻璃（Card 里放玻璃控件）
 
