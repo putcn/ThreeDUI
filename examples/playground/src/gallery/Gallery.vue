@@ -1,10 +1,11 @@
 <script setup lang="ts">
 // The component gallery (`?scene=gallery`): every @glassui/vue component, section by section. The content sits on the
 // wall with no glass under it (spec §8.3: glass on controls, never on content areas); the controls (Buttons, Switches,
-// Checkboxes, Inputs) are glass right on the wall, with no panel behind them. Beside the column stands a world-layer
+// Checkboxes, Inputs) are glass right on the wall, with no panel behind them. The Dialog section's Button opens a
+// <Dialog>: a glass panel of its own over a scrim that dims the whole screen. Beside the column stands a world-layer
 // <Surface>: a glass panel in the scene, turned about Y, with hover, clicks and an Input of its own.
 import { computed, h, onBeforeUnmount, ref, type FunctionalComponent } from 'vue'
-import { Box, Button, Checkbox, Icon, ICON_NAMES, Input, Stack, Surface, Switch, Text, useScheme } from '@glassui/vue'
+import { Box, Button, Checkbox, Dialog, Icon, ICON_NAMES, Input, Stack, Surface, Switch, Text, useScheme } from '@glassui/vue'
 
 // The page is a vertical `scroll` (the wheel scrolls it once later sections outgrow the viewport). No page fill: the
 // content sits on the wall itself, which the later sections' glass refracts.
@@ -70,6 +71,16 @@ const query = ref('液态玻璃'), poem = ref('春眠不觉晓，处处闻啼鸟
 const fullName = ref(''), email = ref(''), password = ref(''), submitted = ref('')
 /** The world panel's field. */
 const note = ref('')
+
+/** The Dialog section: renaming the project in a dialog (its field starts from the current name), and how it ended. */
+const project = ref('玻璃界面实验室'), renaming = ref(false), draft = ref(''), outcome = ref('')
+const openRename = () => { draft.value = project.value; renaming.value = true }
+const rename = () => {
+  const name = draft.value.trim()
+  if (!name) return
+  project.value = name; outcome.value = `已保存：${name}`; renaming.value = false
+}
+const cancelRename = () => { outcome.value = '已取消'; renaming.value = false }
 </script>
 
 <template>
@@ -372,6 +383,33 @@ const note = ref('')
           <Input v-model="password" type="password" size="large" leading-icon="lock" placeholder="Password" @submit="submitted = '••••'" />
           <Text :value="submitted ? `Enter 提交了：${submitted}` : '点按或 Tab 进入编辑；Enter 发出 submit，Esc 退出；拖动选择，双击选词'" size="sm" color="secondaryLabel" />
         </Stack>
+      </Stack>
+
+      <Stack id="dialogs" :gap="24">
+        <Stack :gap="12">
+          <Stack direction="horizontal" justify="between" align="end">
+            <Text value="Dialog" size="xl" :weight="700" />
+            <Text value="对话框 · v-model:open · 暗化背景上的玻璃面板，键盘只在面板里" size="sm" color="secondaryLabel" :style="{ marginBottom: 3 }" />
+          </Stack>
+          <Box :style="{ height: 1, bg: 'separator' }" />
+        </Stack>
+
+        <!-- the opener right on the wall; the Dialog takes no space here: its panel and scrim are Surfaces of their own -->
+        <Stack :gap="10" align="start">
+          <Stack direction="horizontal" :gap="16" align="center">
+            <Button id="open-dialog" variant="glassProminent" label="重命名项目" leading-icon="gear" @press="openRename" />
+            <Text :value="`项目：${project}`" :weight="600" />
+          </Stack>
+          <Text :value="outcome || '打开后输入框自动获得焦点；Tab 在面板里循环，Escape 或点击背景关闭，焦点回到按钮'" size="sm" color="secondaryLabel" />
+        </Stack>
+        <Dialog id="rename-dialog" v-model:open="renaming" title="重命名项目" @close="outcome = '已关闭（Escape 或点击背景）'">
+          <Text value="新名称会同步给项目里的所有成员。" color="secondaryLabel" />
+          <Input v-model="draft" leading-icon="star" placeholder="项目名称" clearable :max-length="24" @submit="rename" />
+          <template #footer>
+            <Button label="取消" @press="cancelRename" />
+            <Button variant="glassProminent" label="保存" leading-icon="check" :disabled="!draft.trim()" @press="rename" />
+          </template>
+        </Dialog>
       </Stack>
     </Box>
   </scroll>
