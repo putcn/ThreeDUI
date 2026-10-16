@@ -253,6 +253,21 @@ it('with closeOnBackdrop off, a stray press on the backdrop gives the panel its 
   fire(backdrop.root, 'click', { pointerType: 'mouse' }); await nextTick()
   expect(panel.disposed).toBe(false); expect(open.value).toBe(true)
 })
+it('a stray press gives back only the node it blurred itself: nothing, when nothing was focused in the panel as it began', async () => {
+  const open = ref(true)
+  const { root } = mountGlass(() => h(Dialog, { open: open.value, closeOnBackdrop: false }, { default: () => h(Input, { modelValue: '' }), footer: () => h(Button, { id: 'ok', label: '好' }) }), { motion: 'frozen' })
+  await nextTick(); root.tick(); await flush()
+  const { backdrop, panel } = made(root), field = first(panel.root, 'glass')
+  expect(panel.focus.current).toBe(field)
+  panel.focus.focusFromPointer(null)                                   // a click on the panel's empty area left the field
+  expect(panel.focus.current).toBeNull(); expect(root.ime.active).toBeNull()
+  for (const end of ['pointerup', 'pointercancel'] as const) {
+    root.pointer!.setActive(real(backdrop))                            // the stray press: it blurs nothing
+    fire(backdrop.root, end, { pointerType: 'mouse' })
+    expect(root.pointer!.setActive).toHaveBeenLastCalledWith(panel)
+    expect(panel.focus.current).toBeNull(); expect(root.ime.active).toBeNull()   // the older blur stands
+  }
+})
 it('with closeOnBackdrop on, the press\'s up gives the keys back but not the focus: its click closes', async () => {
   const open = ref(true)
   const { root } = mountGlass(() => h(Dialog, { open: open.value, 'onUpdate:open': (v: boolean) => { open.value = v } }, { footer: () => h(Button, { id: 'ok', label: '好' }) }), { motion: 'frozen' })

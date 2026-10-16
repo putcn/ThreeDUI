@@ -179,6 +179,8 @@ export class PointerBridge {
   /** The Surface whose tracker holds the hover. */
   hovered: Surface | null = null
   private pressing = false
+  /** What the last `setActive` that moved the keys blurred (`blurred`); the node held weakly. */
+  private switched: { surface: Surface; node: WeakRef<Node>; visible: boolean } | null = null
   private readonly raycaster = new Raycaster()
   private readonly ndc = new Vector2()
   private readonly listeners = new Map<BridgeEventType, (e: BridgeEvent) => void>()
@@ -207,6 +209,21 @@ export class PointerBridge {
   forget(s: Surface): void {
     if (this.active === s) { this.active = null; this.pressing = false }
     if (this.hovered === s) this.hovered = null
+    if (this.switched?.surface === s) this.switched = null
+  }
+
+  /**
+   * The node that the last `setActive` moving the keys elsewhere blurred: the Surface it took them from, that node, and
+   * whether it showed its ring. Null when nothing was focused there, once that node has left that Surface's tree, and
+   * after that Surface went (`forget`). A press on another Surface moves the keys this way, so a modal Surface whose keys
+   * a stray press took (a Dialog's backdrop) gives exactly that node its focus back, never one blurred earlier by
+   * something else. The node is held weakly; a fresh copy each read.
+   */
+  get blurred(): Readonly<{ surface: Surface; node: Node; visible: boolean }> | null {
+    const b = this.switched, node = b?.node.deref()
+    if (!b || !node) return null
+    for (let p: Node | null = node; p; p = p.parent) if (p === b.surface.root) return { surface: b.surface, node, visible: b.visible }
+    return null
   }
 
   /** Casts the event's ray (left in `raycaster.ray`) and hits the Surfaces. */
@@ -243,14 +260,16 @@ export class PointerBridge {
 
   /**
    * Makes `s` the Surface that receives the keys (a dialog that opens takes them), as a press on it would. Moving to
-   * another Surface (or none) blurs the old one's focus: one focused node per canvas. A press the old one holds is
+   * another Surface (or none) blurs the old one's focus: one focused node per canvas (`blurred` records it). A press the old one holds is
    * cancelled (`pointercancel`), since the capture is `active`'s and the rest of that press would reach `s`; so is
    * the press being dispatched when a `pointerdown` listener calls this (no focus, no capture for it).
    */
   setActive(s: Surface | null): void {
     if (this.active === s) return
     if (this.pressing) { this.active?.pointer.cancel(); this.pressing = false }
-    this.active?.focus.focus(null)
+    const old = this.active, node = old?.focus.current ?? null
+    this.switched = old && node ? { surface: old, node: new WeakRef(node), visible: node.state.focusVisible } : null
+    old?.focus.focus(null)
     this.active = s
   }
 

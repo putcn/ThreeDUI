@@ -185,13 +185,27 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
   const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = [], rigs: FakeRig[] = [], charts: FakeChart[] = [], surfaceCharts: FakeSurfaceChart[] = [], barMatrices: FakeBarMatrix[] = []
   /**
    * The pointer bridge's key target, as `PointerBridge`: `setActive` sets it, blurring the focus of the Surface it
-   * replaces (one focused node per canvas), and removing its Surface clears it.
+   * replaces (one focused node per canvas) and recording what that blurred (`blurred`: while the node is in that
+   * Surface's tree); removing a Surface clears both.
    */
-  const bridge: { active: FakeSurface | null; setActive(s: FakeSurface | null): void } = {
-    active: null,
+  interface FakeBridge {
+    active: FakeSurface | null
+    switched: { surface: FakeSurface; node: Node; visible: boolean } | null
+    readonly blurred: { surface: FakeSurface; node: Node; visible: boolean } | null
+    setActive(s: FakeSurface | null): void
+  }
+  const bridge: FakeBridge = {
+    active: null, switched: null,
+    get blurred() {
+      const b = bridge.switched
+      for (let p: Node | null = b?.node ?? null; b && p; p = p.parent) if (p === b.surface.root) return { ...b }
+      return null
+    },
     setActive: vi.fn((s: FakeSurface | null) => {
       if (bridge.active === s) return
-      bridge.active?.focus.focus(null)
+      const old = bridge.active, node = old?.focus.current ?? null
+      bridge.switched = old && node ? { surface: old, node, visible: node.state.focusVisible } : null
+      old?.focus.focus(null)
       bridge.active = s
     }),
   }
@@ -297,6 +311,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
       const f = s as unknown as FakeSurface
       if (!surfaces.includes(f)) return
       if (bridge.active === f) bridge.active = null   // as PointerBridge.forget
+      if (bridge.switched?.surface === f) bridge.switched = null
       f.dispose()
     },
     tick(dt = 1 / 60) {

@@ -119,15 +119,17 @@ export const Dialog = defineGlassComponent({
   const onBackdropClick = (): void => { if (v.value.closeOnBackdrop && surface.value) dismiss() }
   /**
    * A press on the backdrop gave it the keys (the pointer bridge hands them to the Surface pressed, blurring the panel):
-   * they go back to the panel, and with `refocus` so does the node focused there, its ring as it was (`FocusManager.last`).
-   * The up of a press that closes (`closeOnBackdrop`: its click follows) gives the keys back only.
+   * they go back to the panel, and with `refocus` so does the node that this press blurred there, its ring as it was
+   * (`PointerBridge.blurred`, read before the switch back records its own). Nothing comes back when nothing was focused
+   * in the panel as the press began. The up of a press that closes (`closeOnBackdrop`: its click follows) gives the keys
+   * back only.
    */
   const keysToPanel = (refocus: boolean): void => {
     const ps = pair.value, pointer = root.pointer
     if (!ps || !surface.value || pointer?.active !== ps.backdrop) return
+    const blurred = pointer.blurred
     pointer.setActive(ps.panel)
-    const last = ps.panel.focus.last
-    if (refocus && last && !ps.panel.focus.current) ps.panel.focus.focus(last.node, { visible: last.visible })
+    if (refocus && blurred?.surface === ps.panel && !ps.panel.focus.current) ps.panel.focus.focus(blurred.node, { visible: blurred.visible })
   }
 
   /** Gives the keys back to the Surface that held them before, with its focused node and ring, unless they went elsewhere meanwhile. */

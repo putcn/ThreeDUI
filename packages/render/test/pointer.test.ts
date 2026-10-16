@@ -526,6 +526,22 @@ describe('PointerBridge.handle', () => {
     bridge.setActive(null)
     expect(bridge.active).toBeNull(); expect(b.focus.current).toBeNull()
   })
+  it('blurred: what the last switch of the keys blurred (its Surface, node and ring), only that switch\'s', () => {
+    const { a, b, ab, bridge } = two()
+    ab.setProp('tabIndex', 0)
+    expect(bridge.blurred).toBeNull()
+    bridge.setActive(a); a.focus.focus(ab, { visible: true })
+    bridge.setActive(b)                                                              // a press on b: it blurred ab
+    expect(bridge.blurred).toEqual({ surface: a, node: ab, visible: true }); expect(bridge.blurred).not.toBe(bridge.blurred)
+    bridge.setActive(b); expect(bridge.blurred?.node).toBe(ab)                       // no switch: no change
+    bridge.setActive(a); expect(bridge.blurred).toBeNull()                           // nothing was focused on b
+    a.focus.focus(ab, { visible: false }); a.focus.focus(null)                       // blurred earlier, by something else
+    bridge.setActive(b); expect(bridge.blurred).toBeNull()                           // this switch blurred nothing
+    bridge.setActive(a); a.focus.focus(ab); bridge.setActive(b)
+    ab.remove(); expect(bridge.blurred).toBeNull()                                   // left its Surface's tree: not named
+    a.root.appendChild(ab); bridge.setActive(a); a.focus.focus(ab); bridge.setActive(b)
+    bridge.forget(a); expect(bridge.blurred).toBeNull()                              // its Surface went
+  })
   it('setActive away from a Surface holding a press cancels that press: the capture cannot stay on it', () => {
     const { a, b, ab, bridge } = two()
     bridge.handle('pointerdown', { clientX: 100, clientY: 100, pointerId: 1 })
