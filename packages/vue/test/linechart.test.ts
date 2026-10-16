@@ -257,7 +257,7 @@ it('the width loop ends once the root has no Surfaces: a disposed root, whose af
   mountGlass(() => h(LineChart, { labels: ['一', '二'], series: [{ name: 'a', data: [1, 2] }] }), { root })   // no Surface at all
   let calls = 0
   // as a disposed root's afterTick (bounded here, so a spin fails the test instead of hanging it)
-  root.afterTick = () => ++calls > 50 ? new Promise<void>(() => {}) : Promise.resolve()
+  root.afterTick = () => ++calls > 50 ? new Promise<number>(() => {}) : Promise.resolve(0)
   root.tick(); for (let i = 0; i < 10; i++) await flush()
   expect(calls).toBe(0)
 })

@@ -152,7 +152,7 @@ export interface FakeIme {
 export interface FakeRoot extends GlassRoot {
   /** The recording bridge (`FakeIme`), typed as the render's `ImeBridge` for the components' sake. */
   readonly ime: ImeBridge & FakeIme
-  /** Lays out every live Surface, runs the animation runtime, then resolves the `afterTick` waiters and the pending `animateTo` promises; dt in seconds. */
+  /** Lays out every live Surface, runs the animation runtime, then resolves the `afterTick` waiters (with `dt`) and the pending `animateTo` promises; dt in seconds. */
   tick(dt?: number): void
   /** Emits a root event to the `on` listeners. */
   emit<K extends keyof UIRootEventMap>(type: K, e: UIRootEventMap[K]): void
@@ -185,7 +185,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
   const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = [], rigs: FakeRig[] = [], charts: FakeChart[] = [], surfaceCharts: FakeSurfaceChart[] = [], barMatrices: FakeBarMatrix[] = []
   /** The pointer bridge's key target, as `PointerBridge`: `setActive` sets it, removing its Surface clears it. */
   const bridge: { active: FakeSurface | null; setActive(s: FakeSurface | null): void } = { active: null, setActive: vi.fn((s: FakeSurface | null) => { bridge.active = s }) }
-  let waiters: (() => void)[] = []
+  let waiters: ((dt: number) => void)[] = []
   const listeners = new Map<string, Set<(e: never) => void>>()
   const screenFromPoint = (s: Surface, x: number, y: number): { x: number; y: number } => ({ x: x + s.position.x, y: y + s.position.y })
   const ime: FakeIme = {
@@ -298,9 +298,9 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
       }
       ime.reposition()   // as the real root: the proxy follows the caret every tick
       const w = waiters; waiters = []
-      for (const resolve of w) resolve()
+      for (const resolve of w) resolve(dt)
     },
-    afterTick: () => new Promise<void>(resolve => { waiters.push(resolve) }),
+    afterTick: () => new Promise<number>(resolve => { waiters.push(resolve) }),
     on(type, fn) {
       let set = listeners.get(type)
       if (!set) listeners.set(type, set = new Set())

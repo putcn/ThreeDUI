@@ -585,6 +585,17 @@ describe('the root API for the Vue layer', () => {
     await Promise.resolve(); expect(done).toBe(false)
     root.tick(0); await Promise.resolve(); expect(done).toBe(true)
   })
+  it('afterTick resolves with the tick\'s dt (a spring stepped there moves by it); a dispose resolves with 0', async () => {
+    const { root } = await createRoot()
+    const dts: number[] = []
+    void root.afterTick().then(dt => dts.push(dt)); void root.afterTick().then(dt => dts.push(dt))
+    root.tick(0.025); await Promise.resolve()
+    expect(dts).toEqual([0.025, 0.025])
+    void root.afterTick().then(dt => dts.push(dt))
+    root.dispose(); await Promise.resolve()
+    void root.afterTick().then(dt => dts.push(dt)); await Promise.resolve()
+    expect(dts).toEqual([0.025, 0.025, 0, 0])
+  })
   it('afterTick resolves after the content passes and the shadow fit; a dispose settles a pending one', async () => {
     const { root, renderer } = await createRoot()
     root.createSurface({ width: 100, height: 100 })

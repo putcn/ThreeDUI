@@ -166,10 +166,12 @@ export interface UIRoot {
    */
   tick(dt: number): void
   /**
-   * Resolves at the end of the next `tick` (after the content passes and the shadow fit): layout and the render list
-   * are current then (e.g. to place an IME proxy at a caret). `dispose` resolves any still pending; after it, at once.
+   * Resolves at the end of the next `tick` (after the content passes and the shadow fit) with that tick's `dt` (s):
+   * layout and the render list are current then (e.g. to place an IME proxy at a caret), and something stepped there
+   * (a spring driving a Surface's own scale) moves by the time the tick did. `dispose` resolves any still pending with
+   * 0; after it, at once with 0.
    */
-  afterTick(): Promise<void>
+  afterTick(): Promise<number>
   /**
    * Surface pt (x, y) on its content plane (`Surface.worldFromPoint`), projected through the camera to CSS px from the
    * canvas's top-left; null when the point is behind the camera (view-space z ≥ 0). A point past the far plane (or
@@ -386,8 +388,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   }
 
   /** Resolved (and dropped) at the end of every `tick`, and by `dispose`. */
-  const afterTickWaiters: (() => void)[] = []
-  function settleAfterTick(): void { for (const resolve of afterTickWaiters.splice(0)) resolve() }
+  const afterTickWaiters: ((dt: number) => void)[] = []
+  function settleAfterTick(dt: number): void { for (const resolve of afterTickWaiters.splice(0)) resolve(dt) }
 
   const toError = (e: unknown): Error => e instanceof Error ? e : new Error(String(e))
 
@@ -608,13 +610,13 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       if (bridge && field) {
         try { bridge.reposition() } catch (e) { reportError(field.surface, toError(e)); bridge.blur(field) }
       }
-      settleAfterTick()
+      settleAfterTick(dt)
     },
     setTheme(t) { if (disposed) return; checkTheme('UIRoot.setTheme', t); theme = t; restyleAll() },
     setScheme(sc) { if (disposed) return; checkScheme('UIRoot.setScheme', sc); if (sc !== scheme) { scheme = sc; restyleAll() } },
     afterTick() {
-      if (disposed) return Promise.resolve()   // no tick will come
-      return new Promise<void>(resolve => { afterTickWaiters.push(resolve) })
+      if (disposed) return Promise.resolve(0)   // no tick will come
+      return new Promise<number>(resolve => { afterTickWaiters.push(resolve) })
     },
     screenFromPoint(s, x, y) {
       s.worldFromPoint(x, y, point)
@@ -673,7 +675,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       if (pointer && canvas.style && touchAction !== undefined) canvas.style.touchAction = touchAction
       for (const s of [...surfaces]) root.removeSurface(s)
       offQuality()
-      settleAfterTick()   // no tick will come: an `await root.afterTick()` must not hang
+      settleAfterTick(0)   // no tick will come: an `await root.afterTick()` must not hang
       listeners.quality.clear(); listeners.error.clear(); listeners.theme.clear()
       pages.dispose()
       lights.key.dispose(); lights.hemi.dispose()
