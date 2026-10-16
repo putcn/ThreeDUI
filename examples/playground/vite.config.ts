@@ -21,6 +21,8 @@ export default defineConfig({
     outDir: process.env.GLASSUI_OUT ?? 'dist',
     emptyOutDir: true,
     target: 'es2022',
-    chunkSizeWarningLimit: 2000,   // one bundle: three/webgpu + yoga (inlined wasm) + zod + vue ≈ 1.3 MB, expected for a demo
+    // one bundle: three/webgpu + yoga (inlined wasm) + zod + vue ≈ 1.3 MB, and the network map's Xuzhou extract
+    // (src/wms/geo, ≈ 0.4 MB): expected for a demo
+    chunkSizeWarningLimit: 2600,
   },
 })

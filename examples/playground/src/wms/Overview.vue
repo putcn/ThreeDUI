@@ -1,31 +1,42 @@
 <script setup lang="ts">
-// The overview Block's content (spatial spec §4 step 2): the top bar, four KPI Cards, the 30-day flow (a 2D line chart)
-// and the zones' stock (a 3D bar chart growing out of its Card's glass). The tabs in the top bar focus the other Blocks.
-import { BarChart3D, Box, Card, Icon, LineChart, Stack, Text } from '@glassui/vue'
-import { flow30d, grouped, kpis, TODAY, zones } from './data'
+// The overview Block's content (spatial spec §4 step 2, §12.1–12.2): the top bar, four KPI Cards, and two charts whose
+// third dimension carries meaning: the last 14 days' outbound orders by hour as a heat surface (the working days'
+// double peak, the weekend and holiday lull) and 徐州一号仓's stock by zone × category as a bar matrix whose colour is a
+// fourth value, the days of cover. The tabs in the top bar focus the other Blocks.
+import { BarMatrix3D, Box, Card, Icon, Stack, SurfaceChart3D, Text } from '@glassui/vue'
+import { grouped, heat, kpis, stock, TODAY } from './data'
 
 const emit = defineEmits<{ navigate: [name: string] }>()
 
-const tabs = [{ name: 'overview', label: '总览' }, { name: 'twin', label: '仓储孪生' }, { name: 'orders', label: '订单' }] as const
+const tabs = [{ name: 'overview', label: '总览' }, { name: 'network', label: '物流网络' }, { name: 'twin', label: '仓储孪生' }, { name: 'orders', label: '订单' }] as const
 /** A tab: the current one (this Block) on a white capsule, the others tinted under the pointer. */
 const tab = (current: boolean) => ({
   paddingX: 18, height: 32, radius: 'capsule' as const, justifyContent: 'center' as const,
   ...(current ? { bg: 'fill' } : { hover: { bg: '#1c1c220d' } }),
 })
-/** The line chart's series: inbound in a sky blue, outbound (today's KPI) in the accent. */
-const series = [{ name: '入库', data: flow30d.inbound, color: '#5b9cf6' }, { name: '出库', data: flow30d.outbound, color: 'accent' }]
-/** The busiest zone in the accent, the others in a lighter tint of it. */
-const top = Math.max(...zones.map(z => z.value))
-const bars = zones.map(z => ({ label: z.label, value: z.value, color: z.value === top ? 'accent' : '#b9b4fb' }))
-const total = zones.reduce((s, z) => s + z.value, 0)
-const least = Math.min(...zones.map(z => z.value))
-const most = zones.find(z => z.value === top)!, fewest = zones.find(z => z.value === least)!
-const summary = [
-  { label: '库存总量', value: `${grouped(total)} 件` },
-  { label: '最多', value: `${most.label} ${grouped(most.value)}` },
-  { label: '最少', value: `${fewest.label} ${grouped(fewest.value)}` },
-]
+/** pt: both charts' plot height (the matrix's legend takes the room the heat surface's summary row takes). */
+const CHART = 420
+const orders = (v: number): string => `${grouped(v)} 单`
 const pieces = (v: number): string => `${grouped(v)} 件`
+const days = (v: number): string => `${v} 天`
+/** Under the heat surface: its peak hour, and a working day's and a day off's average (weekends and the holiday). */
+const peak = (() => {
+  let best = { value: -1, day: 0, hour: 0 }
+  heat.values.forEach((row, day) => row.forEach((value, hour) => { if (value > best.value) best = { value, day, hour } }))
+  return best
+})()
+const totals = heat.values.map(r => r.reduce((a, b) => a + b, 0))
+const isOff = (label: string): boolean => {
+  const [m, d] = label.split('-').map(Number) as [number, number], wd = new Date(Date.UTC(TODAY.year, m - 1, d)).getUTCDay()
+  return wd === 0 || wd === 6 || (m === 10 && d <= 7)
+}
+const mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length)
+const work = mean(totals.filter((_, i) => !isOff(heat.days[i]!))), off = mean(totals.filter((_, i) => isOff(heat.days[i]!)))
+const heatSummary = [
+  { label: '峰值', value: `${grouped(peak.value)} 单/时`, note: `${heat.days[peak.day]} ${heat.hours[peak.hour]}:00` },
+  { label: '工作日日均', value: `${grouped(work)} 单`, note: '' },
+  { label: '休息日日均', value: `${grouped(off)} 单`, note: `${Math.round((off / work - 1) * 100)}%` },
+]
 /** A KPI's change against yesterday: ▲ in success, ▼ in danger. */
 const delta = (d: number) => [
   { text: `${d >= 0 ? '▲' : '▼'} ${Math.abs(d).toFixed(1)}%`, color: d >= 0 ? 'success' : 'danger', weight: 600 },
@@ -45,7 +56,7 @@ const figure = (k: (typeof kpis)[number]) => [
     </Box>
     <Text value="云仓 WMS" :size="20" :weight="700" :wrap="false" />
     <Stack direction="horizontal" align="center" :gap="6" :style="{ paddingX: 14, height: 34, radius: 'capsule', bg: '#6b63f514', marginLeft: 6 }">
-      <Text value="上海一号仓" :size="15" :weight="600" :wrap="false" />
+      <Text value="徐州一号仓" :size="15" :weight="600" :wrap="false" />
       <Icon name="chevron-down" :size="16" color="secondaryLabel" :weight="0.12" />
     </Stack>
     <Box :style="{ flexGrow: 1 }" />
@@ -76,30 +87,30 @@ const figure = (k: (typeof kpis)[number]) => [
     </Card>
   </Stack>
 
-  <!-- charts: the 30-day flow (60 %) and the zones' stock (40 %) -->
+  <!-- charts, as tall as each other: the outbound heat surface (60 %) and the zone × category stock (40 %) -->
   <Stack direction="horizontal" :gap="20" :style="{ flexGrow: 1 }">
     <Card :style="{ flexGrow: 3, flexBasis: 0 }">
       <Stack direction="horizontal" justify="between" align="center">
-        <Text value="近 30 天出入库" :size="17" :weight="600" />
-        <Text value="单位：单 · 09-16 至 10-15" :size="13" color="tertiaryLabel" />
+        <Text value="近 14 天出库热力" :size="17" :weight="600" />
+        <Text :value="`单位：单/时 · ${heat.days[0]} 至 ${heat.days.at(-1)}`" :size="13" color="tertiaryLabel" />
       </Stack>
-      <LineChart :labels="flow30d.labels" :series="series" :height="456" :format="grouped" />
+      <SurfaceChart3D :x-labels="heat.hours" :y-labels="heat.days" :values="heat.values" :format="orders" :height="CHART" />
+      <Stack direction="horizontal" :gap="12" :style="{ height: 26, alignItems: 'center' }">
+        <Stack v-for="s in heatSummary" :key="s.label" direction="horizontal" align="center" :gap="8" :style="{ flexGrow: 1, flexBasis: 0, justifyContent: 'center' }">
+          <Text :value="s.label" :size="13" color="secondaryLabel" :wrap="false" />
+          <Text :value="[{ text: s.value, weight: 700 }, ...(s.note ? [{ text: `  ${s.note}`, color: 'tertiaryLabel', weight: 500 }] : [])]" :size="15" :wrap="false" />
+        </Stack>
+      </Stack>
     </Card>
     <Card :style="{ flexGrow: 2, flexBasis: 0 }">
       <Stack direction="horizontal" justify="between" align="center">
-        <Text value="各库区库存" :size="17" :weight="600" />
-        <Text value="单位：件" :size="13" color="tertiaryLabel" />
+        <Text value="库区 × 品类 库存" :size="17" :weight="600" />
+        <Text value="高：件数 · 色：周转天数" :size="13" color="tertiaryLabel" />
       </Stack>
-      <Box :style="{ flexGrow: 1, justifyContent: 'center' }">
-        <BarChart3D :data="bars" :format="pieces" />
-      </Box>
-      <Box :style="{ height: 1, bg: 'separator' }" />
-      <Stack direction="horizontal" :gap="12">
-        <Stack v-for="s in summary" :key="s.label" :gap="4" :style="{ flexGrow: 1, flexBasis: 0 }">
-          <Text :value="s.label" :size="13" color="secondaryLabel" />
-          <Text :value="s.value" :size="18" :weight="700" :wrap="false" />
-        </Stack>
-      </Stack>
+      <BarMatrix3D
+        :rows="stock.rows" :cols="stock.cols" :values="stock.values" :color-values="stock.cover"
+        color-label="周转" :color-format="days" :format="pieces" :height="CHART"
+      />
     </Card>
   </Stack>
 </template>

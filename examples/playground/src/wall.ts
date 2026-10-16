@@ -45,12 +45,17 @@ export function createWall(): Mesh {
   return wall
 }
 
+/** World units of curved wall one unit of u spans at most (see `createCurvedWall`). */
+export const MAX_U_LENGTH = 32
+
 /**
  * The backdrop for a camera that swings round an arc (the spatial scene): the pastel material on the inside of an
  * open cylinder segment about the vertical axis through `center`, `radius` from it and `height` tall. `from` / `to` are
  * angles in radians as a Space's arc measures them: 0 straight back from `center` (towards −z), rightwards positive.
- * u runs along the segment, left to right as seen from inside, and v up it, as on the plane; keep the arc length,
- * `radius × (to − from)`, near the plane's 16 units (at most about 32) for the blobs to keep their density.
+ * u runs along the segment, left to right as seen from inside, and v up it, as on the plane. Up to `MAX_U_LENGTH`
+ * (32 units, twice the plane's 16) u spans 0–1 along the segment; a longer segment keeps that density, u running past
+ * 0 and 1 by the same amount at either end (where the material's blobs thin out and its gradient and beam go on), so
+ * the colour does not stretch.
  *
  * Every normal is the plane's (towards +z once `BackSide` turns it): lit by the host key from the front-left, the true
  * inward normals would darken the wall to about a third of its brightness round the curve, while the same light as the
@@ -62,7 +67,8 @@ export function createCurvedWall(opts: { center: [number, number, number]; radiu
   // segment starts at the right end (θ = to) and u runs right to left: flipped below
   const geometry = new CylinderGeometry(radius, radius, height, Math.max(8, Math.ceil((to - from) / (Math.PI / 96))), 1, true, Math.PI - to, to - from)
   const uvs = geometry.getAttribute('uv'), normals = geometry.getAttribute('normal')
-  for (let i = 0; i < uvs.count; i++) { uvs.setX(i, 1 - uvs.getX(i)); normals.setXYZ(i, 0, 0, -1) }
+  const span = Math.max(1, radius * (to - from) / MAX_U_LENGTH)
+  for (let i = 0; i < uvs.count; i++) { uvs.setX(i, 0.5 + (0.5 - uvs.getX(i)) * span); normals.setXYZ(i, 0, 0, -1) }
   const material = pastelMaterial()
   material.side = BackSide
   const wall = new Mesh(geometry, material)

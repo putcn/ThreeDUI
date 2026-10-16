@@ -16,14 +16,18 @@ const PT = 244
 export const BLOCKS = {
   orders: { width: 880, height: 900 },
   overview: { width: 1440, height: 900 },
+  network: { width: 1600, height: 1000 },
   twin: { width: 1280, height: 900 },
 } as const
 
+/** The arc's slots, left to right: orders, overview, network, twin. */
+const SLOTS = arcSlots([BLOCKS.orders, BLOCKS.overview, BLOCKS.network, BLOCKS.twin].map(b => b.width / PT), ARC.radius, ARC.gap)
 /**
- * The twin's pose: the arc's third slot after orders and overview, written out (`position`/`rotation` on its Block) so
- * the info panel can stand relative to it.
+ * The network map's and the twin's poses: the arc's third and fourth slots, after orders and overview, written out
+ * (`position`/`rotation` on their Blocks) so their info panels can stand relative to them.
  */
-export const TWIN: ArcSlot = arcSlots([BLOCKS.orders.width / PT, BLOCKS.overview.width / PT, BLOCKS.twin.width / PT], ARC.radius, ARC.gap)[2]!
+export const NETWORK: ArcSlot = SLOTS[2]!
+export const TWIN: ArcSlot = SLOTS[3]!
 
 /**
  * The bin info panel: a glass Surface `width` × `height` pt at `ptPerUnit`, its centre at `offset` (world units) in the
@@ -34,6 +38,32 @@ export const TWIN: ArcSlot = arcSlots([BLOCKS.orders.width / PT, BLOCKS.overview
  * so it is drawn at 360 pt a unit (not 244) to look about 300 × 170 pt there.
  */
 export const PANEL = { width: 300, height: 170, ptPerUnit: 360, offset: [1.15, -0.74, 2.05] as [number, number, number] }
+
+/**
+ * The place panel (the network map's): like the bin panel, a glass Surface `width` × `height` pt at `ptPerUnit`, its
+ * centre at `offset[side]` (world units) in the network Block's frame: in the map's upper corner on the side away from
+ * the hovered place (`right` when the place shows left of the map's centre), below the title row and legend, and 1.25
+ * units out, its back face 255 pt in front of the map's plate: the map stands out of the glass by its seat, which is at
+ * most about 141 pt (`SQUASH` × half the plate's height × tan 1.2, the steepest pitch) at the plate's near edge and
+ * less under the panel (test/scene.test.ts checks every pitch). Seen from the focus pose it looks about 1.18 × its size.
+ */
+export const PLACE_PANEL = {
+  width: 320, height: 236, ptPerUnit: 360,
+  offset: { right: [1.93, 0.78, 1.25], left: [-1.93, 0.78, 1.25] } as Record<'left' | 'right', [number, number, number]>,
+}
+
+/**
+ * The curved wall round the arc (main.ts): about the arc's centre, `out` units past the Blocks, `height` tall like the
+ * plane (a focus pose sees no more than |y| ≈ 4.9: the network Block's at 4:3, the camera farthest back), spanning the
+ * Blocks' arc angles plus `margin` on each side: an end Block's focus pose sees up to about 26° past its angle at 16:9
+ * and 32° at 21:9, the rig's ±2.5° parallax included (the network's, mid-arc, 33°). test/scene.test.ts checks every
+ * Block at four aspects.
+ */
+export const WALL = { out: 4, height: 11, margin: 34 * Math.PI / 180 } as const
+/** The wall's span (radians, as the arc measures angles) for Blocks at `angles`. */
+export function wallSpan(angles: readonly number[]): { from: number; to: number } {
+  return { from: Math.min(...angles) - WALL.margin, to: Math.max(...angles) + WALL.margin }
+}
 
 /** `offset` in the frame of `pose` (a turn about y only, as the arc's), added to its position. */
 export function inFrameOf(pose: ArcSlot, offset: readonly [number, number, number]): ArcSlot {

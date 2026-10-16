@@ -17,7 +17,7 @@ import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
 import Gallery from './gallery/Gallery.vue'
 import Spatial from './scenes/Spatial.vue'
-import { ARC } from './scenes/spatial-arc'
+import { ARC, WALL, wallSpan } from './scenes/spatial-arc'
 import { createCurvedWall, createHostLights, createWall } from './wall'
 import { buildSignup, SIGNUP } from './signup'
 import { buildWorld } from './world'
@@ -58,6 +58,8 @@ const renderer = new WebGPURenderer({ antialias: true, forceWebGL })
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.setSize(innerWidth, innerHeight)
 document.body.appendChild(renderer.domElement)
+// the canvas's right button belongs to the UI (the network map turns on a right drag): no browser menu over it
+renderer.domElement.addEventListener('contextmenu', e => { e.preventDefault() })
 
 const hostScene = new Scene()
 hostScene.background = new Color(0xd9d4d2)   // only seen past the wall's edges when orbiting far
@@ -174,16 +176,14 @@ async function start(): Promise<UIRoot> {
 }
 
 /**
- * The spatial scene's backdrop: a curved wall about the arc's centre (0, 0, ARC.radius), ARC.radius + 4 out, 11 tall
- * like the plane (a focus pose sees no more than |y| ≈ 4.1), spanning the Blocks' arc angles (read off their rest
- * poses, the twin's explicit one included: it stands on the arc too, so it follows a retuned arc) plus 34° on each
- * side: a focus pose stands about 3.6 units from the centre (the WMS Blocks are 900 pt tall) and sees up to 27° past
- * its Block's angle at 16:9 and 32° at 21:9, the rig's ±2.5° parallax included. At the WMS arc (radius 10) that is
- * −34° to 95°: 129°, an arc of about 32 units (the plane is 16).
+ * The spatial scene's backdrop: a curved wall about the arc's centre (0, 0, ARC.radius), `WALL.out` past the arc,
+ * spanning the Blocks' arc angles (read off their rest poses, the network's and the twin's explicit ones included: they
+ * stand on the arc too, so they follow a retuned arc) plus `WALL.margin` on each side (spatial-arc.ts). At the WMS arc
+ * (radius 10, four Blocks) that is −34° to 134°: an arc of about 41 units (the plane is 16; createCurvedWall keeps its
+ * colour at the density of 32).
  */
 function spatialWall(blocks: readonly Surface[]): Mesh {
-  const angles = blocks.map(s => -s.restPose.rotation[1]), side = 34 * Math.PI / 180
-  return createCurvedWall({ center: [0, 0, ARC.radius], radius: ARC.radius + 4, from: Math.min(...angles) - side, to: Math.max(...angles) + side, height: 11 })
+  return createCurvedWall({ center: [0, 0, ARC.radius], radius: ARC.radius + WALL.out, ...wallSpan(blocks.map(s => -s.restPose.rotation[1])), height: WALL.height })
 }
 
 /** See `PlaygroundHandle.rectOf`: the node's Surface-pt rect (`absoluteRect`), its corners and centre projected (`screenFromPoint`). */

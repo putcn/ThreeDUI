@@ -28,7 +28,7 @@ const OUT = join(HERE, '../src/wms/geo/xuzhou.json')
 const USER_AGENT = 'glassui-playground/0.1'
 const DATAV = 'https://geo.datav.aliyun.com/areas_v3/bound/320300_full.json'
 const OVERPASS = 'https://overpass-api.de/api/interpreter'
-/** The city's bbox: west, south, east, north (degrees). */
+/** The query's bbox round the city: west, south, east, north (degrees). */
 const BBOX = [116.36, 33.72, 118.67, 34.97]
 const TOLERANCE_M = 25
 const LAKE_MIN_KM2 = 0.4
@@ -288,9 +288,15 @@ const datav = await cached('datav-320300', () => get(DATAV))
 const osmRoads = await cached('osm-roads', () => overpass(QUERIES.roads))
 const osmWater = await cached('osm-water', () => overpass(QUERIES.water))
 const city = districts(datav), keep = cityMask(city.flatMap(d => d.rings))
+// the extract's bbox: the districts' extent, rounded out to 0.01° (DataV's outline reaches a few hundred metres past the
+// query's box at three edges; the roads and rivers there end at the box)
+const ext = [Infinity, Infinity, -Infinity, -Infinity]
+for (const d of city) for (const r of d.rings) for (const [lon, lat] of r) {
+  ext[0] = Math.min(ext[0], lon); ext[1] = Math.min(ext[1], lat); ext[2] = Math.max(ext[2], lon); ext[3] = Math.max(ext[3], lat)
+}
 const out = {
   source: { districts: 'DataV GeoAtlas 320300_full', osm: `OpenStreetMap contributors via Overpass, ${today}` },
-  bbox: BBOX,
+  bbox: [Math.floor(ext[0] * 100) / 100, Math.floor(ext[1] * 100) / 100, Math.ceil(ext[2] * 100) / 100, Math.ceil(ext[3] * 100) / 100],
   districts: city.map(d => ({ ...d, center: d.center.map(round), rings: d.rings.map(flat) })),
   roads: roads(osmRoads, keep),
   ...water(osmWater, keep),

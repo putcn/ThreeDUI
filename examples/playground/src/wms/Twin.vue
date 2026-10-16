@@ -83,7 +83,7 @@ onBeforeUnmount(() => {
         </Box>
         <Text value="/ 仓储孪生" :size="14" color="tertiaryLabel" />
       </Stack>
-      <Text value="仓储孪生 · 上海一号仓" :size="24" :weight="700" />
+      <Text value="仓储孪生 · 徐州一号仓" :size="24" :weight="700" />
       <Text :value="`${RACKS.rows} 排 · ${bins.length} 个库位 · 利用率 ${percent}%`" :size="14" color="secondaryLabel" />
     </Stack>
     <Stack direction="horizontal" :gap="8">

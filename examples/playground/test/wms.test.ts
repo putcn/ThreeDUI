@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { Box3, Color, InstancedMesh, Matrix4, Mesh, Vector3, type BufferGeometry, type Object3D } from 'three'
 import { defaultTheme } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
-import { alerts, binLevel, bins, createWmsData, flow30d, kpis, mulberry32, orders, outboundToday, SEED, SHORT_PICK, utilisation, zones } from '../src/wms/data'
+import { alerts, binLevel, bins, CATEGORIES, createWmsData, flow30d, heat, kpis, mulberry32, network, orders, outboundToday, SEED, SHORT_PICK, stock, stockLevel, utilisation, zones } from '../src/wms/data'
 import { AGV_SPEED, createWarehouse, HOVER_LIFT, YAW_LIMIT } from '../src/wms/warehouse'
 
 const ctx = (o: Partial<Viewport3DContext> = {}): Viewport3DContext => ({ width: 1200, height: 680, reducedMotion: false, theme: defaultTheme, scheme: 'light', ...o })
@@ -25,7 +25,7 @@ describe('wms data', () => {
     expect(Math.abs(xs.reduce((s, x) => s + x, 0) / xs.length - 0.5)).toBeLessThan(0.1)
   })
   it('is deterministic: the exports are the fixed seed\'s data, made again the same; another seed differs', () => {
-    expect(createWmsData(SEED)).toEqual({ kpis, outboundToday, utilisation, flow30d, zones, bins, orders, alerts })
+    expect(createWmsData(SEED)).toEqual({ kpis, outboundToday, utilisation, flow30d, zones, bins, orders, alerts, heat, stock, network })
     expect(createWmsData(SEED)).toEqual(createWmsData(SEED))
     expect(createWmsData(SEED + 1).bins).not.toEqual(bins)
   })
@@ -59,6 +59,58 @@ describe('wms data', () => {
     expect([...orders.map(o => o.time)].sort().reverse()).toEqual(orders.map(o => o.time))
     const n = orders.map(o => Number(/^SO261015-(\d{4})$/.exec(o.no)![1]))
     expect(n[0]).toBe(outboundToday); expect([...n].sort((a, b) => b - a)).toEqual(n); expect(n.every(x => x >= 1900)).toBe(true)
+  })
+  it('the heat surface: the 14 whole days before today by hour, each day adding up to its outbound orders; working days peak at 10–11 h and 15–16 h, days off run lower', () => {
+    expect(heat.days).toEqual(['10-01', '10-02', '10-03', '10-04', '10-05', '10-06', '10-07', '10-08', '10-09', '10-10', '10-11', '10-12', '10-13', '10-14'])
+    expect(heat.hours).toEqual(Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0')))
+    heat.values.forEach((row, i) => {
+      expect(row).toHaveLength(24); expect(row.every(v => Number.isInteger(v) && v >= 0)).toBe(true)
+      expect(row.reduce((a, b) => a + b, 0)).toBe(flow30d.outbound[flow30d.labels.indexOf(heat.days[i]!)])
+    })
+    // a working day (10-13, a Tuesday): its two busiest hours are in the two peaks, round a lunch dip; nights are quiet
+    const tue = heat.values[12]!, top2 = [...tue.keys()].sort((a, b) => tue[b]! - tue[a]!).slice(0, 2).sort((a, b) => a - b)
+    expect([10, 11]).toContain(top2[0]); expect([15, 16]).toContain(top2[1])
+    expect(tue[12]!).toBeLessThan(Math.min(tue[10]!, tue[15]!) * 0.75); expect(tue[3]!).toBeLessThan(tue[10]! * 0.06)
+    // the weekend after the holiday (10-10, 10-11) runs below the working days round it
+    const total = (i: number): number => heat.values[i]!.reduce((a, b) => a + b, 0)
+    expect(Math.max(total(9), total(10))).toBeLessThan(Math.min(total(8), total(11)))
+  })
+  it('the stock matrix: zones A–F × the six categories, each zone mostly its twin row\'s goods; it adds up to 徐州一号仓\'s on-hand; days of cover by category', () => {
+    expect(stock.rows).toEqual(['A 区', 'B 区', 'C 区', 'D 区', 'E 区', 'F 区']); expect(stock.cols).toEqual([...CATEGORIES])
+    expect(stock.cols).toEqual(['食品', '饮料', '日化', '家居', '数码', '母婴'])
+    for (const m of [stock.values, stock.cover]) { expect(m).toHaveLength(6); expect(m.every(r => r.length === 6 && r.every(v => Number.isInteger(v) && v > 0))).toBe(true) }
+    // the twin's rows: A 食品 (FD), B 饮料 (BV), C 日化 (DC), D 家居 (HM), E 母婴 (MB), F 数码 (EL)
+    const main = [0, 1, 2, 3, 5, 4]
+    stock.values.forEach((row, z) => expect(row.indexOf(Math.max(...row))).toBe(main[z]))
+    const wh1 = network.locations.find(l => l.id === 'WH-1')!
+    expect(stock.values.flat().reduce((a, b) => a + b, 0)).toBe(wh1.onhand)
+    // electronics and homeware turn slowest, drinks fastest
+    const mean = (c: number): number => stock.cover.reduce((s, r) => s + r[c]!, 0) / 6
+    expect(mean(4)).toBeGreaterThan(mean(3)); expect(mean(3)).toBeGreaterThan(mean(2)); expect(mean(1)).toBeLessThan(mean(0))
+  })
+  it('the network: 4 warehouses, 24 stores, 2 suppliers; its lanes join places that exist, two overdue purchases among them; 徐州一号仓\'s SKUs are the KPI\'s', () => {
+    const of = (k: string) => network.locations.filter(l => l.kind === k)
+    expect(of('warehouse').map(l => l.name)).toEqual(['徐州一号仓', '徐州二号仓', '徐州三号仓', '贾汪中转仓'])
+    expect(of('warehouse').map(l => l.district)).toEqual(['鼓楼区', '云龙区', '铜山区', '贾汪区'])
+    expect(of('store')).toHaveLength(24); expect(of('supplier').map(l => l.district)).toEqual(['浙江', '上海'])
+    expect(new Set(network.locations.map(l => l.id)).size).toBe(network.locations.length)
+    expect(kpis[0]!.value).toBe(of('warehouse')[0]!.skus.toLocaleString('en-US'))
+    // the stores' stock levels: most enough, a few tight, a few out
+    const levels = of('store').map(l => stockLevel(l).key)
+    expect(levels.filter(k => k === 'ok').length).toBeGreaterThan(12); expect(levels.filter(k => k === 'tight').length).toBeGreaterThanOrEqual(3); expect(levels.filter(k => k === 'out').length).toBeGreaterThanOrEqual(2)
+    for (const l of network.locations) { expect(l.outOfStock).toBeLessThanOrEqual(l.skus); expect(l.onhand).toBeGreaterThan(0) }
+    const ids = new Set(network.locations.map(l => l.id))
+    for (const lane of network.lanes) {
+      expect(ids.has(lane.from) && ids.has(lane.to)).toBe(true)
+      expect(lane.kind).toBe(lane.from.startsWith('SP') ? 'purchase' : 'transfer')
+      expect(lane.from.startsWith('ST')).toBe(false)                              // stores only receive
+      expect(lane.time).toMatch(/^\d{2}:\d{2}$/)
+    }
+    const overdue = network.lanes.filter(l => l.status === 'overdue')
+    expect(overdue).toHaveLength(2); expect(overdue.every(l => l.kind === 'purchase')).toBe(true)
+    expect(network.lanes.filter(l => l.status === 'transit').length).toBeGreaterThan(15)
+    // the customer in today's orders is one of the chain's stores
+    expect(orders.some(o => network.locations.some(l => l.name.replace(' · ', '·') === o.customer))).toBe(true)
   })
   it('2–3 alerts: one names the order in 异常 (a 日化 customer\'s), short at a 日化 bin (zone C) holding what it says', () => {
     expect(alerts.length).toBeGreaterThanOrEqual(2); expect(alerts.length).toBeLessThanOrEqual(3)

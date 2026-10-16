@@ -6,7 +6,7 @@ import type { Viewport3DContext } from '@glassui/render'
 import { binLevel, RACKS, type Bin } from './data'
 
 /**
- * The warehouse twin's three.js model (spatial spec §4 step 3): a tabletop model of 上海一号仓's high-bay area, made to
+ * The warehouse twin's three.js model (spatial spec §4 step 3): a tabletop model of 徐州一号仓's high-bay area, made to
  * be attached with `<Viewport3D :object="warehouse.group" :update="…">`. Local units are pt (the Viewport3D's): the group's
  * origin is the box centre on the glass, x right, y up, z out of the plate.
  *
