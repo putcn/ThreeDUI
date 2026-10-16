@@ -5,7 +5,8 @@
  *
  * The figures agree with each other: the twin's bins are the six zones' racks (row A is zone A), so a zone's stock is
  * its bins' quantities summed and the utilisation KPI is the bins' mean occupancy; today's outbound KPI is the last
- * point of the 30-day flow; the order in 异常 is the one an alert names, at the bin it names.
+ * point of the 30-day flow, and the latest order is that day's last number; the order in 异常 (a daily-chemicals
+ * customer's) is the one an alert names, short at a daily-chemicals bin.
  */
 
 /** The seed of the exported data. */
@@ -41,12 +42,34 @@ export interface Alert { level: 'danger' | 'warning'; title: string; detail: str
 
 export interface WmsData {
   kpis: Kpi[]
+  /** Today's outbound orders (the 今日出库单 KPI). */
+  outboundToday: number
+  /** The bins' mean occupancy, 0–1 (the 库位利用率 KPI). */
+  utilisation: number
   flow30d: Flow
   zones: Zone[]
   bins: Bin[]
   orders: Order[]
   alerts: Alert[]
 }
+
+/** The bins' occupancy bands, lowest first: a bin is in the last band whose `min` its occupancy reaches. */
+export const BIN_LEVELS = [
+  { key: 'free', label: '空闲', color: '#7aa7ff', min: 0 },
+  { key: 'normal', label: '正常', color: '#a59bff', min: 0.3 },
+  { key: 'busy', label: '繁忙', color: '#ffb86b', min: 0.75 },
+  { key: 'full', label: '满载', color: '#ff7b7b', min: 0.95 },
+] as const
+export type BinLevel = (typeof BIN_LEVELS)[number]
+/** The band `occupancy` (0–1) falls in. */
+export function binLevel(occupancy: number): BinLevel {
+  let level: BinLevel = BIN_LEVELS[0]
+  for (const l of BIN_LEVELS) if (occupancy >= l.min) level = l
+  return level
+}
+
+/** The bin the 异常 order came up short at (a daily-chemicals bin, zone C), and what it holds. */
+export const SHORT_PICK = { bin: 'C-06-2', qty: 6, wanted: 8 } as const
 
 /** The warehouse's racks: rows A–F, 10 bays a row, 4 levels a bay. */
 export const RACKS = { rows: 6, bays: 10, levels: 4 } as const
@@ -124,9 +147,9 @@ function makeBins(rand: () => number): Bin[] {
       }
     }
   }
-  // the short pick the second alert reports: B-04-2 holds 6 pieces
-  const short = bins.find(b => b.id === 'B-04-2')!
-  short.qty = 6; short.occupancy = 6 / short.cap
+  // the short pick the second alert reports
+  const short = bins.find(b => b.id === SHORT_PICK.bin)!
+  short.qty = SHORT_PICK.qty; short.occupancy = SHORT_PICK.qty / short.cap
   return bins
 }
 
@@ -144,22 +167,25 @@ export function createWmsData(seed: number): WmsData {
     { label: '库位利用率', value: (utilisation * 100).toFixed(1), unit: '%', delta: -1.1 },
   ]
   const fullC = bins.filter(b => b.row === 2 && b.occupancy >= 0.95).length
+  // today's latest orders by their last update, numbered in the day's sequence: the newest is today's outbound count
+  const no = (n: number): string => `SO261015-${String(n).padStart(4, '0')}`
   const orders: Order[] = [
-    { no: 'SO261015-0418', customer: '禾谷生鲜', items: 36, status: '待拣货', time: '14:32' },
-    { no: 'SO261015-0417', customer: '星河超市·徐汇店', items: 124, status: '待拣货', time: '14:27' },
-    { no: 'SO261015-0415', customer: '青禾母婴', items: 18, status: '拣货中', time: '14:19' },
-    { no: 'SO261015-0412', customer: '优格家居旗舰店', items: 9, status: '拣货中', time: '14:05' },
-    { no: 'SO261015-0396', customer: '蓝鲸日化', items: 8, status: '异常', time: '13:58' },
-    { no: 'SO261015-0391', customer: '鹿野咖啡', items: 48, status: '已发货', time: '13:41' },
-    { no: 'SO261015-0388', customer: '北辰数码', items: 6, status: '已发货', time: '13:26' },
-    { no: 'SO261015-0380', customer: '木子文具', items: 72, status: '已发货', time: '13:12' },
+    { no: no(today), customer: '禾谷生鲜', items: 36, status: '待拣货', time: '14:32' },
+    { no: no(today - 2), customer: '星河超市·徐汇店', items: 124, status: '待拣货', time: '14:27' },
+    { no: no(today - 5), customer: '青禾母婴', items: 18, status: '拣货中', time: '14:19' },
+    { no: no(today - 9), customer: '优格家居旗舰店', items: 9, status: '拣货中', time: '14:05' },
+    { no: no(today - 13), customer: '蓝鲸日化', items: SHORT_PICK.wanted, status: '异常', time: '13:58' },
+    { no: no(today - 19), customer: '鹿野咖啡', items: 48, status: '已发货', time: '13:41' },
+    { no: no(today - 24), customer: '北辰数码', items: 6, status: '已发货', time: '13:26' },
+    { no: no(today - 30), customer: '木子文具', items: 72, status: '已发货', time: '13:12' },
   ]
+  const odd = orders.find(o => o.status === '异常')!
   const alerts: Alert[] = [
     { level: 'danger', title: `C 区 ${fullC} 个库位满载`, detail: '占用率已达 95% 以上，建议将慢动销 SKU 调拨至 F 区', time: '8 分钟前' },
-    { level: 'warning', title: '订单 SO261015-0396 拣货异常', detail: '库位 B-04-2 实际 6 件，少于应拣 8 件，已通知盘点', time: '21 分钟前' },
+    { level: 'warning', title: `订单 ${odd.no} 拣货异常`, detail: `库位 ${SHORT_PICK.bin} 实际 ${SHORT_PICK.qty} 件，少于应拣 ${SHORT_PICK.wanted} 件，已通知盘点`, time: '21 分钟前' },
     { level: 'warning', title: 'AGV-02 电量 18%', detail: '当前任务完成后自动返回充电位', time: '35 分钟前' },
   ]
-  return { kpis, flow30d, zones, bins, orders, alerts }
+  return { kpis, outboundToday: today, utilisation, flow30d, zones, bins, orders, alerts }
 }
 
-export const { kpis, flow30d, zones, bins, orders, alerts } = createWmsData(SEED)
+export const { kpis, outboundToday, utilisation, flow30d, zones, bins, orders, alerts } = createWmsData(SEED)

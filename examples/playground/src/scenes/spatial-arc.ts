@@ -26,13 +26,14 @@ export const BLOCKS = {
 export const TWIN: ArcSlot = arcSlots([BLOCKS.orders.width / PT, BLOCKS.overview.width / PT, BLOCKS.twin.width / PT], ARC.radius, ARC.gap)[2]!
 
 /**
- * The bin info panel: a glass Surface `width` × `height` pt, its centre at `offset` (world units) in the twin's own
- * frame: up and right of the twin's centre, and 1.37 units out, its back face 290 pt over the twin's content plane
- * (which is the Block slab's 45 pt over the Block's origin). It must clear the racks below it: they stand up to about
- * 250 pt out of the glass there, whatever the model's yaw (test/scene.test.ts checks it). It covers the twin's back
- * rows on screen, so its glass refracts them.
+ * The bin info panel: a glass Surface `width` × `height` pt at `ptPerUnit`, its centre at `offset` (world units) in the
+ * twin's own frame: right of and below the twin's centre, over the front-right racks, and 2.05 units out, its back
+ * face 500 pt (the twin's) in front of the twin's origin. It must clear the racks under it, which stand up to about
+ * 475 pt out there once the model turns (test/scene.test.ts checks every yaw), and stay clear of the twin's title row
+ * and legend as the camera sees it: being nearer the camera, it looks bigger and further from the centre than it is,
+ * so it is drawn at 360 pt a unit (not 244) to look about 300 × 170 pt there.
  */
-export const PANEL = { width: 300, height: 170, offset: [1.11, 0.82, 1.37] as [number, number, number] }
+export const PANEL = { width: 300, height: 170, ptPerUnit: 360, offset: [1.15, -0.74, 2.05] as [number, number, number] }
 
 /** `offset` in the frame of `pose` (a turn about y only, as the arc's), added to its position. */
 export function inFrameOf(pose: ArcSlot, offset: readonly [number, number, number]): ArcSlot {

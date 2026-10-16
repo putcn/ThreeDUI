@@ -35,11 +35,12 @@ const panel = inFrameOf(TWIN, PANEL.offset)
       <Twin @hover="b => (hovered = b)" @navigate="go" />
     </Block>
   </Space>
-  <!-- the bin info panel: glass in front of the twin, letting the pointer through to the bins behind it -->
+  <!-- the bin info panel: glass in front of the twin, letting the pointer through to the bins behind it and casting no
+       shadow on them (it floats 2 units out: its shadow would be a long grey slab across the twin) -->
   <Surface
     v-if="hovered && focus === 'twin'"
-    :width="PANEL.width" :height="PANEL.height" :position="panel.position" :rotation="panel.rotation"
-    background="glass" :radius="28" :interactive="false"
+    :width="PANEL.width" :height="PANEL.height" :pt-per-unit="PANEL.ptPerUnit" :position="panel.position" :rotation="panel.rotation"
+    background="glass" :radius="28" :interactive="false" :cast-shadows="false"
   >
     <BinPanel :bin="hovered" />
   </Surface>

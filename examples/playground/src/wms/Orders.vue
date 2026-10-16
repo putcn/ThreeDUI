@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The orders Block's content (spatial spec §4 step 4): today's eight latest orders with their status, and the alerts.
 import { Box, Card, Icon, Stack, Text } from '@glassui/vue'
-import { alerts, grouped, kpis, orders, type OrderStatus } from './data'
+import { alerts, grouped, orders, outboundToday, type OrderStatus } from './data'
 
 const emit = defineEmits<{ navigate: [name: string] }>()
 
@@ -15,7 +15,7 @@ const STATUS: Record<OrderStatus, { color: string; bg: string }> = {
 /** The list's columns: order no, customer (the rest), pieces, status, time. */
 const COL = { no: 150, items: 64, status: 92, time: 48 } as const
 const pending = orders.filter(o => o.status === '待拣货' || o.status === '拣货中').length
-const today = kpis[1]!.value
+const today = grouped(outboundToday)
 </script>
 
 <template>

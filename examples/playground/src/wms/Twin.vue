@@ -6,8 +6,8 @@ import { markRaw, onBeforeUnmount } from 'vue'
 import { Box, Icon, Stack, Text, useMotion, useSurfaceRef, Viewport3D } from '@glassui/vue'
 import type { UIEvent } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
-import { bins, kpis, RACKS, type Bin } from './data'
-import { BIN_LEVELS, binLevel, createWarehouse } from './warehouse'
+import { BIN_LEVELS, binLevel, bins, RACKS, utilisation, type Bin } from './data'
+import { createWarehouse } from './warehouse'
 
 const emit = defineEmits<{ hover: [bin: Bin | null]; navigate: [name: string] }>()
 
@@ -16,10 +16,10 @@ const emit = defineEmits<{ hover: [bin: Bin | null]; navigate: [name: string] }>
 const warehouse = markRaw(createWarehouse({ bins }))
 const frozen = useMotion() === 'frozen'
 const update = (dt: number, ctx: Viewport3DContext): boolean => warehouse.update(dt, frozen ? { ...ctx, reducedMotion: true } : ctx)
-const utilisation = Math.round(Number(kpis[3]!.value))
+const percent = Math.round(utilisation * 100)
 const counts = BIN_LEVELS.map(l => ({ ...l, count: bins.filter(b => binLevel(b.occupancy).key === l.key).length }))
 
-/** Radians of yaw per pt dragged across the box. */
+/** Radians of yaw per CSS px dragged across the canvas. */
 const TURN = 0.01
 /** ms the panel stays up after the pointer leaves a bin for a gap, a frame or the floor (so it does not blink between bins). */
 const GRACE = 160
@@ -40,25 +40,26 @@ const hover = (id: number | null, now = false): void => {
 /** The bin a pointer event is on: its instance of the bins' mesh, else null. */
 const binOf = (e: UIEvent): number | null => (e.object === warehouse.bins && e.instanceId !== undefined ? e.instanceId : null)
 
-// the drag: the box's press state is the tracker's (set by the down on it, cleared by the up wherever that lands); `x`
-// is the last move's localX, `object` and `instance` what it was over: a move onto another object (or instance) only
-// re-bases, since a 3D hit's x is its point taken straight onto the plate, which jumps between a near rack and the
-// floor behind it. A step turns at most 40 pt's worth
-let drag: { x: number; object: unknown; instance: number | undefined } | null = null
-const grab = (e: UIEvent) => ({ x: e.localX, object: e.object, instance: e.instanceId })
-const onPointerdown = (e: UIEvent): void => { drag = grab(e); hover(null, true) }
+// the drag: the box's press state is the tracker's (set by the down on it, cleared by the up wherever that lands);
+// `x` is the pointer's last place on the canvas (`screenX`, CSS px), which moves only with the pointer, whatever lies
+// under it (a 3D hit's localX is its point taken onto the plate: it jumps between a near rack and the floor behind)
+let drag: { x: number } | null = null
+const onPointerdown = (e: UIEvent): void => { drag = e.screenX === undefined ? null : { x: e.screenX }; hover(null, true) }
 const onPointerup = (): void => { drag = null }
 const onPointermove = (e: UIEvent): void => {
   if (e.currentTarget.state.pressed) {
-    if (drag && drag.object === e.object && drag.instance === e.instanceId) warehouse.rotateBy(Math.max(-40, Math.min(40, e.localX - drag.x)) * TURN)
-    drag = grab(e)
+    if (e.screenX === undefined) return
+    if (drag) warehouse.rotateBy((e.screenX - drag.x) * TURN)
+    drag = { x: e.screenX }
     return
   }
   drag = null
   if (e.pointerType === 'touch') return   // no hover by touch: a tap shows the bin (click)
   hover(binOf(e))
 }
-const onClick = (e: UIEvent): void => { const id = binOf(e); if (id !== null) hover(id) }
+// a tap shows the bin a finger has no hover for; a mouse or pen hovers instead (and the click that ends a drag must
+// not pin the panel)
+const onClick = (e: UIEvent): void => { if (e.pointerType !== 'touch') return; const id = binOf(e); if (id !== null) hover(id) }
 const onPointerleave = (): void => { drag = null; hover(null, true) }
 
 // the model's geometries and materials are ours: freed with the Block's Surface (in a leaving Block it flies out
@@ -83,7 +84,7 @@ onBeforeUnmount(() => {
         <Text value="/ 仓储孪生" :size="14" color="tertiaryLabel" />
       </Stack>
       <Text value="仓储孪生 · 上海一号仓" :size="24" :weight="700" />
-      <Text :value="`${RACKS.rows} 排 · ${bins.length} 个库位 · 利用率 ${utilisation}%`" :size="14" color="secondaryLabel" />
+      <Text :value="`${RACKS.rows} 排 · ${bins.length} 个库位 · 利用率 ${percent}%`" :size="14" color="secondaryLabel" />
     </Stack>
     <Stack direction="horizontal" :gap="8">
       <Stack

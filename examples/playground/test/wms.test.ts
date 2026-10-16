@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { Box3, Color, InstancedMesh, Matrix4, Mesh, Vector3, type BufferGeometry, type Object3D } from 'three'
 import { defaultTheme } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
-import { alerts, bins, createWmsData, flow30d, kpis, mulberry32, orders, SEED, zones } from '../src/wms/data'
-import { AGV_SPEED, binLevel, createWarehouse, HOVER_LIFT, YAW_LIMIT } from '../src/wms/warehouse'
+import { alerts, binLevel, bins, createWmsData, flow30d, kpis, mulberry32, orders, outboundToday, SEED, SHORT_PICK, utilisation, zones } from '../src/wms/data'
+import { AGV_SPEED, createWarehouse, HOVER_LIFT, YAW_LIMIT } from '../src/wms/warehouse'
 
 const ctx = (o: Partial<Viewport3DContext> = {}): Viewport3DContext => ({ width: 1200, height: 680, reducedMotion: false, theme: defaultTheme, scheme: 'light', ...o })
 const named = (root: Object3D, name: string): Object3D => { const o = root.getObjectByName(name); if (!o) throw new Error(`no ${name}`); return o }
@@ -25,7 +25,7 @@ describe('wms data', () => {
     expect(Math.abs(xs.reduce((s, x) => s + x, 0) / xs.length - 0.5)).toBeLessThan(0.1)
   })
   it('is deterministic: the exports are the fixed seed\'s data, made again the same; another seed differs', () => {
-    expect(createWmsData(SEED)).toEqual({ kpis, flow30d, zones, bins, orders, alerts })
+    expect(createWmsData(SEED)).toEqual({ kpis, outboundToday, utilisation, flow30d, zones, bins, orders, alerts })
     expect(createWmsData(SEED)).toEqual(createWmsData(SEED))
     expect(createWmsData(SEED + 1).bins).not.toEqual(bins)
   })
@@ -33,7 +33,7 @@ describe('wms data', () => {
     expect(flow30d.labels).toHaveLength(30); expect(flow30d.labels[0]).toBe('09-16'); expect(flow30d.labels.at(-1)).toBe('10-15')
     for (const s of [flow30d.inbound, flow30d.outbound]) { expect(s).toHaveLength(30); expect(s.every(v => Number.isInteger(v) && v >= 100 && v < 5000)).toBe(true) }
     expect(kpis.map(k => k.label)).toEqual(['库存 SKU', '今日出库单', '准时发货率', '库位利用率'])
-    expect(kpis[1]).toEqual({ label: '今日出库单', value: '1,932', unit: '单', delta: 8.4 })
+    expect(kpis[1]).toEqual({ label: '今日出库单', value: '1,932', unit: '单', delta: 8.4 }); expect(outboundToday).toBe(flow30d.outbound.at(-1))
     expect('unit' in kpis[0]!).toBe(false)                                       // absent, not undefined
   })
   it('240 bins with unique ids, row A–F × bay 01–10 × level 1–4, occupancy = qty / cap', () => {
@@ -51,16 +51,22 @@ describe('wms data', () => {
     zones.forEach((z, row) => expect(z.value).toBe(bins.filter(b => b.row === row).reduce((s, b) => s + b.qty, 0)))
     expect(zones.every(z => z.value >= 1000 && z.value < 5000)).toBe(true)
     const mean = bins.reduce((s, b) => s + b.occupancy, 0) / bins.length
-    expect(kpis[3]!.value).toBe((mean * 100).toFixed(1))
+    expect(utilisation).toBe(mean); expect(kpis[3]!.value).toBe((mean * 100).toFixed(1))
   })
-  it('8 orders, newest first, every status shown; 2–3 alerts, one naming the order in 异常 and its bin', () => {
+  it('8 orders, newest first and numbered in the day (the newest is today\'s outbound count), every status shown', () => {
     expect(orders).toHaveLength(8)
     expect(new Set(orders.map(o => o.status))).toEqual(new Set(['待拣货', '拣货中', '已发货', '异常']))
     expect([...orders.map(o => o.time)].sort().reverse()).toEqual(orders.map(o => o.time))
+    const n = orders.map(o => Number(/^SO261015-(\d{4})$/.exec(o.no)![1]))
+    expect(n[0]).toBe(outboundToday); expect([...n].sort((a, b) => b - a)).toEqual(n); expect(n.every(x => x >= 1900)).toBe(true)
+  })
+  it('2–3 alerts: one names the order in 异常 (a 日化 customer\'s), short at a 日化 bin (zone C) holding what it says', () => {
     expect(alerts.length).toBeGreaterThanOrEqual(2); expect(alerts.length).toBeLessThanOrEqual(3)
-    const odd = orders.find(o => o.status === '异常')!
-    expect(alerts.some(a => a.title.includes(odd.no))).toBe(true)
-    expect(bins.find(b => b.id === 'B-04-2')!.qty).toBe(6)
+    const odd = orders.find(o => o.status === '异常')!, alert = alerts.find(a => a.title.includes(odd.no))!
+    expect(odd.customer).toContain('日化'); expect(odd.items).toBe(SHORT_PICK.wanted)
+    const bin = bins.find(b => b.id === SHORT_PICK.bin)!
+    expect(bin.row).toBe(2); expect(bin.sku.startsWith('DC-')).toBe(true); expect(bin.qty).toBe(SHORT_PICK.qty)
+    expect(alert.detail).toContain(`库位 ${bin.id} 实际 ${bin.qty} 件`)
   })
 })
 

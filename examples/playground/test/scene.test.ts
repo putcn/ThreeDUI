@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { h, nextTick } from 'vue'
 import { InstancedMesh, Matrix4, Mesh, Vector3, type BufferGeometry, type Object3D } from 'three'
 import { absoluteRect, defaultTheme, type Node } from '@glassui/core'
+import { fitDistance } from '@glassui/render/internal'
 import { flush, type FakeRoot, type FakeSurface } from '../../../packages/vue/test/fixtures/fake-root'
 import { mountGlass } from '../../../packages/vue/test/fixtures/mount'
 import Spatial from '../src/scenes/Spatial.vue'
@@ -83,7 +84,8 @@ describe('the WMS scene', () => {
     s.twin.pointer.move(-999, -999, 'mouse', at); await nextTick(); await flush()
     const panel = s.root.surfacesMade[3]!
     expect(panel).toBeDefined()
-    expect(panel.created).toMatchObject({ layer: 'world', width: PANEL.width, height: PANEL.height, background: 'glass', interactive: false })
+    expect(panel.created).toMatchObject({ layer: 'world', width: PANEL.width, height: PANEL.height, ptPerUnit: PANEL.ptPerUnit, background: 'glass', interactive: false })
+    expect(panel.castShadows).toBe(false)                                          // no slab of shadow across the twin
     const pose = inFrameOf(TWIN, PANEL.offset)
     expect(panel.restPose.position.map(v => +v.toFixed(6))).toEqual(pose.position.map(v => +v.toFixed(6)))   // flown in to its place
     expect(panel.restPose.opacity).toBe(1)
@@ -119,23 +121,42 @@ describe('the WMS scene', () => {
     expect(s.root.surfacesMade).toHaveLength(3)
   })
 
-  it('dragging across the twin turns the model (0.01 rad a pt, ±0.8 at most) and hides the panel', async () => {
-    const s = await scene('twin'), { node, group, update } = model(s.twin), floor = { node, object: group.getObjectByName('floor') }
-    const yaw = group.getObjectByName('yaw')!, r = absoluteRect(node), y = r.y + r.height / 2
-    s.twin.pointer.move(r.x + 300, y, 'mouse', { node, object: model(s.twin).bins, instanceId: 5 }); await nextTick(); await flush()
+  it('dragging across the twin turns the model by the pointer\'s canvas px (0.01 rad a px, ±0.8 at most), whatever lies under it, and hides the panel', async () => {
+    const s = await scene('twin'), { node, group, update, bins: mesh } = model(s.twin), yaw = group.getObjectByName('yaw')!
+    // what the bridge hands over as the pointer crosses the model: a bin, a frame, the floor, empty glass — each with
+    // its own Surface point (a 3D hit's is taken onto the plate, so it jumps); only the canvas px are steady
+    const under = [{ node, object: mesh, instanceId: 5 }, { node, object: group.getObjectByName('frames'), instanceId: 40 }, { node, object: group.getObjectByName('floor') }, undefined]
+    const r = absoluteRect(node), at = (i: number) => [r.x + 300 + ((i * 37) % 90), r.y + 200 + ((i * 53) % 70)] as const
+    s.twin.pointer.move(...at(0), 'mouse', under[0], { x: 500, y: 400 }); await nextTick(); await flush()
     expect(s.root.surfacesMade).toHaveLength(4)
-    s.twin.pointer.down(r.x + 300, y, 'mouse', floor); await nextTick(); await flush()
+    s.twin.pointer.down(...at(0), 'mouse', under[0], { x: 500, y: 400 }); await nextTick(); await flush()
     expect(s.root.surfacesMade[3]!.disposed).toBe(true)
-    s.twin.pointer.move(r.x + 330, y, 'mouse', floor)
+    for (let i = 1; i <= 10; i++) s.twin.pointer.move(...at(i), 'mouse', under[i % under.length], { x: 500 + i * 6, y: 400 + i })   // 60 px in all
     update(1 / 60, ctx(node))
-    expect(yaw.rotation.y).toBeCloseTo(0.3, 9)
-    for (let x = 340; x <= 600; x += 20) s.twin.pointer.move(r.x + x, y, 'mouse', floor)
+    expect(yaw.rotation.y).toBeCloseTo(0.6, 9)
+    for (let i = 11; i <= 30; i++) s.twin.pointer.move(...at(i), 'mouse', under[i % under.length], { x: 500 + i * 6, y: 400 })
+    update(1 / 60, ctx(node))
+    expect(yaw.rotation.y).toBeCloseTo(YAW_LIMIT, 9)                              // 180 px: 1.8 rad, clamped
+    s.twin.pointer.up(...at(31), 'mouse', under[0], { x: 700, y: 400 })
+    // a mouse's click that ends a drag pins no panel; moving after the release hovers, and no longer turns
+    await nextTick(); await flush(); expect(s.root.surfacesMade).toHaveLength(4)
+    s.twin.pointer.move(...at(32), 'mouse', under[2], { x: 300, y: 400 })
     update(1 / 60, ctx(node))
     expect(yaw.rotation.y).toBeCloseTo(YAW_LIMIT, 9)
-    s.twin.pointer.up(r.x + 600, y, 'mouse', floor)
-    s.twin.pointer.move(r.x + 200, y, 'mouse', floor)                            // released: moving no longer turns it
-    update(1 / 60, ctx(node))
-    expect(yaw.rotation.y).toBeCloseTo(YAW_LIMIT, 9)
+    // a drag from x to x − 100 across bins and frames: exactly 1 rad (0.8 → −0.2)
+    s.twin.pointer.down(...at(0), 'mouse', under[1], { x: 300, y: 400 })
+    for (let i = 1; i <= 5; i++) s.twin.pointer.move(...at(i), 'mouse', under[i % 2], { x: 300 - i * 20, y: 400 })
+    update(1 / 60, ctx(node)); s.twin.pointer.up(...at(6), 'mouse', under[0], { x: 200, y: 400 })
+    expect(yaw.rotation.y).toBeCloseTo(YAW_LIMIT - 1, 9)
+  })
+
+  it('a mouse click on a bin shows nothing (a mouse hovers); a tap shows the bin', async () => {
+    const s = await scene('twin'), { node, bins: mesh } = model(s.twin), bin = { node, object: mesh, instanceId: 21 }
+    for (const type of ['mouse', 'touch'] as const) {
+      s.twin.pointer.down(-999, -999, type, bin); s.twin.pointer.up(-999, -999, type, bin); await nextTick(); await flush()
+      if (type === 'mouse') { expect(s.root.surfacesMade).toHaveLength(3); s.twin.pointer.move(5, 5, 'mouse'); await nextTick(); await flush() }
+    }
+    expect(s.root.surfacesMade).toHaveLength(4); expect(textOf(s.root.surfacesMade[3]!.root)).toContain(bins[21]!.id)
   })
 
   it('under frozen motion the twin holds still: the AGV parks (screenshots are repeatable)', async () => {
@@ -149,6 +170,25 @@ describe('the WMS scene', () => {
     expect(car.position.distanceTo(from)).toBeCloseTo(60, 6)
   })
 
+  it('as the camera sees it, the info panel stays off the twin\'s title row and legend, and its footer, at any aspect', async () => {
+    const s = await scene('twin'), content = s.twin.root.children.find(n => n.type === 'box')!.children[0]!.children.filter(n => n.type === 'box')
+    const header = absoluteRect(content[0]!), footer = absoluteRect(content.at(-1)!)
+    // the twin's frame (pt, centred, y up); the rig stands on its axis, `fitDistance` from its content plane
+    const top = BLOCKS.twin.height / 2 - (header.y + header.height), bottom = BLOCKS.twin.height / 2 - footer.y
+    const plane = 0.05 * Math.min(BLOCKS.twin.width, BLOCKS.twin.height), k = PT / PANEL.ptPerUnit
+    const [px, py, pz] = PANEL.offset.map(v => v * PT) as [number, number, number], face = pz + 0.05 * PANEL.height * k   // its own slab
+    for (const aspect of [21 / 9, 16 / 9, 16 / 10, 4 / 3]) {
+      const d = fitDistance(BLOCKS.twin.width / PT, BLOCKS.twin.height / PT, 38, aspect, 0.08) * PT, eye = plane + d
+      const grow = (eye - plane) / (eye - face), slip = (face - plane) * Math.tan(2.5 * Math.PI / 180)   // perspective; the parallax
+      const seen = { top: (py + PANEL.height * k / 2) * grow + slip, bottom: (py - PANEL.height * k / 2) * grow - slip, right: (px + PANEL.width * k / 2) * grow + slip }
+      expect(seen.top, `${aspect}`).toBeLessThan(top - 8)
+      expect(seen.bottom, `${aspect}`).toBeGreaterThan(bottom + 8)
+      expect(seen.right, `${aspect}`).toBeLessThan(BLOCKS.twin.width / 2 - 40)       // inside the Block's padding
+      // and it looks about its nominal size there (300 × 170 pt)
+      expect(PANEL.width * k * grow).toBeGreaterThan(260); expect(PANEL.width * k * grow).toBeLessThan(320)
+    }
+  })
+
   it('the info panel clears the model wherever it stands under it, at every yaw (its glass floats in front of the racks)', async () => {
     const s = await scene('twin'), { node, group, update } = model(s.twin)
     // the Viewport3D's box in the twin's own frame (pt, the centre the origin, y up); the model stands on the content
@@ -156,13 +196,16 @@ describe('the WMS scene', () => {
     const r = absoluteRect(node), cx = r.x + r.width / 2 - BLOCKS.twin.width / 2, cy = BLOCKS.twin.height / 2 - (r.y + r.height / 2)
     const plane = 0.05 * Math.min(BLOCKS.twin.width, BLOCKS.twin.height)
     const [px, py, pz] = PANEL.offset.map(v => v * PT) as [number, number, number], turn = group.getObjectByName('yaw')!
+    // its footprint in the twin's pt: its own pt are smaller (it has more of them to a unit)
+    const W = PANEL.width * PT / PANEL.ptPerUnit, H = PANEL.height * PT / PANEL.ptPerUnit
     let worst = -Infinity
     for (let yaw = -YAW_LIMIT; yaw <= YAW_LIMIT + 1e-9; yaw += 0.1) {
       dragBy(s.twin, node, yaw - turn.rotation.y)                                 // turned as the user turns it, then settled
       update(1 / 60, ctx(node)); group.updateMatrixWorld(true)
+      expect(turn.rotation.y).toBeCloseTo(yaw, 6)
       for (const p of points(group)) {
         const x = p.x + cx, y = p.y + cy, z = p.z + plane
-        if (Math.abs(x - px) <= PANEL.width / 2 && Math.abs(y - py) <= PANEL.height / 2) worst = Math.max(worst, z)
+        if (Math.abs(x - px) <= W / 2 && Math.abs(y - py) <= H / 2) worst = Math.max(worst, z)
       }
     }
     // the panel's back face is its position (its own slab sits in front of it); keep 20 pt of air
@@ -171,14 +214,14 @@ describe('the WMS scene', () => {
   })
 })
 
-/** Turns the twin's model by `rad` the way the user does: a drag across its box (0.01 rad a pt), on the floor. */
+/** Turns the twin's model by `rad` the way the user does: a drag across its box, 100 canvas px a radian, on the floor. */
 function dragBy(twin: FakeSurface, node: Node, rad: number): void {
   const group = twin.attached[0]!.object as Object3D, floor = { node, object: group.getObjectByName('floor') }
-  const r = absoluteRect(node), y = r.y + r.height / 2, x0 = r.x + r.width / 2
-  twin.pointer.down(x0, y, 'mouse', floor)
+  const r = absoluteRect(node), y = r.y + r.height / 2, x0 = r.x + r.width / 2, sx = 640, sy = 400
+  twin.pointer.down(x0, y, 'mouse', floor, { x: sx, y: sy })
   const steps = Math.ceil(Math.abs(rad) / 0.3) || 1
-  for (let i = 1; i <= steps; i++) twin.pointer.move(x0 + rad * 100 * i / steps, y, 'mouse', floor)
-  twin.pointer.up(x0 + rad * 100, y, 'mouse', floor)
+  for (let i = 1; i <= steps; i++) twin.pointer.move(x0, y, 'mouse', floor, { x: sx + rad * 100 * i / steps, y: sy })
+  twin.pointer.up(x0, y, 'mouse', floor, { x: sx + rad * 100, y: sy })
 }
 
 /** Every corner of the model's racks, bins and loads (their instances' boxes) and every vertex of its floor, in the group's frame. */

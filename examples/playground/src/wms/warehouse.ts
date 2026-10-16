@@ -3,7 +3,7 @@ import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
 import { GlassUIError } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
-import { RACKS, type Bin } from './data'
+import { binLevel, RACKS, type Bin } from './data'
 
 /**
  * The warehouse twin's three.js model (spatial spec §4 step 3): a tabletop model of 上海一号仓's high-bay area, made to
@@ -19,21 +19,6 @@ import { RACKS, type Bin } from './data'
  * beam), the bins (one `InstancedMesh` of rounded boxes, instance i = `bins[i]`), the staging loads (instanced), and
  * the AGV's body, its glowing top and its glow on the floor.
  */
-
-/** The bins' occupancy bands, lowest first: a bin is in the last band whose `min` its occupancy reaches. */
-export const BIN_LEVELS = [
-  { key: 'free', label: '空闲', color: '#7aa7ff', min: 0 },
-  { key: 'normal', label: '正常', color: '#a59bff', min: 0.3 },
-  { key: 'busy', label: '繁忙', color: '#ffb86b', min: 0.75 },
-  { key: 'full', label: '满载', color: '#ff7b7b', min: 0.95 },
-] as const
-export type BinLevel = (typeof BIN_LEVELS)[number]
-/** The band `occupancy` (0–1) falls in. */
-export function binLevel(occupancy: number): BinLevel {
-  let level: BinLevel = BIN_LEVELS[0]
-  for (const l of BIN_LEVELS) if (occupancy >= l.min) level = l
-  return level
-}
 
 /** Radians the floor leans back from the plate (0: lying on the glass, seen from straight above). */
 export const TILT = 0.55
