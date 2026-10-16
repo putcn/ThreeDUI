@@ -8,26 +8,30 @@ import { srgbToLinear } from '../color'
 
 /**
  * Per-instance vec4 attributes of a decoration: `iRect` (cx, cy, w, h; units), `iShape` (radius; units, strength, the
- * glass's cornerExponent, opacity), `iColor` (linear rgb, 1), then the matrix rows and the clip (transform.ts).
+ * glass's cornerExponent, opacity; a shadow: radius; units, elevation; pt, cornerExponent, strength × opacity),
+ * `iColor` (linear rgb, 1), then the matrix rows and the clip (transform.ts).
  */
 export const DECOR_ATTRS = ['iRect', 'iShape', 'iColor', 'iMat0', 'iMat1', 'iMat2', 'iClipRect', 'iClipInv', 'iClipT'] as const
 /** Pool inflation relative to the element height (the spike's +24 / +28 / 9 px at h = 84). */
 export const POOL_INFLATE_X = 0.29, POOL_INFLATE_Y = 0.33, POOL_DROP = 0.11
 
 const lifted = new Matrix4()
+const UNTILTED = { x: 0, y: 0 } as const
 
 /**
- * One kind of glass decoration (`rim` or `pool`) of one Surface as instances of a unit quad, sorted far→near by `z`.
- * Rims are lifted by `lift(d)` pt along the instance's own z axis, so they lie on the glass's top face (the slab's top
- * is `iMat · (x, y, thickness)`) however the glass is tilted or scaled. Pools lie on the Surface plane (elevation 0,
- * no lift) under an inflated, lowered rect. Decorations with no area (a zero-height rect would still rasterise its AA
- * margin, with q.y / size.y = 0/0 on its centre line) or no strength × opacity are skipped.
+ * One kind of glass decoration (`rim`, `pool` or `shadow`) of one Surface as instances of a unit quad, sorted far→near
+ * by `z`. Rims are lifted by `lift(d)` pt along the instance's own z axis, so they lie on the glass's top face (the
+ * slab's top is `iMat · (x, y, thickness)`) however the glass is tilted or scaled. Pools lie on the Surface plane
+ * (elevation 0, no lift) under an inflated, lowered rect. Shadows lie on the plane too, under the caster's own rect and
+ * untilted (a hovering card's tilt does not move its shadow); their material grows the quad (`createShadowMaterial`).
+ * Decorations with no area (a zero-height rect would still rasterise its AA margin, with q.y / size.y = 0/0 on its
+ * centre line) or no strength × opacity are skipped.
  */
 export class DecorationBatch {
   readonly geometry = createQuadGeometry()
   readonly buffer = new InstanceBuffer(this.geometry, DECOR_ATTRS)
   private m = new Matrix4()
-  constructor(readonly kind: 'rim' | 'pool') {}
+  constructor(readonly kind: DecorationInstance['kind']) {}
 
   update(instances: readonly DecorationInstance[], s: SurfaceDims, lift: (d: DecorationInstance) => number = () => 0): void {
     const visible = (d: DecorationInstance) => d.rect.width > 0 && d.rect.height > 0 && d.strength * d.opacity > 0
@@ -42,9 +46,11 @@ export class DecorationBatch {
       }
       const [cx, cy] = surfaceToLocal(rect.x + rect.width / 2, rect.y + rect.height / 2, s)
       b.set(i, 'iRect', cx, cy, rect.width / ppu, rect.height / ppu)
-      b.set(i, 'iShape', d.radius / ppu, d.strength, d.cornerExponent, d.opacity)
+      if (this.kind === 'shadow') b.set(i, 'iShape', d.radius / ppu, d.elevation, d.cornerExponent, d.strength * d.opacity)
+      else b.set(i, 'iShape', d.radius / ppu, d.strength, d.cornerExponent, d.opacity)
       b.set(i, 'iColor', srgbToLinear(d.color[0]), srgbToLinear(d.color[1]), srgbToLinear(d.color[2]), 1)
-      const m = instanceMatrix({ ...d, rect, elevation: this.kind === 'pool' ? 0 : d.elevation }, s, this.m)
+      // pools and shadows lie on the plane; a shadow keeps its caster's untilted footprint
+      const m = instanceMatrix({ ...d, rect, elevation: this.kind === 'rim' ? d.elevation : 0, tilt: this.kind === 'shadow' ? UNTILTED : d.tilt }, s, this.m)
       if (this.kind === 'rim') m.multiply(lifted.makeTranslation(0, 0, lift(d) / ppu))
       writeMatrixRows(b, i, m)
       writeClip(b, i, d.clip)

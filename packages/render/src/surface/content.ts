@@ -51,7 +51,8 @@ function withAutoClear<T>(renderer: AutoClear, fn: () => T): T {
 /**
  * Spec §5.6 step 2: the Surface's non-glass content, drawn orthographically in Surface-local units into a mipmapped RT.
  * Premultiplied by construction: transparent clears are (0,0,0) at alpha 0, colour backgrounds clear at alpha 1; panels,
- * glyphs and images blend over it (alpha One/OneMinusSrcAlpha), pools add colour with "over" coverage; composite it premultiplied.
+ * shadows, glyphs and images blend over it (alpha One/OneMinusSrcAlpha), pools add colour with "over" coverage;
+ * composite it premultiplied.
  */
 export class ContentPass {
   readonly scene = new Scene()

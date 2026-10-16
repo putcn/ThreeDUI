@@ -21,8 +21,11 @@ const FLAT_ATTRS = ['iRect', 'iMat0', 'iMat1', 'iMat2', 'iClipRect', 'iClipInv',
 export const AA_MARGIN_PT = 2
 
 export interface FlatVertexOptions {
-  /** pt the rasterised quad extends beyond the rect on every side, in the instance's own frame (default 0). */
-  marginPt?: number
+  /**
+   * pt the rasterised quad extends beyond the rect on every side, in the instance's own frame (default 0): a number, or
+   * a per-instance float of the vertex stage (built from instance attributes, as the shadow's reach from its elevation).
+   */
+  marginPt?: number | Node<'float'>
 }
 
 /** What a flat instanced material builds on (`flatVertex`). */
@@ -65,7 +68,8 @@ export function flatVertex(g: InstancedBufferGeometry, su: SurfaceUniforms, { ma
   const iClipRect = A('iClipRect'), iClipInv = A('iClipInv'), iClipT = A('iClipT')
 
   const pos = attribute('position', 'vec3')
-  const extent = marginPt > 0 ? iRect.zw.add(float(2 * marginPt).div(su.ptPerUnit)) : iRect.zw   // the rasterised quad
+  const extent = typeof marginPt !== 'number' ? iRect.zw.add(marginPt.mul(2).div(su.ptPerUnit))   // the rasterised quad
+    : marginPt > 0 ? iRect.zw.add(float(2 * marginPt).div(su.ptPerUnit)) : iRect.zw
   const q = pos.xy.mul(extent)                                                     // quad-local units, centred
   const p4 = vec4(q, 0, 1)
   const local = vec3(dot(iMat0, p4), dot(iMat1, p4), dot(iMat2, p4))

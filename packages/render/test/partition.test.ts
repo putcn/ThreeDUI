@@ -22,6 +22,15 @@ describe('partition', () => {
     expect(p.foreground.images.map(x => x.node.id)).toEqual(['icon'])
     expect(p.content.pools).toHaveLength(1); expect(p.foreground.rims).toHaveLength(1)
     expect(liftFor(p, label)).toBe(9); expect(liftFor(p, icon)).toBe(9); expect(liftFor(p, title)).toBe(0); expect(liftFor(p, btn)).toBe(9)
+    expect(p.content.shadows).toEqual([])                                    // not raised: no shadow
+  })
+  it('puts a raised glass\'s shadow in the content layer, beside its pool', () => {
+    const s = createSurface({ id: 'p', width: 400, height: 300 })
+    const card = new Node('glass', 'card'); card.setStyle({ width: 200, height: 120 }); card.elevation = 24
+    s.root.appendChild(card); engine.compute(s.root, 400, 300, () => ({ width: 20, height: 20 }))
+    const p = partition(buildRenderList(s, theme, 'light'))
+    expect(p.content.shadows.map(d => [d.kind, d.node.id])).toEqual([['shadow', 'card']])
+    expect(p.content.pools.map(d => d.kind)).toEqual(['pool']); expect(p.foreground.rims.map(d => d.kind)).toEqual(['rim'])
   })
 
   // Hand-built lists: partition only reads `node`, `params.thickness` and `kind`, so the fixtures carry just those.

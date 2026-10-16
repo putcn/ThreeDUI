@@ -1,6 +1,6 @@
-import { CustomBlending, AddEquation, SrcAlphaFactor, OneFactor, OneMinusSrcAlphaFactor, type InstancedBufferGeometry } from 'three'
-import { MeshBasicNodeMaterial } from 'three/webgpu'
-import { float, abs, max, min, exp, smoothstep, fwidth, length } from 'three/tsl'
+import { CustomBlending, AddEquation, SrcAlphaFactor, OneFactor, OneMinusSrcAlphaFactor, type InstancedBufferGeometry, type Vector2 } from 'three'
+import { MeshBasicNodeMaterial, type Node, type UniformNode } from 'three/webgpu'
+import { float, abs, max, min, exp, smoothstep, fwidth, length, clamp, vec2, vec3, attribute } from 'three/tsl'
 import { flatVertex, AA_MARGIN_PT, type FlatVertex, type SurfaceUniforms } from '../flat'
 import { sdfNode } from '../panel/sdf'
 
@@ -84,5 +84,50 @@ export function createPoolMaterial(g: InstancedBufferGeometry, su: SurfaceUnifor
   const r01 = length(fv.q.div(fv.size.mul(0.5)))
   m.colorNode = color.rgb
   m.opacityNode = max(float(1).sub(r01), 0).mul(strength).mul(opacity)
+  return m
+}
+
+/**
+ * The drop shadow of raised glass (spatial spec §11.7): its alpha in the light and dark schemes; its blur, `blurBase +
+ * blurPerPt × elevation` pt either side of the offset outline; its offset along the light, at most `maxOffset ×
+ * elevation` pt per component.
+ */
+export const SHADOW_DECAL = { alphaLight: 0.22, alphaDark: 0.35, blurBase: 4, blurPerPt: 0.5, maxOffset: 1.5 } as const
+
+/**
+ * A raised glass element's soft drop shadow, drawn into the content RT (spatial spec §11.7), so it shows on the plate
+ * around the element and refracted through it. The caster's superellipse offset by `elevation × dir` pt (each component
+ * clamped to ±`maxOffset × elevation`) and blurred, coverage `1 − smoothstep(−blur, blur, d)`, times `1 − the caster's
+ * own coverage` (antialiased over ±0.75 px: no shadow under the caster, where it would only darken the caster's own
+ * content), times `alpha × opacity`; black, blended "over" (normal blending: the premultiplied RT darkens, and a
+ * transparent texel takes (0, α), which the content quad composites as black at α).
+ *
+ * `dir` is pt of offset per pt of elevation, y down (`Surface.setLightDirection`), and `alpha` the scheme's
+ * (`SHADOW_DECAL`): the Surface's, shared by all its shadows. The quad grows by `maxOffset × elevation + blur` pt on every
+ * side (`flatVertex`'s per-instance margin) so that the blur's outer edge is rasterised wherever the offset puts it;
+ * `q` and `size` stay the caster's.
+ *
+ * Packing (`DecorationBatch('shadow')`): `iShape` = (radius; units, elevation; pt, corner exponent, strength × opacity).
+ * Varyings: `flatVertex`'s three + `iShape` = 4.
+ */
+export function createShadowMaterial(g: InstancedBufferGeometry, su: SurfaceUniforms, dir: UniformNode<'vec2', Vector2>, alpha: UniformNode<'float', number>): MeshBasicNodeMaterial {
+  const { blurBase, blurPerPt, maxOffset } = SHADOW_DECAL
+  const blurPt = (e: Node<'float'>) => e.mul(blurPerPt).add(blurBase)
+  // vertex stage: the reach from the instance attribute itself (a varying is a fragment-stage value)
+  const e0 = attribute('iShape', 'vec4').y
+  const fv = flatVertex(g, su, { marginPt: e0.mul(maxOffset).add(blurPt(e0)) })
+  const shape = fv.pack('iShape')
+  const radius = shape.x, elevation = shape.y, n = shape.z, opacity = shape.w
+  const m = decal(fv)
+
+  const half = fv.size.mul(0.5), lim = elevation.mul(maxOffset)
+  const along = (c: Node<'float'>) => clamp(c.mul(elevation), lim.negate(), lim)          // pt, clamped per component
+  const offset = vec2(along(dir.x), along(dir.y).negate()).div(su.ptPerUnit)              // y down, pt → q's frame: y up, units
+  const blur = blurPt(elevation).div(su.ptPerUnit)   // ≥ blurBase pt: edge0 < edge1
+  const cover = float(1).sub(smoothstep(blur.negate(), blur, sdfNode(fv.q.sub(offset), half, radius, n)))
+  const d = sdfNode(fv.q, half, radius, n)
+  const aa = max(fwidth(d), 1e-6).mul(0.75)   // floored as the rim's: smoothstep needs edge0 < edge1
+  m.colorNode = vec3(0)
+  m.opacityNode = cover.mul(smoothstep(aa.negate(), aa, d)).mul(alpha).mul(opacity)   // smoothstep(−aa, aa, d) = 1 − inside
   return m
 }

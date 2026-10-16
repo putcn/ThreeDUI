@@ -1,5 +1,5 @@
 import { AddEquation, Box3, Color, CustomBlending, Euler, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Quaternion, Vector2, Vector3, type Camera, type Material, type Object3DEventMap, type Texture } from 'three'
-import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
+import { MeshBasicNodeMaterial, MeshStandardNodeMaterial, type UniformNode } from 'three/webgpu'
 import { float, screenUV, texture, uniform, uv, vec2 } from 'three/tsl'
 import {
   apply, buildRenderList, createSurface, effectiveStyle, EventDispatcher, FocusManager, GlassUIError, hitTest, PointerTracker, resolveColor,
@@ -12,7 +12,7 @@ import { FILL, fillTokens, SLAB_BEHIND, SLAB_FROST } from '../glass/frost'
 import { PanelBatch, cornerExponentFor } from '../panel/batch'
 import { createPanelMaterial } from '../panel/material'
 import { DecorationBatch } from '../decoration/batch'
-import { createPoolMaterial, createRimMaterial } from '../decoration/material'
+import { createPoolMaterial, createRimMaterial, createShadowMaterial, SHADOW_DECAL } from '../decoration/material'
 import { GlyphBatch } from '../text/batch'
 import { createGlyphMaterial } from '../text/material'
 import type { AtlasPages } from '../text/pages'
@@ -76,7 +76,15 @@ export interface SurfaceEventMap extends Object3DEventMap {
 export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 } as const
 export { SLAB_FROST } from '../glass/frost'
 /** `renderOrder` of each draw inside the content RT's scene. */
-export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as const
+export const CONTENT_ORDER = { panels: 0, shadows: 0.5, pools: 1, images: 1.5, glyphs: 2 } as const
+
+/**
+ * How far the drop shadows' light direction (pt of offset per pt of elevation) moves before the content RT redraws for
+ * it (`Surface.setLightDirection`): 0.5 pt at a 40 pt elevation (a hovering card), per component.
+ */
+const SHADOW_DIR_STEP = 0.5 / 40
+/** The drop shadows' alpha in `scheme` (`SHADOW_DECAL`). */
+const shadowAlpha = (scheme: ColorScheme): number => scheme === 'dark' ? SHADOW_DECAL.alphaDark : SHADOW_DECAL.alphaLight
 
 /**
  * What is behind a `'none'` Surface: no slab, so no frost of its own — no lift, and no level floor (its element glass
@@ -178,7 +186,9 @@ function createCaptureProbe(capture: ScreenCapture): Mesh<PlaneGeometry, MeshBas
  * only, refracting the screen) — or, on a `'none'` Surface while it has glass to see through, the capture probe in
  * their place (`createCaptureProbe`) — the content quad, the glass back (with `quality.backFaces`) and front refracting the
  * content RT, rims, then the images and glyphs riding on glass. The content RT's scene (`CONTENT_ORDER`), drawn
- * orthographically with the same Surface-local instance matrices: panels, pools, images, glyphs (one mesh per page).
+ * orthographically with the same Surface-local instance matrices: panels, the drop shadows of raised glass (spatial spec
+ * §11.7: `createShadowMaterial`, along the key light the root hands over each tick, `setLightDirection`), pools,
+ * images, glyphs (one mesh per page).
  * With `quality.blur === 'kawase'` the content RT also feeds a `KawasePyramid`, which the element glass samples by
  * roughness instead of the RT's mips; with clear + adaptive glass, a luma pass (`SurfaceLuma`) for its darkening.
  * `quality.glassMode` picks how all of this glass sees its backdrop (`GlassMode`): refracted, straight through, or not
@@ -220,6 +230,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   readonly panels = new PanelBatch()
   readonly rims = new DecorationBatch('rim')
   readonly pools = new DecorationBatch('pool')
+  /** The drop shadows of raised glass (spatial spec §11.7), in the content RT. */
+  readonly shadows = new DecorationBatch('shadow')
   readonly foregroundText: GlyphBatch
   readonly contentText: GlyphBatch
   readonly foregroundImages: ImageSet
@@ -253,6 +265,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private readonly su: Required<SurfaceUniforms>
   /** The content pass's: `su` without the opacity (the RT is faded once, on its quad). */
   private readonly suContent: SurfaceUniforms
+  /**
+   * The drop shadows' offset per pt of elevation (pt, y down), shared by all of them: straight in front (none) until
+   * the first `setLightDirection`; and their alpha, the scheme's.
+   */
+  private readonly shadowDir = uniform(new Vector2())
+  private readonly shadowAlpha: UniformNode<'float', number>
   private readonly motion: SurfaceMotion
   /** `opacity` and `culled`. */
   private fade = 1
@@ -319,6 +337,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.focus = new FocusManager(this.model.root, this.events)
     this.su = { size: uniform(new Vector2()), ptPerUnit: uniform(this.model.ptPerUnit), opacity: uniform(1) }
     this.suContent = { size: this.su.size, ptPerUnit: this.su.ptPerUnit }
+    this.shadowAlpha = uniform(shadowAlpha(ctx.scheme))
     this.motion = new SurfaceMotion(ctx.theme)
     this.quality = ctx.quality
     this.contentPass = new ContentPass({ type: this.quality.contentType })
@@ -356,11 +375,13 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
     const panelMesh = new Mesh(this.panels.geometry, this.own(createPanelMaterial(this.panels.geometry, this.suContent)))
     panelMesh.renderOrder = CONTENT_ORDER.panels; panelMesh.frustumCulled = false
+    const shadowMesh = new Mesh(this.shadows.geometry, this.own(createShadowMaterial(this.shadows.geometry, this.suContent, this.shadowDir, this.shadowAlpha)))
+    shadowMesh.renderOrder = CONTENT_ORDER.shadows; shadowMesh.frustumCulled = false
     const poolMesh = new Mesh(this.pools.geometry, this.own(createPoolMaterial(this.pools.geometry, this.suContent)))
     poolMesh.renderOrder = CONTENT_ORDER.pools; poolMesh.frustumCulled = false
     this.contentText = new GlyphBatch(ctx.text, ctx.pages)
     this.contentImages = new ImageSet(this.suContent)
-    this.contentPass.scene.add(panelMesh, poolMesh, this.contentImages.container)
+    this.contentPass.scene.add(panelMesh, shadowMesh, poolMesh, this.contentImages.container)
 
     this.applySize()
   }
@@ -504,9 +525,10 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /**
    * Re-reads the theme, the scheme and increased contrast from the shared context (the root changed them): the pointer
    * tracker's and the motion's theme (its spring presets), the 'fill' glass mode's colours, an opaque background's clear
-   * colour, the background slab (its optics come from `theme.glass`), the glass draws (rebuilt through `buildGlass`, so
-   * a 'none' Surface keeps its behind-capture and a glass one its screen capture), and every node marked for layout,
-   * paint and text (a text style's size and colour may come from the theme) with the content redrawn. A throw fails the
+   * colour, the drop shadows' alpha (`SHADOW_DECAL`, by scheme), the background slab (its optics come from
+   * `theme.glass`), the glass draws (rebuilt through `buildGlass`, so a 'none' Surface keeps its behind-capture and a
+   * glass one its screen capture), and every node marked for layout, paint and text (a text style's size and colour may
+   * come from the theme) with the content redrawn. A throw fails the
    * Surface instead of propagating; a failed or disposed Surface ignores it.
    */
   restyle(): void {
@@ -516,6 +538,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       this.pointer.theme = theme; this.motion.theme = theme
       const bg = this.model.background
       if (bg !== 'glass' && bg !== 'none') { toColor(resolveColor(bg, theme, scheme), this.contentClear.color); this.contentClear.alpha = 1 }
+      this.shadowAlpha.value = shadowAlpha(scheme)
       this.applySize()
       this.buildGlass(this.quality)
       this.root.walk(n => { n.markDirty('layout'); n.markDirty('paint'); n.markDirty('text') })
@@ -673,6 +696,22 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The pointer's position on this Surface (pt), or null when it is elsewhere: where a press glows (the bridge sets it). */
   setPointer(pt: [number, number] | null): void { this.pointerPt = pt }
 
+  /**
+   * The direction from this Surface toward the key light, in its own frame (x right, y up, z out of its face),
+   * normalised; the root hands it over every tick (spatial spec §11.7). The drop shadows then fall `(−x / z, y / z)` pt
+   * per pt of elevation (y down), z taken as at least 0.1 (a grazing light, or one from behind, stays bounded; the
+   * shader clamps the offset further). The new direction is taken when either component moved more than
+   * `SHADOW_DIR_STEP` from the one last taken, and then the content redraws while the Surface has shadows; a smaller
+   * move is ignored (a slow drift adds up until it passes the step), so a still light, or a camera parallaxing under an
+   * anchored one, redraws nothing.
+   */
+  setLightDirection(local: Vector3): void {
+    const z = Math.max(local.z, 0.1), x = -local.x / z, y = local.y / z, dir = this.shadowDir.value
+    if (Math.abs(x - dir.x) <= SHADOW_DIR_STEP && Math.abs(y - dir.y) <= SHADOW_DIR_STEP) return
+    dir.set(x, y)
+    if (this.shadows.buffer.count > 0) this.contentDirty = true
+  }
+
   /** The 3D objects attached to this Surface's nodes (`attach3D`), by node. */
   get viewports(): ReadonlyMap<Node, Viewport3DAttachment> { return this.attachments }
 
@@ -752,6 +791,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.nested = splitNested(list.glass)
     this.fillGlass()
     this.panels.update(p.content.panels, s)
+    this.shadows.update(p.content.shadows, s)
     this.pools.update(p.content.pools, s)
     this.fillRims(p)
     this.foregroundImages.update(p.foreground.images, s, i => liftFor(p, i.node), SURFACE_ORDER.images)
@@ -959,7 +999,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       this.ctx.anim.forget(this.root)
       this.ctx.layout.dispose(this.root)
       this.contentPass.dispose(); this.pyramid?.dispose(); this.luma.dispose(); this.stackPass?.dispose()
-      for (const b of [this.glass, this.innerGlass, this.panels, this.rims, this.pools, this.backgroundGlass]) b?.dispose()
+      for (const b of [this.glass, this.innerGlass, this.panels, this.rims, this.pools, this.shadows, this.backgroundGlass]) b?.dispose()
       this.foregroundText.dispose(); this.contentText.dispose(); this.foregroundImages.dispose(); this.contentImages.dispose()
       for (const gm of this.glassMaterials) gm.dispose()
       for (const m of this.materials) m.dispose()

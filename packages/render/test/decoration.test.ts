@@ -3,9 +3,10 @@ import { uniform } from 'three/tsl'
 import { Vector2, Vector3, NormalBlending, CustomBlending, AddEquation, SrcAlphaFactor, OneFactor, OneMinusSrcAlphaFactor } from 'three'
 import { Node, IDENTITY, scaleAbout, type ClipRect, type DecorationInstance } from '@glassui/core'
 import { DecorationBatch, DECOR_ATTRS } from '../src/decoration/batch'
-import { createRimMaterial, createPoolMaterial, rimProfile, RIM_OUTLINE_PT, RIM_OUTLINE_ALPHA } from '../src/decoration/material'
+import { createRimMaterial, createPoolMaterial, createShadowMaterial, rimProfile, RIM_OUTLINE_PT, RIM_OUTLINE_ALPHA, SHADOW_DECAL } from '../src/decoration/material'
 import { AA_MARGIN_PT, type SurfaceUniforms } from '../src/flat'
 import { instanceMatrix } from '../src/transform'
+import { superellipseSDF } from '../src/panel/sdf'
 import { srgbToLinear } from '../src/color'
 import { evalNode } from './fixtures/tsl-eval'
 import { buildShaders } from './fixtures/build-shaders'
@@ -19,6 +20,12 @@ const node = new Node('glass', 'g')
 const base = { node, rect: { x: 10, y: 10, width: 100, height: 40 }, radius: 20, cornerExponent: 2, elevation: 4, scale: 1, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity: 1 }
 const rim: DecorationInstance = { ...base, kind: 'rim', color: [1, 1, 1, 1], strength: 1, z: 1.5 }
 const pool: DecorationInstance = { ...base, kind: 'pool', color: [0.42, 0.39, 0.96, 1], strength: 0.5, z: 0.75 }
+const shadow: DecorationInstance = { ...base, kind: 'shadow', color: [0, 0, 0, 1], strength: 1, z: 0.7 }
+/** Each kind's material with throwaway shadow uniforms (light straight in front, the light scheme's alpha). */
+const MATERIALS = {
+  rim: createRimMaterial, pool: createPoolMaterial,
+  shadow: (g: Parameters<typeof createShadowMaterial>[0], u: SurfaceUniforms) => createShadowMaterial(g, u, uniform(new Vector2()), uniform(SHADOW_DECAL.alphaLight)),
+} as const
 /** Instance `i`'s packed attributes by name, as `evalNode` takes them. */
 const packed = (b: DecorationBatch, i = 0) => Object.fromEntries(DECOR_ATTRS.map(name => [name, b.buffer.get(i, name)]))
 const smooth = (lo: number, hi: number, x: number) => { const t = Math.min(1, Math.max(0, (x - lo) / (hi - lo))); return t * t * (3 - 2 * t) }
@@ -64,15 +71,26 @@ describe('DecorationBatch', () => {
     }
   })
   it('skips degenerate and invisible decorations (zero area, zero strength or opacity)', () => {
-    for (const kind of ['rim', 'pool'] as const) {
-      const d = kind === 'rim' ? rim : pool
+    for (const kind of ['rim', 'pool', 'shadow'] as const) {
+      const d = { rim, pool, shadow }[kind]
       const b = new DecorationBatch(kind)
       b.update([
         { ...d, rect: { ...d.rect, height: 0 } }, { ...d, rect: { ...d.rect, width: 0 } },
         { ...d, strength: 0 }, { ...d, opacity: 0 }, { ...d, strength: 0.7 },
       ], s)
-      expect(b.buffer.count).toBe(1); expect(b.buffer.get(0, 'iShape')[1]).toBe(Math.fround(0.7))
+      expect(b.buffer.count).toBe(1); expect(b.buffer.get(0, 'iShape')[kind === 'shadow' ? 3 : 1]).toBe(Math.fround(0.7))
     }
+  })
+  it('packs a shadow as its caster: the caster\'s own rect, its elevation (pt) where the others pack strength, on the plane and untilted', () => {
+    // the shadow lies on the Surface plane (it is content); its quad grows in the vertex stage by the elevation's reach
+    const inst: DecorationInstance = { ...shadow, elevation: 24, strength: 0.5, opacity: 0.8, cornerExponent: 4.5, tilt: { x: 0.06, y: -0.04 } }
+    const b = new DecorationBatch('shadow'); b.update([rim, pool, inst], s)
+    expect(b.buffer.count).toBe(1)
+    expect(b.buffer.get(0, 'iRect')).toEqual(f32([-1.4, 1.2, 1, 0.4]))                    // the caster's rect, not grown
+    expect(b.buffer.get(0, 'iShape')).toEqual(f32([0.2, 24, 4.5, 0.5 * 0.8]))            // strength folds into the opacity
+    expect(b.buffer.get(0, 'iMat2')[3]).toBe(0)
+    expect(b.buffer.get(0, 'iMat0')).toEqual(f32([1, 0, 0, -1.4])); expect(b.buffer.get(0, 'iMat1')).toEqual(f32([0, 1, 0, 1.2]))   // no tilt
+    for (const other of [new DecorationBatch('rim'), new DecorationBatch('pool')]) { other.update([inst], s); expect(other.buffer.count).toBe(0) }
   })
   it('inflates and lowers the pool rect', () => {
     const pools = new DecorationBatch('pool')
@@ -107,6 +125,10 @@ describe('DecorationBatch', () => {
     expect(p.blending).toBe(CustomBlending); expect(p.premultipliedAlpha).toBe(false)
     expect([p.blendEquation, p.blendSrc, p.blendDst]).toEqual([AddEquation, SrcAlphaFactor, OneFactor])
     expect([p.blendEquationAlpha, p.blendSrcAlpha, p.blendDstAlpha]).toEqual([AddEquation, OneFactor, OneMinusSrcAlphaFactor])
+    // the shadow: black "over" (the premultiplied RT darkens, a transparent texel takes (0, α)), an unlit decal
+    const sh = MATERIALS.shadow(b.geometry, su)
+    expect(sh.blending).toBe(NormalBlending); expect(sh.premultipliedAlpha).toBe(false)
+    expect([sh.transparent, sh.depthWrite, sh.toneMapped, sh.lights]).toEqual([true, false, false, false])
   })
 })
 
@@ -171,12 +193,87 @@ describe('pool material', () => {
   })
 })
 
+describe('shadow material', () => {
+  // the brief's caster: 100 × 60 pt, its centre at (200, 150) pt; 1 pt per pixel (0.01 units at 100 pt per unit)
+  const caster: DecorationInstance = { ...shadow, rect: { x: 150, y: 120, width: 100, height: 60 }, radius: 12, cornerExponent: 4.5, elevation: 24 }
+  const PX = 0.01, AA = 0.75   // units per pixel; the caster's own antialiasing, pt (0.75 px)
+  /**
+   * The fragment's [r, g, b, alpha] at (x, y) pt from the caster's centre (y down), for light direction `dir` (pt per pt
+   * of elevation, y down) and the scheme's `alpha`. q is pinned (y up, units), as the quad's interpolation gives it.
+   */
+  const frag = (inst: DecorationInstance, x: number, y: number, dir: [number, number] = [0, 0.6], alpha: number = SHADOW_DECAL.alphaLight) => {
+    const b = new DecorationBatch('shadow'); b.update([inst], s)
+    const m = createShadowMaterial(b.geometry, su(), uniform(new Vector2(...dir)), uniform(alpha))
+    const at = { ...packed(b), vFlatQ: [x / 100, -y / 100, inst.rect.width / 100, inst.rect.height / 100] }
+    return [...evalNode(m.colorNode, at, undefined, PX), ...evalNode(m.opacityNode, at, undefined, PX)]
+  }
+  const alphaAt = (inst: DecorationInstance, x: number, y: number, dir?: [number, number], alpha?: number) => frag(inst, x, y, dir, alpha)[3]!
+  /** CPU reference, pt: the offset caster blurred over ±blur, outside the caster's own antialiased shape. */
+  const reference = (inst: DecorationInstance, x: number, y: number, dir: [number, number], alpha: number) => {
+    const e = inst.elevation, lim = SHADOW_DECAL.maxOffset * e, clamp = (v: number) => Math.max(-lim, Math.min(lim, v))
+    const blur = SHADOW_DECAL.blurBase + SHADOW_DECAL.blurPerPt * e
+    const hw = inst.rect.width / 2, hh = inst.rect.height / 2
+    const cover = 1 - smooth(-blur, blur, superellipseSDF(x - clamp(dir[0] * e), y - clamp(dir[1] * e), hw, hh, inst.radius, inst.cornerExponent))
+    const inside = 1 - smooth(-AA, AA, superellipseSDF(x, y, hw, hh, inst.radius, inst.cornerExponent))
+    return { cover, alpha: cover * (1 - inside) * alpha * inst.opacity * inst.strength }
+  }
+
+  it('the brief\'s constants', () => {
+    expect(SHADOW_DECAL).toEqual({ alphaLight: 0.22, alphaDark: 0.35, blurBase: 4, blurPerPt: 0.5, maxOffset: 1.5 })
+  })
+  it('just below the caster\'s bottom edge (light from above): black at 0.22 × coverage, coverage over ½', () => {
+    const [r, g, b, a] = frag(caster, 0, 30 + 2)
+    const { cover } = reference(caster, 0, 30 + 2, [0, 0.6], 0.22)
+    expect([r, g, b]).toEqual([0, 0, 0])
+    expect(cover).toBeGreaterThan(0.5); expect(a).toBeCloseTo(0.22 * cover, 6)
+  })
+  it('nothing inside the caster, nothing far outside it', () => {
+    for (const [x, y] of [[0, 0], [0, 28], [-45, -25], [48, 0]] as const) expect(alphaAt(caster, x, y)).toBe(0)
+    for (const [x, y] of [[0, 130], [150, 0], [-150, 0], [0, -130], [150, 130]] as const) expect(alphaAt(caster, x, y)).toBe(0)   // 100 pt away
+  })
+  it('falls along the light: below more than above, away from a light on the left more than towards it', () => {
+    expect(alphaAt(caster, 0, 34)).toBeGreaterThan(alphaAt(caster, 0, -34))                  // dir.y > 0: down, y down
+    const side: [number, number] = [0.3, 0]                                                    // a light on the left: the shadow falls right
+    expect(alphaAt(caster, 54, 0, side)).toBeGreaterThan(alphaAt(caster, -54, 0, side))
+  })
+  it('matches its CPU reference: the offset clamped to 1.5 × elevation per component, the blur 4 + ½ pt per pt, alpha × opacity', () => {
+    const faint = { ...caster, opacity: 0.6 }
+    for (const dir of [[0, 0.6], [0.35, -0.2], [-6, 9]] as [number, number][]) {   // the last one grazing: clamped both ways
+      for (const [x, y] of [[0, 34], [0, 45], [0, 60], [56, 10], [-58, -12], [30, -36], [62, 40], [-80, 60], [0, 90]] as const) {
+        expect(alphaAt(faint, x, y, dir, 0.35)).toBeCloseTo(reference(faint, x, y, dir, 0.35).alpha, 6)
+      }
+    }
+    // the clamp shows: a grazing light reaches at most 36 pt (1.5 × 24) down, half covered there
+    expect(alphaAt(caster, 0, 30 + 36, [0, 9])).toBeCloseTo(0.22 * 0.5, 6)
+  })
+  it('doubling the elevation moves the shadow down: its weight and its half-alpha reach below the caster', () => {
+    // the coverage is a blurred, offset copy of the caster: below it, the alpha starts at its darkest on the caster's
+    // edge and falls with distance, so the shadow's position is read as its alpha-weighted centre and its half-alpha point
+    const profile = (e: number) => Array.from({ length: 200 }, (_, k) => { const t = 1 + k * 0.5; return { t, a: alphaAt({ ...caster, elevation: e }, 0, 30 + t) } })
+    const centre = (p: { t: number; a: number }[]) => p.reduce((s, q) => s + q.t * q.a, 0) / p.reduce((s, q) => s + q.a, 0)
+    const half = (p: { t: number; a: number }[]) => p.find(q => q.a < SHADOW_DECAL.alphaLight / 2)!.t
+    const low = profile(24), high = profile(48)
+    expect(centre(high)).toBeGreaterThan(centre(low) + 5)
+    expect(half(low)).toBeCloseTo(14.4, 0); expect(half(high)).toBeCloseTo(28.8, 0)   // 0.6 × elevation
+  })
+  it('grows its quad by 1.5 × elevation + the blur on every side, so the blur is never cut off', () => {
+    const b = new DecorationBatch('shadow'); b.update([caster], s)
+    const m = createShadowMaterial(b.geometry, su(), uniform(new Vector2()), uniform(0.22))
+    const reach = 1.5 * 24 + 4 + 0.5 * 24                                                      // 52 pt
+    const [cx, cy] = [200 / 100 - 2, 1.5 - 150 / 100]
+    for (const [x, y] of [[-0.5, -0.5], [0.5, 0.5]] as const) {
+      const got = evalNode(m.positionNode, { ...packed(b), position: [x, y, 0] })
+      close(got, [cx + x * (100 + 2 * reach) / 100, cy + y * (60 + 2 * reach) / 100, 0])
+    }
+  })
+})
+
 describe('decoration clipping', () => {
-  it('rims and pools mask by the instance clip', () => {
+  it('rims, pools and shadows mask by the instance clip', () => {
     const clip: ClipRect = { x: 0, y: 0, width: 60, height: 100, radius: 0, transform: IDENTITY }   // the rect's left half
-    for (const [inst, create] of [[rim, createRimMaterial], [pool, createPoolMaterial]] as const) {
+    for (const inst of [rim, pool, shadow]) {
       const b = new DecorationBatch(inst.kind); b.update([{ ...inst, clip }], s)
-      const m = create(b.geometry, su())
+      const m = MATERIALS[inst.kind](b.geometry, su())
       expect(evalNode(m.maskNode, { ...packed(b), position: [-0.3, 0, 0] })[0]).toBe(1)
       expect(evalNode(m.maskNode, { ...packed(b), position: [0.3, 0, 0] })[0]).toBe(0)
     }
@@ -184,20 +281,21 @@ describe('decoration clipping', () => {
 })
 
 describe('decoration material shaders (generated under Node)', () => {
-  for (const kind of ['rim', 'pool'] as const) {
+  for (const kind of ['rim', 'pool', 'shadow'] as const) {
     for (const forceWebGL of [false, true]) {
       it(`${kind}, ${forceWebGL ? 'GLSL' : 'WGSL'}: builds with packed varyings only and the clip discard`, () => {
         const warnings: string[] = []
         const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
         try {
-          const b = new DecorationBatch(kind); b.update([kind === 'rim' ? rim : pool], s)
-          const m = (kind === 'rim' ? createRimMaterial : createPoolMaterial)(b.geometry, su())
+          const b = new DecorationBatch(kind); b.update([{ rim, pool, shadow }[kind]], s)
+          const m = MATERIALS[kind](b.geometry, su())
           const out = buildShaders(m, b.geometry, forceWebGL)
-          // flatVertex's three and the shape + colour packs: the fragment reads no instance attribute, and unlit, no
-          // view position
-          expect([...out.varyings].sort()).toEqual(['vFlatClip', 'vFlatClipR', 'vFlatQ', 'v_iColor', 'v_iShape'])
+          // flatVertex's three and the shape + colour packs (a shadow is black: no colour): the fragment reads no
+          // instance attribute, and unlit, no view position
+          expect([...out.varyings].sort()).toEqual(kind === 'shadow' ? ['vFlatClip', 'vFlatClipR', 'vFlatQ', 'v_iShape'] : ['vFlatClip', 'vFlatClipR', 'vFlatQ', 'v_iColor', 'v_iShape'])
           expect(out.fragment).toContain('discard')   // the clip mask
-          if (kind === 'rim') { expect(out.fragment).toContain('fwidth'); expect(out.fragment).toContain('exp') }
+          if (kind !== 'pool') expect(out.fragment).toContain('fwidth')
+          if (kind === 'rim') expect(out.fragment).toContain('exp')
         } finally { spy.mockRestore() }
         expect(warnings).toEqual([])
       })

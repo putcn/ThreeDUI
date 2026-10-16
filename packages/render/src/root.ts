@@ -127,9 +127,11 @@ export interface UIRoot {
    * Surface motion, the camera rig, view culling, layout, animation, content passes, draw order and the shadow fit; `dt`
    * in seconds. Surface motion steps, then the camera rig (`createCameraRig`) moves the camera, and billboard world
    * Surfaces turn to face it, before any matrix is read; a world Surface out of view (`Surface.culled`) or faded out is
-   * neither drawn nor prepared, its content redrawn when it shows again. `prepare` is told whether the camera (its pose
-   * or projection), the Surface or its animation moved (the content RT's settle-to-shrink); a Surface's motion re-fits
-   * the shadows while it runs. Ends by resolving the `afterTick` promises. A no-op after `dispose`.
+   * neither drawn nor prepared, its content redrawn when it shows again. Each shown Surface is handed the key light's
+   * direction in its own frame (`Surface.setLightDirection`: its drop shadows) before it ticks. `prepare` is told
+   * whether the camera (its pose or projection), the Surface or its animation moved (the content RT's settle-to-shrink);
+   * a Surface's motion re-fits the shadows while it runs. Ends by resolving the `afterTick` promises. A no-op after
+   * `dispose`.
    */
   tick(dt: number): void
   /**
@@ -217,11 +219,13 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  * (`createCameraRig`); the screen layer follows the camera, the lights the rig's light pose (`CameraRig.lightPose`)
  * while it has one, else the camera;
  * billboard world Surfaces turn to face it; world Surfaces out of the view frustum are culled (`Surface.culled`); every
- * Surface ticks; glyphs evicted by a later Surface's are re-laid out; draw orders are assigned (screen Surfaces above
- * world ones, nearer above farther); the content passes of the shown Surfaces draw (a hidden one's wait for it to show
- * again); the key light's shadow camera is re-fitted to every shown Surface when the lights, a Surface's pose or its
- * glass changed, or a Surface's motion runs (the map redraws only then: a camera move alone redraws nothing unless the
- * lights follow it or it turns a billboard); `afterTick` waiters resolve.
+ * shown Surface is handed the direction toward the key light in its own frame, for its drop shadows
+ * (`Surface.setLightDirection`, spatial spec §11.7); every Surface ticks; glyphs evicted by a later Surface's are re-laid
+ * out; draw orders are assigned (screen Surfaces above world ones, nearer above farther); the content passes of the
+ * shown Surfaces draw (a hidden one's wait for it to show again); the key light's shadow camera is re-fitted to every
+ * shown Surface when the lights, a Surface's pose or its glass changed, or a Surface's motion runs (the map redraws
+ * only then: a camera move alone redraws nothing unless the lights follow it or it turns a billboard); `afterTick`
+ * waiters resolve.
  */
 export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const { renderer, scene, camera } = opts
@@ -393,7 +397,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   }
 
   const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3(), point = new Vector3(), view = new Vector3()
-  const qCam = new Quaternion(), qParent = new Quaternion()
+  const qCam = new Quaternion(), qParent = new Quaternion(), qSurface = new Quaternion(), keyPos = new Vector3(), toKey = new Vector3()
   const lastCamera = new Matrix4(), lastProjection = new Matrix4(), lastLight = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
   /** Each Surface's `matrixWorld` at its last `prepare` (whether it moved since: the content RT's settle count). */
   const lastSeen = new WeakMap<Surface, Matrix4>()
@@ -509,6 +513,13 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
         if (s.model.placement !== 'world') continue
         const culled = !frustum.intersectsBox(s.glassBounds.applyMatrix4(s.matrixWorld))
         if (culled !== s.culled) { s.culled = culled; changed = true }
+      }
+      // the drop shadows (spatial §11.7): every shown Surface gets the direction toward the key light in its own frame
+      // (a screen Surface's is the camera's); a hidden one gets it when it shows again, before its content redraws
+      lights.key.getWorldPosition(keyPos)
+      for (const s of surfaces) {
+        if (s.error || !s.layer.visible) continue
+        s.setLightDirection(toKey.subVectors(keyPos, s.getWorldPosition(v)).applyQuaternion(s.getWorldQuaternion(qSurface).invert()).normalize())
       }
       const epoch = text.atlas.epoch
       each(s => s.tick(dt))

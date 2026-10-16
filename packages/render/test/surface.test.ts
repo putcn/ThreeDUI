@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { Color, CustomBlending, DataTexture, FramebufferTexture, FrontSide, PerspectiveCamera, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector3, type Material, type RenderTarget } from 'three'
+import { Color, CustomBlending, DataTexture, FramebufferTexture, FrontSide, PerspectiveCamera, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector2, Vector3, type Material, type RenderTarget } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial, type MeshBasicNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme, resolveColor } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
@@ -17,6 +17,7 @@ import { LumaPass } from '../src/luma'
 import { QUALITY } from '../src/quality'
 import { toColor } from '../src/color'
 import { evalNode } from './fixtures/tsl-eval'
+import { SHADOW_DECAL } from '../src/decoration/material'
 
 let ctx: SurfaceContext
 beforeAll(async () => {
@@ -270,7 +271,7 @@ describe('Surface', () => {
     s.root.appendChild(image('photo', new Texture(), 300, 30)); btn.appendChild(image('icon', new Texture(), 8, 8, 32, 32))
     s.tick(1 / 60)
     expect(SURFACE_ORDER).toEqual({ slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 })
-    expect(CONTENT_ORDER).toEqual({ panels: 0, pools: 1, images: 1.5, glyphs: 2 })
+    expect(CONTENT_ORDER).toEqual({ panels: 0, shadows: 0.5, pools: 1, images: 1.5, glyphs: 2 })
     const fg = meshes(s)
     const quad = fg.filter(m => m.renderOrder === SURFACE_ORDER.content)
     expect(quad).toHaveLength(1); expect(quad[0]).toBe(s.contentMesh)
@@ -1408,4 +1409,93 @@ describe('content quad material shaders (generated under Node)', () => {
       expect(warnings).toEqual([])
     })
   }
+})
+
+describe('Surface: drop shadows of raised glass (spatial §11.7)', () => {
+  /** A glass Surface with a card of glass raised 24 pt (and a flat one), ticked once. */
+  function raised(c: SurfaceContext = ctx) {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, c)
+    const card = new Node('glass', 'card'); card.setStyle({ position: 'absolute', left: 40, top: 40, width: 200, height: 120, radius: 16 }); card.elevation = 24
+    const flat = new Node('glass', 'flat'); flat.setStyle({ position: 'absolute', left: 260, top: 40, width: 100, height: 40, radius: 'capsule' })
+    s.root.appendChild(card); s.root.appendChild(flat); s.tick(1 / 60)
+    return { s, card }
+  }
+  /** The shadows' shared uniforms (private: the content pass reads them). */
+  const shadowUniforms = (s: Surface) => s as unknown as { shadowDir: { value: Vector2 }; shadowAlpha: { value: number } }
+
+  it('a raised glass casts one shadow, drawn in the content pass between the panels and the pools, never on the plane', () => {
+    const { s, card } = raised()
+    expect(s.shadows.buffer.count).toBe(1)                                    // the card's; the flat glass casts none
+    const content = meshes(s.contentPass.scene).filter(m => m.geometry === s.shadows.geometry)
+    expect(content).toHaveLength(1); expect(content[0]!.renderOrder).toBe(CONTENT_ORDER.shadows)
+    expect(CONTENT_ORDER.panels).toBeLessThan(CONTENT_ORDER.shadows); expect(CONTENT_ORDER.shadows).toBeLessThan(CONTENT_ORDER.pools)
+    expect(content[0]!.frustumCulled).toBe(false)
+    expect(meshes(s).some(m => m.geometry === s.shadows.geometry)).toBe(false)
+    card.elevation = 0; s.tick(1 / 60)
+    expect(s.shadows.buffer.count).toBe(0)
+    expect(s.error).toBeNull()
+  })
+  it('the light starts straight in front; setLightDirection sets (−x / z, y / z), z at least 0.1', () => {
+    const { s } = raised(), dir = () => shadowUniforms(s).shadowDir.value
+    expect(dir().toArray()).toEqual([0, 0])
+    const l = new Vector3(-0.3, 0.6, 0.74).normalize()
+    s.setLightDirection(l)
+    expect(dir().x).toBeCloseTo(0.3 / 0.74, 12); expect(dir().y).toBeCloseTo(0.6 / 0.74, 12)
+    s.setLightDirection(new Vector3(0.6, 0.8, 0))                               // grazing: z clamped to 0.1
+    expect(dir().x).toBeCloseTo(-6, 12); expect(dir().y).toBeCloseTo(8, 12)
+    s.setLightDirection(new Vector3(0.6, 0, -0.8))                              // from behind: clamped as well
+    expect(dir().x).toBeCloseTo(-6, 12); expect(dir().y).toBe(0)
+  })
+  it('a light change past 0.5 pt at 40 pt of elevation redraws the content; a negligible one does not', () => {
+    const { s } = raised(), r = stubRenderer()
+    s.setLightDirection(new Vector3(-0.3, 0.6, 0.74).normalize()); s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(s.contentDirty).toBe(false)
+    const at = (dx: number, dy: number) => { const z = 0.74; return new Vector3(-(0.3 / z + dx) * z, (0.6 / z + dy) * z, z).normalize() }
+    s.setLightDirection(at(0.01, -0.01))                                        // under 0.5 / 40 in both components
+    expect(s.contentDirty).toBe(false)
+    s.setLightDirection(at(0, 0.02))                                             // y past it
+    expect(s.contentDirty).toBe(true)
+    s.prepare(r, { width: 400, height: 300 }, 1); expect(s.contentDirty).toBe(false)
+    s.setLightDirection(at(-0.02, 0.02))                                         // x past it (y as it was)
+    expect(s.contentDirty).toBe(true)
+  })
+  it('small steps add up: a slow drift redraws once it has moved past the step in all', () => {
+    const { s } = raised(), r = stubRenderer(), z = 0.8
+    s.setLightDirection(new Vector3(0, 0, 1)); s.prepare(r, { width: 400, height: 300 }, 1)
+    let redraws = 0
+    for (let k = 1; k <= 10; k++) {
+      s.setLightDirection(new Vector3(0, 0.004 * k * z, z).normalize())         // 0.004 a step: each one negligible
+      if (s.contentDirty) { redraws++; s.prepare(r, { width: 400, height: 300 }, 1) }
+    }
+    expect(redraws).toBe(2)                                                      // 0.04 in all, past 0.0125 at 0.016 and 0.032
+  })
+  it('a Surface casting no shadow does not redraw for the light', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, ctx)
+    const g = new Node('glass', 'g'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60 }); s.root.appendChild(g)
+    s.tick(1 / 60); s.prepare(stubRenderer(), { width: 400, height: 300 }, 1)
+    s.setLightDirection(new Vector3(-0.5, 0.5, 0.7).normalize())
+    expect(s.contentDirty).toBe(false)
+  })
+  it('the shadow alpha follows the scheme: 0.22 light, 0.35 dark after a restyle, and back', () => {
+    const c: SurfaceContext = { ...ctx }
+    const { s } = raised(c), alpha = () => shadowUniforms(s).shadowAlpha.value
+    expect(alpha()).toBe(SHADOW_DECAL.alphaLight)
+    c.scheme = 'dark'; s.restyle(); expect(alpha()).toBe(0.35)
+    c.scheme = 'light'; s.restyle(); expect(alpha()).toBe(0.22)
+    const dark = raised({ ...ctx, scheme: 'dark' }).s                            // a Surface made in the dark starts dark
+    expect(shadowUniforms(dark).shadowAlpha.value).toBe(SHADOW_DECAL.alphaDark)
+  })
+  it('the shadow material reads the Surface\'s light direction and alpha, and not its opacity', () => {
+    const { s } = raised(), u = shadowUniforms(s)
+    const mesh = meshes(s.contentPass.scene).find(m => m.geometry === s.shadows.geometry)!
+    const graph = materialGraph(mesh.material as Material)
+    expect(graph).toContain(u.shadowDir); expect(graph).toContain(u.shadowAlpha)
+    expect(graph).not.toContain((s as unknown as { su: { opacity: unknown } }).su.opacity)
+  })
+  it('the minimal tier (the fill glass mode) still draws the shadows: they are content, not glass optics', () => {
+    const { s } = raised({ ...ctx, quality: QUALITY.minimal })
+    expect(s.shadows.buffer.count).toBe(1)
+    s.setQuality(QUALITY.high); s.tick(1 / 60); expect(s.shadows.buffer.count).toBe(1)
+    s.setQuality(QUALITY.minimal); s.tick(1 / 60); expect(s.shadows.buffer.count).toBe(1)
+  })
 })

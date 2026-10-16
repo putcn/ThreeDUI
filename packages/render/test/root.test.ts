@@ -743,6 +743,33 @@ describe('the root API for the Vue layer', () => {
     expect(root.lights.group.position.distanceTo(rig.lightPose!.position)).toBeLessThan(1e-9)
     expect(root.lights.group.quaternion.angleTo(rig.lightPose!.quaternion)).toBeLessThan(1e-9)
   })
+  it('every tick hands each shown Surface the direction toward the key light in its own frame (spatial §11.7)', async () => {
+    const { root, camera } = await createRoot()
+    camera.rotation.set(0.1, -0.2, 0)
+    const world = root.createSurface({ layer: 'world', width: 244, height: 244 }); world.position.set(-0.4, 0.2, -3); world.rotation.y = 0.6
+    const hud = root.createSurface({ width: 200, height: 100, left: 40, top: 30 })
+    const gone = root.createSurface({ layer: 'world', width: 244, height: 244 }); gone.position.set(0, 0, 5)   // behind the camera: culled
+    /** What `s` was handed, copied at the call (the root may reuse its vector). */
+    const record = (s: Surface) => {
+      const got: Vector3[] = [], set = s.setLightDirection.bind(s)
+      vi.spyOn(s, 'setLightDirection').mockImplementation(d => { got.push(d.clone()); set(d) })
+      return got
+    }
+    const [w, h, g] = [record(world), record(hud), record(gone)]
+    root.tick(1 / 60)
+    const key = root.lights.key.getWorldPosition(new Vector3())
+    // the world Surface: from its centre toward the key, rotated into its frame (its rotation undone about y)
+    expect(w).toHaveLength(1)
+    const want = key.clone().sub(world.getWorldPosition(new Vector3())).applyAxisAngle(new Vector3(0, 1, 0), -0.6).normalize()
+    expect(w[0]!.distanceTo(want)).toBeLessThan(1e-9)
+    // the screen Surface: in the camera's frame
+    expect(h).toHaveLength(1)
+    const cam = camera.getWorldQuaternion(new Quaternion()).invert()
+    const ahead = key.clone().sub(hud.getWorldPosition(new Vector3())).applyQuaternion(cam).normalize()
+    expect(h[0]!.distanceTo(ahead)).toBeLessThan(1e-9)
+    expect(gone.culled).toBe(true); expect(g).toHaveLength(0)
+    expect(world.error).toBeNull(); expect(hud.error).toBeNull()
+  })
   it('a moving light refits the shadow map', async () => {
     const { root } = await createRoot()
     const rig = root.createCameraRig(), a = root.createSurface({ layer: 'world', width: 244, height: 244 }), b = root.createSurface({ layer: 'world', width: 244, height: 244 })

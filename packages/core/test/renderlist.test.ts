@@ -31,7 +31,7 @@ describe('buildRenderList', () => {
     expect(rl.glass).toHaveLength(1)
     expect(rl.glass[0]).toMatchObject({ rect: { x: 30, y: 30, width: 120, height: 40 }, radius: 20, elevation: 4, clip: { x: 20, y: 20, width: 200, height: 100, radius: theme.radius.lg } })
     expect(rl.glass[0]!.params.glow).toMatchObject({ strength: 1.1 }); expect(rl.glass[0]!.params.fillet).toBeCloseTo(40 * 0.06)
-    expect(rl.decorations.map(d => d.kind).sort()).toEqual(['pool', 'rim'])
+    expect(rl.decorations.map(d => d.kind).sort()).toEqual(['pool', 'rim', 'shadow'])   // raised 4 pt: it casts a shadow
     expect(rl.text[0]).toMatchObject({ text: '创建账号', align: 'center', elevation: 4 })
     expect(rl.text[0]!.z).toBeGreaterThan(rl.glass[0]!.z)
   })
@@ -167,7 +167,33 @@ describe('buildRenderList rules', () => {
     expect(rl.text[0]!.z).toBeLessThan(z('pool', 'b'))
     expect(z('pool', 'b')).toBeLessThan(glassZ('b'))
     expect(z('rim', 'b')).toBeLessThan(z('pool', 'c'))   // adjacent siblings: b's rim stays under c's pool
-    expect(rl.decorations.filter(d => d.node.id === 'b').map(d => d.elevation)).toEqual([2, 2])
+    expect(rl.text[0]!.z).toBeLessThan(z('shadow', 'b')); expect(z('shadow', 'b')).toBeLessThan(z('pool', 'b'))   // raised: its shadow under its pool
+    expect(rl.decorations.filter(d => d.node.id === 'b').map(d => d.elevation)).toEqual([2, 2, 2])
+  })
+
+  it('gives raised glass one black shadow just under its pool, with its shape, placement and elevation (spatial §11.7)', () => {
+    const btn = box('glass', 'btn', { left: 10, top: 10, width: 80, height: 32, radius: 'capsule' }); btn.elevation = 4
+    const card = box('glass', 'card', { left: 20, top: 20, width: 200, height: 120, radius: 16, overflow: 'hidden', opacity: 0.8, scale: 0.9 }, btn); card.elevation = 24
+    card.tilt = { x: 0.05, y: -0.03 }
+    const flat = box('glass', 'flat', { left: 240, top: 20, width: 100, height: 40 })
+    const rl = buildRenderList(layout(surface(card, flat)), theme, 'light')
+    const of = (kind: string, id: string) => rl.decorations.filter(d => d.kind === kind && d.node.id === id)
+    const glass = (id: string) => rl.glass.find(g => g.node.id === id)!
+    const g = glass('card'), shadows = of('shadow', 'card')
+    expect(shadows).toHaveLength(1)
+    expect(shadows[0]).toMatchObject({
+      rect: g.rect, radius: g.radius, cornerExponent: g.params.cornerExponent, transform: g.transform, tilt: g.tilt, opacity: g.opacity, scale: g.scale,
+      elevation: 24, color: [0, 0, 0, 1], strength: 1,
+    })
+    expect(shadows[0]).not.toHaveProperty('clip')                                     // no clipping ancestor
+    expect(shadows[0]!.z).toBeCloseTo(sortKey(g.z, 'pool') - 0.05, 12)
+    expect(shadows[0]!.z).toBeLessThan(of('pool', 'card')[0]!.z); expect(shadows[0]!.z).toBeGreaterThan(g.z - 0.5)
+    expect(of('shadow', 'flat')).toEqual([])                                          // not raised: no shadow
+    // glass nested in raised glass casts its own, at the composed elevation, clipped as the glass is
+    const b = glass('btn'), nested = of('shadow', 'btn')
+    expect(nested).toHaveLength(1)
+    expect(nested[0]).toMatchObject({ rect: b.rect, radius: b.radius, cornerExponent: 2, elevation: 28, clip: b.clip, opacity: b.opacity, transform: b.transform })
+    expect(nested[0]!.z).toBeCloseTo(sortKey(b.z, 'pool') - 0.05, 12)
   })
 
   it('clips to the intersection of overflow hidden/scroll ancestors and scroll nodes, decorations included', () => {
