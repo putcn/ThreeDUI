@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // The place panel's content (spatial spec §12.4): what a hovered place on the network map is and holds, and today's
 // runs into and out of it, on the glass panel that floats in front of the map (Spatial.vue's world <Surface>), on the
-// side of the map away from the place. Its veil and its fly-in are the bin panel's (BinPanel.vue).
-import { computed, onMounted } from 'vue'
-import { Box, Stack, Text, useMotion, useRoot, useScheme, useSurfaceRef } from '@glassui/vue'
-import { grouped, KINDS, network, stockLevel, type Lane, type Location } from './data'
-import { laneSummary, lanesOf } from './map'
+// side of the map away from the place, with the info panels' veil and entrance (panel.ts).
+import { computed } from 'vue'
+import { Box, Stack, Text } from '@glassui/vue'
+import { grouped, KINDS, laneSummary, lanesOf, network, stockLevel, type Lane, type Location } from './data'
+import { useInfoPanel } from './panel'
 
 const props = defineProps<{ place: Location }>()
 /** The chip: a store's stock level, else its kind, in its colour. */
@@ -28,21 +28,7 @@ const runs = computed(() => {
     { label: '出库', text: laneSummary(network, outbound, 'out'), late: late(outbound) },
   ]
 })
-/** The theme's fill at 62 % (#rrggbb + alpha; a fill written otherwise is used as it is). */
-const root = useRoot(), scheme = useScheme()
-const veil = computed(() => { const fill = root.theme.colors[scheme.value].fill ?? '#ffffff'; return /^#[0-9a-f]{6}$/i.test(fill) ? `${fill}9e` : fill })
-
-/** World units the panel starts behind its place, toward the map. */
-const FROM = 0.3
-const surface = useSurfaceRef(), frozen = useMotion() === 'frozen'
-onMounted(() => {
-  const s = surface.value
-  if (!s) return
-  const { x, y, z } = s.position, a = s.rotation.y
-  s.position.set(x - FROM * Math.sin(a), y, z - FROM * Math.cos(a))
-  s.opacity = 0; s.scale.setScalar(0.94)
-  void s.animateTo({ position: [x, y, z], scale: 1, opacity: 1 }, { spring: { response: 0.4, dampingFraction: 0.9 }, immediate: frozen })
-})
+const { veil } = useInfoPanel()
 </script>
 
 <template>

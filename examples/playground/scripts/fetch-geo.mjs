@@ -5,7 +5,8 @@
 //
 // (NODE_USE_ENV_PROXY: Node's fetch then honours HTTPS_PROXY, where the network is reached through one.)
 //
-// Sources (both public; the map's footer credits them: "© OpenStreetMap contributors · DataV"):
+// Sources (both public; the map's footer credits them: "© OpenStreetMap contributors · DataV"; the roads and water
+// are OSM data, so the extract is under the ODbL 1.0, which its `source.osm` names):
 //   - districts: DataV GeoAtlas, 320300_full (徐州市's districts and counties, GCJ-02 as DataV publishes them);
 //   - roads and water: OpenStreetMap via the Overpass API, for the city's bbox: highway motorway / trunk / primary /
 //     secondary and their _links; waterway=river, the Grand Canal (waterway=canal named …运河); natural=water lakes and
@@ -19,7 +20,7 @@
 //
 // The requests carry a generic User-Agent (Overpass refuses requests without one) and nothing that names a person.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -45,9 +46,18 @@ const QUERIES = {
 const args = process.argv.slice(2)
 const cacheDir = args[0] === '--cache' ? args[1] : undefined
 
+/** The day the OSM data was fetched (YYYY-MM-DD): today, or the cached response's date when it came from `--cache`. */
+let fetchedOn = new Date().toISOString().slice(0, 10)
+
 async function cached(name, fetcher) {
   const file = cacheDir && join(cacheDir, `${name}.json`)
-  if (file) { try { return JSON.parse(await readFile(file, 'utf8')) } catch { /* not cached yet */ } }
+  if (file) {
+    try {
+      const data = JSON.parse(await readFile(file, 'utf8'))
+      if (name.startsWith('osm')) fetchedOn = (await stat(file)).mtime.toISOString().slice(0, 10)
+      return data
+    } catch { /* not cached yet */ }
+  }
   const text = await fetcher()
   if (file) { await mkdir(cacheDir, { recursive: true }); await writeFile(file, text) }
   return JSON.parse(text)
@@ -282,7 +292,6 @@ function water(osm, keep) {
   return { rivers, lakes }
 }
 
-const today = new Date().toISOString().slice(0, 10)
 // one after another: Overpass gives each client a couple of slots at most
 const datav = await cached('datav-320300', () => get(DATAV))
 const osmRoads = await cached('osm-roads', () => overpass(QUERIES.roads))
@@ -295,7 +304,8 @@ for (const d of city) for (const r of d.rings) for (const [lon, lat] of r) {
   ext[0] = Math.min(ext[0], lon); ext[1] = Math.min(ext[1], lat); ext[2] = Math.max(ext[2], lon); ext[3] = Math.max(ext[3], lat)
 }
 const out = {
-  source: { districts: 'DataV GeoAtlas 320300_full', osm: `OpenStreetMap contributors via Overpass, ${today}` },
+  // the roads and water are OSM data: the extract stays under the ODbL, and says so
+  source: { districts: 'DataV GeoAtlas 320300_full', osm: `© OpenStreetMap contributors, ODbL 1.0 (https://opendatacommons.org/licenses/odbl/), via Overpass, ${fetchedOn}` },
   bbox: [Math.floor(ext[0] * 100) / 100, Math.floor(ext[1] * 100) / 100, Math.ceil(ext[2] * 100) / 100, Math.ceil(ext[3] * 100) / 100],
   districts: city.map(d => ({ ...d, center: d.center.map(round), rings: d.rings.map(flat) })),
   roads: roads(osmRoads, keep),

@@ -43,7 +43,7 @@ export interface Order { no: string; customer: string; items: number; status: Or
 export interface Alert { level: 'danger' | 'warning'; title: string; detail: string; time: string }
 
 /**
- * Orders per hour over the 14 whole days before `TODAY` (the overview's heat surface): `hours` '00'–'23', `days`
+ * Orders per hour over the 14 whole days before `TODAY` (the overview's heat surface): `hours` '0 时'–'23 时', `days`
  * 'MM-DD' oldest first, `values[day][hour]`; a day's hours add up to its outbound orders in the 30-day flow.
  */
 export interface Heat { hours: string[]; days: string[]; values: number[][] }
@@ -196,13 +196,19 @@ const HOURS = {
   rest: [1.1, 0.7, 0.5, 0.4, 0.3, 0.4, 0.7, 1.4, 2.8, 4.6, 6.0, 6.8, 6.2, 5.4, 5.8, 6.4, 6.8, 6.2, 5.0, 4.6, 4.2, 3.4, 2.4, 1.6],
 } as const
 
+/** Whether the day 'MM-DD' (of `TODAY`'s year) is a day off: a weekend, or the National Day holiday (10-01 to 10-07). */
+export function isDayOff(label: string): boolean {
+  const [m, d] = label.split('-').map(Number) as [number, number], wd = new Date(Date.UTC(TODAY.year, m - 1, d)).getUTCDay()
+  return wd === 0 || wd === 6 || (m === 10 && d <= 7)
+}
+
 /** The 14 whole days before `TODAY`, by hour: each day's flow total spread over the hours (±6 % noise), summing to it. */
 function makeHeat(rand: () => number, flow: Flow): Heat {
-  const end = Date.UTC(TODAY.year, TODAY.month - 1, TODAY.day), heat: Heat = { hours: HOURS.work.map((_, h) => pad(h)), days: [], values: [] }
+  const end = Date.UTC(TODAY.year, TODAY.month - 1, TODAY.day), heat: Heat = { hours: HOURS.work.map((_, h) => `${h} 时`), days: [], values: [] }
   for (let i = 14; i >= 1; i--) {
-    const date = new Date(end - i * DAY_MS), m = date.getUTCMonth() + 1, d = date.getUTCDate(), wd = date.getUTCDay()
+    const date = new Date(end - i * DAY_MS), m = date.getUTCMonth() + 1, d = date.getUTCDate()
     const label = `${pad(m)}-${pad(d)}`, total = flow.outbound[flow.labels.indexOf(label)]!
-    const shape = wd === 0 || wd === 6 || (m === 10 && d <= 7) ? HOURS.rest : HOURS.work
+    const shape = isDayOff(label) ? HOURS.rest : HOURS.work
     const w = shape.map(x => x * (0.94 + rand() * 0.12)), sum = w.reduce((a, b) => a + b, 0)
     const row = w.map(x => Math.round(total * x / sum))
     // the rounding's remainder goes to the busiest hour, so the day adds up exactly
@@ -361,3 +367,16 @@ export function createWmsData(seed: number): WmsData {
 }
 
 export const { kpis, outboundToday, utilisation, flow30d, zones, bins, orders, alerts, heat, stock, network } = createWmsData(SEED)
+
+/** The lanes into and out of `id`, and their pieces: what the place panel lists. */
+export function lanesOf(net: Network, id: string): { inbound: Lane[]; outbound: Lane[] } {
+  return { inbound: net.lanes.filter(l => l.to === id), outbound: net.lanes.filter(l => l.from === id) }
+}
+/** "→ 3 家门店 · 12,430 件"-style summary of `lanes` (to or from one place), by what is at their other ends. */
+export function laneSummary(net: Network, lanes: readonly Lane[], dir: 'in' | 'out'): string {
+  if (!lanes.length) return '—'
+  const ends = lanes.map(l => net.locations.find(x => x.id === (dir === 'out' ? l.to : l.from))!)
+  const count = (k: LocationKind, unit: string): string | null => { const n = ends.filter(e => e.kind === k).length; return n ? `${n} ${unit}${KINDS[k].label}` : null }
+  const what = [count('store', '家'), count('warehouse', '个'), count('supplier', '家')].filter(Boolean).join('、')
+  return `${dir === 'out' ? '→' : '←'} ${what} · ${grouped(lanes.reduce((s, l) => s + l.qty, 0))} 件`
+}

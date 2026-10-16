@@ -4,7 +4,7 @@
 // double peak, the weekend and holiday lull) and 徐州一号仓's stock by zone × category as a bar matrix whose colour is a
 // fourth value, the days of cover. The tabs in the top bar focus the other Blocks.
 import { BarMatrix3D, Box, Card, Icon, Stack, SurfaceChart3D, Text } from '@glassui/vue'
-import { grouped, heat, kpis, stock, TODAY } from './data'
+import { grouped, heat, isDayOff, kpis, stock, TODAY } from './data'
 
 const emit = defineEmits<{ navigate: [name: string] }>()
 
@@ -26,14 +26,10 @@ const peak = (() => {
   return best
 })()
 const totals = heat.values.map(r => r.reduce((a, b) => a + b, 0))
-const isOff = (label: string): boolean => {
-  const [m, d] = label.split('-').map(Number) as [number, number], wd = new Date(Date.UTC(TODAY.year, m - 1, d)).getUTCDay()
-  return wd === 0 || wd === 6 || (m === 10 && d <= 7)
-}
 const mean = (xs: number[]): number => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length)
-const work = mean(totals.filter((_, i) => !isOff(heat.days[i]!))), off = mean(totals.filter((_, i) => isOff(heat.days[i]!)))
+const work = mean(totals.filter((_, i) => !isDayOff(heat.days[i]!))), off = mean(totals.filter((_, i) => isDayOff(heat.days[i]!)))
 const heatSummary = [
-  { label: '峰值', value: `${grouped(peak.value)} 单/时`, note: `${heat.days[peak.day]} ${heat.hours[peak.hour]}:00` },
+  { label: '峰值', value: `${grouped(peak.value)} 单/时`, note: `${heat.days[peak.day]} ${heat.hours[peak.hour]}` },
   { label: '工作日日均', value: `${grouped(work)} 单`, note: '' },
   { label: '休息日日均', value: `${grouped(off)} 单`, note: `${Math.round((off / work - 1) * 100)}%` },
 ]

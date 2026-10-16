@@ -6,9 +6,9 @@ import { fitDistance } from '@glassui/render/internal'
 import { flush, type FakeRoot, type FakeSurface } from '../../../packages/vue/test/fixtures/fake-root'
 import { mountGlass } from '../../../packages/vue/test/fixtures/mount'
 import Spatial from '../src/scenes/Spatial.vue'
-import { bins, heat, kpis, network, orders, stock } from '../src/wms/data'
+import { bins, heat, kpis, laneSummary, lanesOf, network, orders, stock } from '../src/wms/data'
 import { YAW_LIMIT } from '../src/wms/warehouse'
-import { laneSummary, lanesOf, LIMITS } from '../src/wms/map'
+import { LIMITS } from '../src/wms/map'
 import { arcPastel, createCurvedWall, MAX_U_LENGTH } from '../src/wall'
 import { ARC, BLOCKS, inFrameOf, NETWORK, PANEL, PLACE_PANEL, TWIN, WALL, wallSpan } from '../src/scenes/spatial-arc'
 
@@ -323,8 +323,8 @@ describe('the network Block', () => {
     const r = absoluteRect(s.node), x = r.x + r.width / 2, y = r.y + r.height / 2
     // the wheel: up zooms in
     const k0 = ground.scale.x
-    s.network.events.dispatch(s.node, 'wheel', { x, y, deltaY: -300 }); settle()
-    expect(ground.scale.x / k0).toBeCloseTo(Math.exp(300 * 0.0015), 6)
+    s.network.events.dispatch(s.node, 'wheel', { x, y, deltaY: -100 }); settle()
+    expect(ground.scale.x / k0).toBeCloseTo(Math.exp(100 * 0.0015), 6)
     // a left drag to the right: the map follows (its pan frame moves right on the plate), and does not turn
     const p0 = pan.position.clone(), yaw0 = yaw.rotation.z
     s.network.pointer.down(x, y, 'mouse', flat, { x: 500, y: 400 })
@@ -399,6 +399,19 @@ describe('the network Block', () => {
     expect(PLACE_PANEL.offset.left).toEqual([-px / pt, py / pt, pz / pt])
   })
 
+  it('off focus the map and the twin hold still and ask for no frames: the dots and the AGV park (Task 9P M2)', async () => {
+    const s = await scene('overview')
+    const net = mapOf(s.network), twin = model(s.twin), dots = net.group.getObjectByName('dots') as InstancedMesh, m = new Matrix4()
+    net.update(0, ctx(net.node, false)); dots.getMatrixAt(0, m); const parked = m.toArray()
+    expect(net.update(0.5, ctx(net.node, false))).toBe(false)
+    dots.getMatrixAt(0, m); expect(m.toArray()).toEqual(parked)
+    twin.update(0, ctx(twin.node, false))
+    expect(twin.update(0.5, ctx(twin.node, false))).toBe(false)
+    // focused, they run again
+    const click = async (surface: FakeSurface, label: string): Promise<void> => { const [t] = texts(surface.root, label); surface.events.dispatch(t!, 'click', {}); await nextTick(); await flush() }
+    await click(s.overview, '物流网络')
+    expect(net.update(0.5, ctx(net.node, false))).toBe(true)
+  })
   it('under frozen motion the map holds still: the dots park (screenshots are repeatable); live they run', async () => {
     const s = await networkScene('frozen'), dots = s.group.getObjectByName('dots') as InstancedMesh, m = new Matrix4()
     const at = (): number[] => { dots.getMatrixAt(0, m); return m.toArray() }

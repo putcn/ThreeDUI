@@ -12,13 +12,16 @@ import geo from './geo/xuzhou.json'
 import { KINDS, network, STOCK_LEVELS, stockLevel } from './data'
 import { createNetworkMap, type GeoData, type PlaceHover } from './map'
 
+/** `active`: this Block is the focus (Spatial.vue's); off it the map holds still (default true). */
+const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
 const emit = defineEmits<{ hover: [place: PlaceHover | null]; navigate: [name: string] }>()
 
-// the map, made once (raw: three objects must not become reactive proxies). Under frozen motion (screenshots) it is as
-// under reduced motion: the view is where it is headed at once and the dots park
+// the map, made once (raw: three objects must not become reactive proxies). Under frozen motion (screenshots), and
+// while the Block is not the focus, it is as under reduced motion: the view is where it is headed at once and the dots
+// park, so the map asks for no frames it does not need
 const map = markRaw(createNetworkMap(geo as GeoData, network, { createCanvas: useCanvasFactory() }))
 const frozen = useMotion() === 'frozen'
-const update = (dt: number, ctx: Viewport3DContext): boolean => map.update(dt, frozen ? { ...ctx, reducedMotion: true } : ctx)
+const update = (dt: number, ctx: Viewport3DContext): boolean => map.update(dt, frozen || !props.active ? { ...ctx, reducedMotion: true } : ctx)
 
 // the header: the counts, today's runs, the stock held; the legend (kinds, then the stores' stock levels)
 const places = network.locations, lanes = network.lanes

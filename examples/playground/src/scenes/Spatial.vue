@@ -39,10 +39,10 @@ const placePanel = { left: inFrameOf(NETWORK, PLACE_PANEL.offset.left), right: i
       <Overview @navigate="go" />
     </Block>
     <Block name="network" :width="BLOCKS.network.width" :height="BLOCKS.network.height" :position="NETWORK.position" :rotation="NETWORK.rotation">
-      <Network @hover="p => (place = p)" @navigate="go" />
+      <Network :active="focus === 'network'" @hover="p => (place = p)" @navigate="go" />
     </Block>
     <Block name="twin" :width="BLOCKS.twin.width" :height="BLOCKS.twin.height" :position="TWIN.position" :rotation="TWIN.rotation">
-      <Twin @hover="b => (hovered = b)" @navigate="go" />
+      <Twin :active="focus === 'twin'" @hover="b => (hovered = b)" @navigate="go" />
     </Block>
   </Space>
   <!-- the bin info panel: glass in front of the twin, letting the pointer through to the bins behind it and casting no

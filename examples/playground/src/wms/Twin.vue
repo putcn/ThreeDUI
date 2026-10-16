@@ -9,13 +9,16 @@ import type { Viewport3DContext } from '@glassui/render'
 import { BIN_LEVELS, binLevel, bins, RACKS, utilisation, type Bin } from './data'
 import { createWarehouse } from './warehouse'
 
+/** `active`: this Block is the focus (Spatial.vue's); off it the model holds still (default true). */
+const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
 const emit = defineEmits<{ hover: [bin: Bin | null]; navigate: [name: string] }>()
 
-// the model, made once (raw: three objects must not become reactive proxies). Under frozen motion (screenshots) it is
-// as under reduced motion: the AGV parks, the yaw and the lift are there at once
+// the model, made once (raw: three objects must not become reactive proxies). Under frozen motion (screenshots), and
+// while the Block is not the focus, it is as under reduced motion: the AGV parks, the yaw and the lift are there at
+// once, so the model asks for no frames it does not need
 const warehouse = markRaw(createWarehouse({ bins }))
 const frozen = useMotion() === 'frozen'
-const update = (dt: number, ctx: Viewport3DContext): boolean => warehouse.update(dt, frozen ? { ...ctx, reducedMotion: true } : ctx)
+const update = (dt: number, ctx: Viewport3DContext): boolean => warehouse.update(dt, frozen || !props.active ? { ...ctx, reducedMotion: true } : ctx)
 const percent = Math.round(utilisation * 100)
 const counts = BIN_LEVELS.map(l => ({ ...l, count: bins.filter(b => binLevel(b.occupancy).key === l.key).length }))
 

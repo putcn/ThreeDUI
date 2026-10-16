@@ -1,30 +1,15 @@
 <script setup lang="ts">
 // The bin info panel's content (spatial spec §4 step 3, §11.4): what a hovered bin holds, on the glass panel that
-// floats in front of the twin (Spatial.vue's world <Surface>). The text sits on a veil of the theme's fill at 62 %,
-// inset 8 pt, so it reads over the racks behind while the glass rim round it still bends them. On mount it flies its
-// Surface in: from a little behind its place (toward the twin), faded out and slightly small, to its place.
-import { computed, onMounted } from 'vue'
-import { Box, Stack, Text, useMotion, useRoot, useScheme, useSurfaceRef } from '@glassui/vue'
+// floats in front of the twin (Spatial.vue's world <Surface>), with the info panels' veil and entrance (panel.ts).
+import { computed } from 'vue'
+import { Box, Stack, Text } from '@glassui/vue'
 import { binLevel, grouped, type Bin } from './data'
+import { useInfoPanel } from './panel'
 
 const props = defineProps<{ bin: Bin }>()
 const level = computed(() => binLevel(props.bin.occupancy))
 const percent = computed(() => Math.round(props.bin.occupancy * 100))
-/** The theme's fill at 62 % (#rrggbb + alpha; a fill written otherwise is used as it is). */
-const root = useRoot(), scheme = useScheme()
-const veil = computed(() => { const fill = root.theme.colors[scheme.value].fill ?? '#ffffff'; return /^#[0-9a-f]{6}$/i.test(fill) ? `${fill}9e` : fill })
-
-/** World units the panel starts behind its place, toward the twin. */
-const FROM = 0.3
-const surface = useSurfaceRef(), frozen = useMotion() === 'frozen'
-onMounted(() => {
-  const s = surface.value
-  if (!s) return
-  const { x, y, z } = s.position, a = s.rotation.y
-  s.position.set(x - FROM * Math.sin(a), y, z - FROM * Math.cos(a))
-  s.opacity = 0; s.scale.setScalar(0.94)
-  void s.animateTo({ position: [x, y, z], scale: 1, opacity: 1 }, { spring: { response: 0.4, dampingFraction: 0.9 }, immediate: frozen })
-})
+const { veil } = useInfoPanel()
 </script>
 
 <template>

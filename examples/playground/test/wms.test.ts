@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { Box3, Color, InstancedMesh, Matrix4, Mesh, Vector3, type BufferGeometry, type Object3D } from 'three'
 import { defaultTheme } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
-import { alerts, binLevel, bins, CATEGORIES, createWmsData, flow30d, heat, kpis, mulberry32, network, orders, outboundToday, SEED, SHORT_PICK, stock, stockLevel, utilisation, zones } from '../src/wms/data'
+import { alerts, binLevel, bins, CATEGORIES, createWmsData, flow30d, heat, isDayOff, kpis, laneSummary, lanesOf, mulberry32, network, orders, outboundToday, SEED, SHORT_PICK, stock, stockLevel, utilisation, zones } from '../src/wms/data'
 import { AGV_SPEED, createWarehouse, HOVER_LIFT, YAW_LIMIT } from '../src/wms/warehouse'
 
 const ctx = (o: Partial<Viewport3DContext> = {}): Viewport3DContext => ({ width: 1200, height: 680, reducedMotion: false, theme: defaultTheme, scheme: 'light', ...o })
@@ -62,7 +62,7 @@ describe('wms data', () => {
   })
   it('the heat surface: the 14 whole days before today by hour, each day adding up to its outbound orders; working days peak at 10–11 h and 15–16 h, days off run lower', () => {
     expect(heat.days).toEqual(['10-01', '10-02', '10-03', '10-04', '10-05', '10-06', '10-07', '10-08', '10-09', '10-10', '10-11', '10-12', '10-13', '10-14'])
-    expect(heat.hours).toEqual(Array.from({ length: 24 }, (_, h) => String(h).padStart(2, '0')))
+    expect(heat.hours).toEqual(Array.from({ length: 24 }, (_, h) => `${h} 时`))   // the readout says "12 时"
     heat.values.forEach((row, i) => {
       expect(row).toHaveLength(24); expect(row.every(v => Number.isInteger(v) && v >= 0)).toBe(true)
       expect(row.reduce((a, b) => a + b, 0)).toBe(flow30d.outbound[flow30d.labels.indexOf(heat.days[i]!)])
@@ -111,6 +111,18 @@ describe('wms data', () => {
     expect(network.lanes.filter(l => l.status === 'transit').length).toBeGreaterThan(15)
     // the customer in today's orders is one of the chain's stores
     expect(orders.some(o => network.locations.some(l => l.name.replace(' · ', '·') === o.customer))).toBe(true)
+  })
+  it('a day off is a weekend or the National Day holiday (10-01 to 10-07): one rule for the heat surface and the overview\'s averages', () => {
+    expect(['10-01', '10-04', '10-07', '10-10', '10-11'].map(isDayOff)).toEqual([true, true, true, true, true])
+    expect(['10-08', '10-09', '10-12', '10-14', '10-15'].map(isDayOff)).toEqual([false, false, false, false, false])
+    expect(heat.days.filter(isDayOff)).toEqual(['10-01', '10-02', '10-03', '10-04', '10-05', '10-06', '10-07', '10-10', '10-11'])
+  })
+  it('the place panel\'s lane summaries: "→ 7 家门店、2 个仓库 · n 件" out of 一号仓, "← 2 家供应商 · n 件" into it', () => {
+    const { inbound, outbound } = lanesOf(network, 'WH-1')
+    const sum = (ls: typeof inbound): string => ls.reduce((s, l) => s + l.qty, 0).toLocaleString('en-US')
+    expect(laneSummary(network, outbound, 'out')).toBe(`→ 7 家门店、2 个仓库 · ${sum(outbound)} 件`)
+    expect(laneSummary(network, inbound, 'in')).toBe(`← 2 家供应商 · ${sum(inbound)} 件`)
+    expect(laneSummary(network, [], 'in')).toBe('—')
   })
   it('2–3 alerts: one names the order in 异常 (a 日化 customer\'s), short at a 日化 bin (zone C) holding what it says', () => {
     expect(alerts.length).toBeGreaterThanOrEqual(2); expect(alerts.length).toBeLessThanOrEqual(3)
