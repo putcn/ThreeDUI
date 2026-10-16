@@ -23,10 +23,21 @@ export class FocusManager {
   private cur: Node | null = null
   /** The last focus change came from keys (`next`/`prev`, Tab), not a press: the ring shows (CSS `:focus-visible`). */
   private keyboard = false
+  /** The node blurred last, with whether it showed its ring then (`last` while nothing is focused). */
+  private blurred: { node: Node; visible: boolean } | null = null
 
   constructor(private readonly root: Node, private readonly d: EventDispatcher) {}
 
   get current(): Node | null { return this.cur }
+
+  /**
+   * The node focused last, with whether it shows (or, blurred, showed) its ring: the current one, else the one blurred
+   * last; null before any focus. What a modal Surface gives the focus back to when a stray press elsewhere took the keys
+   * (and so the focus) away for a moment. A node that has left the tree since is still named: `focus` refuses it.
+   */
+  get last(): { node: Node; visible: boolean } | null {
+    return this.cur ? { node: this.cur, visible: this.cur.state.focusVisible } : this.blurred
+  }
 
   focusables(): Node[] {
     const out: { n: Node; tab: number }[] = []
@@ -50,6 +61,7 @@ export class FocusManager {
     if (node === this.cur || (node && !this.canFocus(node))) return
     const old = this.cur
     if (old) {
+      this.blurred = { node: old, visible: old.state.focusVisible }
       this.cur = null; old.setState({ focused: false, focusVisible: false })
       this.d.dispatch(old, 'blur')
     }

@@ -158,6 +158,21 @@ describe('FocusManager edge cases', () => {
     t.fm.focusFromPointer(stray)
     expect(t.fm.current).toBeNull(); expect(stray.state.focused).toBe(false)
   })
+  it('last: the node focused last with its ring, kept after a blur (what a modal gives the focus back to)', () => {
+    const t = tree()
+    expect(t.fm.last).toBeNull()                                       // nothing focused yet
+    t.fm.focus(t.b, { visible: true })
+    expect(t.fm.last).toEqual({ node: t.b, visible: true })
+    t.fm.focus(null)                                                   // blurred: still the one it was, with its ring then
+    expect(t.fm.current).toBeNull(); expect(t.fm.last).toEqual({ node: t.b, visible: true })
+    t.fm.focusFromPointer(t.c)
+    expect(t.fm.last).toEqual({ node: t.c, visible: false })
+    t.fm.focusFromPointer(null)
+    expect(t.fm.last).toEqual({ node: t.c, visible: false })
+    t.fm.focus(t.c, { visible: true }); expect(t.fm.last).toEqual({ node: t.c, visible: true })
+    t.c.remove(); t.fm.reconcile()                                    // it left the tree: a focus() back is a no-op
+    t.fm.focus(t.fm.last!.node); expect(t.fm.current).toBeNull()
+  })
   it('lets a blur listener move focus elsewhere and keeps state consistent', () => {
     const t = tree(); const log: string[] = []
     for (const n of [t.a, t.b, t.c]) { t.d.on(n, 'focus', () => log.push(`focus:${n.id}`)); t.d.on(n, 'blur', () => log.push(`blur:${n.id}`)) }

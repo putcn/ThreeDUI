@@ -379,7 +379,9 @@ export const Input = defineGlassComponent({
     }
     if (on && a === b) parts.push(h(Caret, { key: 'caret', x: caretX.value - sx, top: (lh - CARET.height * lh) / 2, height: CARET.height * lh, stamp: stamp.value, live }))
     const dot = Math.round(size.icon * 0.82)
-    return h('glass', { ref: el, style, tabIndex: v.disabled ? -1 : 0, disabled: v.disabled, ...host }, [
+    // `textField`: what a Dialog that focuses it on open reads (a text field shows its ring however focus came, as CSS
+    // `:focus-visible` does)
+    return h('glass', { ref: el, style, tabIndex: v.disabled ? -1 : 0, disabled: v.disabled, textField: true, ...host }, [
       slots.leading ? slots.leading() : v.leadingIcon ? icon(v.leadingIcon) : null,
       // a row: an absolute child of a column is held to its width, and the text must keep its own to scroll
       h('box', {

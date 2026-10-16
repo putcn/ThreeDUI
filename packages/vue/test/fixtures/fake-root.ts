@@ -183,8 +183,18 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     return text.measure({ text: String(n.props.value ?? ''), font: { family: t.family, size: t.size, weight: t.weight }, lineHeight: t.lineHeight, letterSpacing: t.letterSpacing, maxLines: t.maxLines, wrap: t.wrap }, { maxWidth })
   }
   const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = [], rigs: FakeRig[] = [], charts: FakeChart[] = [], surfaceCharts: FakeSurfaceChart[] = [], barMatrices: FakeBarMatrix[] = []
-  /** The pointer bridge's key target, as `PointerBridge`: `setActive` sets it, removing its Surface clears it. */
-  const bridge: { active: FakeSurface | null; setActive(s: FakeSurface | null): void } = { active: null, setActive: vi.fn((s: FakeSurface | null) => { bridge.active = s }) }
+  /**
+   * The pointer bridge's key target, as `PointerBridge`: `setActive` sets it, blurring the focus of the Surface it
+   * replaces (one focused node per canvas), and removing its Surface clears it.
+   */
+  const bridge: { active: FakeSurface | null; setActive(s: FakeSurface | null): void } = {
+    active: null,
+    setActive: vi.fn((s: FakeSurface | null) => {
+      if (bridge.active === s) return
+      bridge.active?.focus.focus(null)
+      bridge.active = s
+    }),
+  }
   let waiters: ((dt: number) => void)[] = []
   const listeners = new Map<string, Set<(e: never) => void>>()
   const screenFromPoint = (s: Surface, x: number, y: number): { x: number; y: number } => ({ x: x + s.position.x, y: y + s.position.y })

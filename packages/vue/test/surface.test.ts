@@ -128,7 +128,7 @@ it('a recreated Surface keeps the focus (ring as it was) and the keys; the press
   b.focus.focus(null)                                     // the new focus manager owns it: blurring clears it
   expect(g.state).toMatchObject({ focused: false, focusVisible: false })
   // focus from a press has no ring, and keeps none; keys elsewhere stay elsewhere
-  b.focus.focusFromPointer(g); root.pointer!.setActive(null)
+  root.pointer!.setActive(null); b.focus.focusFromPointer(g)   // the keys elsewhere first (that blurs b, as the bridge does)
   bg.value = 'fill'; await nextTick()
   const c = root.surfacesMade[2]!
   expect(c.focus.current).toBe(g); expect(g.state).toMatchObject({ focused: true, focusVisible: false }); expect(root.pointer!.active).toBeNull()

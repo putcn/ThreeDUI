@@ -137,25 +137,85 @@ it('a blur listener refocusing through useSurfaceRef finds no Surface once the D
   await tickUntil(root, () => panel.disposed)
   expect(panel.disposed).toBe(true); expect(panel.focus.current).toBeNull()
 })
-it('closing while the Input composes lets the IME go, then gives the opener its keys and focus back', async () => {
-  const open = ref(true), text = ref('')
+it('closing while the Input composes lets the IME go; then the opener\'s Surface gets the keys back and the opener its focus and ring', async () => {
+  const open = ref(false), text = ref('')
   const { root, c, errors } = mountGlass(() => h(Stack, () => [
     h(Button, { id: 'opener', label: 'Open' }),
     h(Dialog, { open: open.value, title: '重命名' }, { default: () => h(Input, { modelValue: text.value, 'onUpdate:modelValue': (v: string) => { text.value = v } }) }),
   ]), { motion: 'live' })
   const host = root.createSurface({ width: 800, height: 600 }); host.root.appendChild(c)
-  await nextTick(); root.tick(); await flush()
+  const opener = byId(c, 'opener')!
+  root.pointer!.setActive(host); host.focus.focus(opener, { visible: true })   // the opener, focused from the keyboard
+  open.value = true; await nextTick(); root.tick(); await flush()
   const { panel } = made(root)
+  expect(host.focus.current).toBeNull()                                 // the keys went to the panel: one focused node
   const field = root.ime.active!
   expect(field.surface).toBe(panel)                                    // the Input sees the panel as its Surface
   root.ime.fromProxy({ value: 'ni', selectionStart: 2, selectionEnd: 2, composition: { start: 0, end: 2 } }); await nextTick()
-  expect(root.pointer!.active).toBe(panel)
   open.value = false; await nextTick(); await nextTick()
   expect(root.ime.active).toBeNull(); expect(root.ime.blurred).toContain(field)
   expect(panel.disposed).toBe(false)                                   // still leaving
-  expect(root.pointer!.setActive).toHaveBeenLastCalledWith(null)       // nothing held the keys before it opened
+  expect(root.pointer!.setActive).toHaveBeenLastCalledWith(host)
+  expect(host.focus.current).toBe(opener); expect(opener.state.focusVisible).toBe(true)
   await tickUntil(root, () => root.surfaces.length === 1)
   expect(root.surfaces).toEqual([host]); expect(errors).toEqual([])
+})
+it('the opener gets its focus back with its ring as it was: after a keyboard open, and after a mouse open', async () => {
+  for (const visible of [true, false]) {
+    const open = ref(false)
+    const { root, c } = mountGlass(() => h(Stack, () => [
+      h(Button, { id: 'opener', label: 'Open' }),
+      h(Dialog, { open: open.value }, { footer: () => h(Button, { label: '好' }) }),
+    ]), { motion: 'frozen' })
+    const host = root.createSurface({ width: 800, height: 600 }); host.root.appendChild(c)
+    const opener = byId(c, 'opener')!
+    root.pointer!.setActive(host); host.focus.focus(opener, { visible })
+    open.value = true; await nextTick(); root.tick(); await flush()
+    expect(opener.state.focused).toBe(false)                           // blurred while the panel has the keys
+    open.value = false; await nextTick()
+    expect(root.pointer!.setActive).toHaveBeenLastCalledWith(host)
+    expect(host.focus.current).toBe(opener); expect(opener.state.focusVisible).toBe(visible)
+  }
+})
+it('an opener removed while the dialog is open: its Surface gets the keys back, nothing is focused, no error', async () => {
+  const open = ref(false), show = ref(true)
+  const { root, c, errors } = mountGlass(() => h(Stack, () => [
+    show.value ? h(Button, { id: 'opener', label: 'Open' }) : null,
+    h(Dialog, { open: open.value }, { footer: () => h(Button, { label: '好' }) }),
+  ]), { motion: 'frozen' })
+  const host = root.createSurface({ width: 800, height: 600 }); host.root.appendChild(c)
+  root.pointer!.setActive(host); host.focus.focus(byId(c, 'opener')!, { visible: true })
+  open.value = true; await nextTick(); root.tick(); await flush()
+  show.value = false; await nextTick()
+  open.value = false; await nextTick(); root.tick(); await flush()
+  expect(root.pointer!.setActive).toHaveBeenLastCalledWith(host); expect(host.focus.current).toBeNull()
+  expect(root.surfaces).toEqual([host]); expect(errors).toEqual([])
+})
+it('an opener on another Surface than the Dialog\'s: that Surface gets the keys back and the opener its focus', async () => {
+  const root = createFakeRoot(), open = ref(false)
+  const other = mountInSurface(() => h(Button, { id: 'opener', label: 'Open' }), { root, motion: 'frozen' })
+  const own = mountInSurface(() => h(Dialog, { open: open.value }, { footer: () => h(Button, { label: '好' }) }), { root, motion: 'frozen' })
+  const opener = byId(other.surface.root, 'opener')!
+  root.pointer!.setActive(real(other.surface)); other.surface.focus.focus(opener, { visible: true })
+  open.value = true; await nextTick(); root.tick(); await flush()
+  open.value = false; await nextTick()
+  expect(root.pointer!.setActive).toHaveBeenLastCalledWith(other.surface)
+  expect(other.surface.focus.current).toBe(opener); expect(opener.state.focusVisible).toBe(true)
+  expect(own.surface.focus.current).toBeNull(); expect(own.errors).toEqual([])
+})
+it('the first focusable shows its ring after a keyboard open, or when it is a text field; not a Button after a mouse open', async () => {
+  for (const k of [{ keys: false, input: false, ring: false }, { keys: true, input: false, ring: true }, { keys: false, input: true, ring: true }]) {
+    const open = ref(false)
+    const { root, c } = mountGlass(() => h(Stack, () => [
+      h(Button, { id: 'opener', label: 'Open' }),
+      h(Dialog, { open: open.value }, { default: () => k.input ? h(Input, { modelValue: '' }) : h(Text, { value: '确定吗？' }), footer: () => h(Button, { id: 'ok', label: '好' }) }),
+    ]), { motion: 'frozen' })
+    const host = root.createSurface({ width: 800, height: 600 }); host.root.appendChild(c)
+    root.pointer!.setActive(host); host.focus.focus(byId(c, 'opener')!, { visible: k.keys })
+    open.value = true; await nextTick(); root.tick(); await flush()
+    const cur = made(root).panel.focus.current!
+    expect(cur.id === 'ok').toBe(!k.input); expect(cur.state.focusVisible).toBe(k.ring)
+  }
 })
 it('Escape on a focused footer Button bubbles to the panel root and closes', async () => {
   const open = ref(true)
@@ -174,19 +234,36 @@ it('Escape typed into the Input it focused on open closes it in one press (the k
   await nextTick()
   expect(closes).toEqual([1]); expect(open.value).toBe(false); expect(root.ime.active).toBeNull()
 })
-it('a press on the backdrop that does not close gives the keys back to the panel', async () => {
+it('with closeOnBackdrop off, a stray press on the backdrop gives the panel its keys and its focused node back', async () => {
   const open = ref(true)
-  const { root } = mountGlass(() => h(Dialog, { open: open.value, closeOnBackdrop: false }), { motion: 'frozen' })
-  await nextTick()
-  const { backdrop, panel } = made(root)
-  root.pointer!.active = real(backdrop)                                // the pointer bridge gives a pressed Surface the keys
+  const { root } = mountGlass(() => h(Dialog, { open: open.value, closeOnBackdrop: false }, { default: () => h(Input, { modelValue: '' }), footer: () => h(Button, { id: 'ok', label: '好' }) }), { motion: 'frozen' })
+  await nextTick(); root.tick(); await flush()
+  const { backdrop, panel } = made(root), ok = byId(panel.root, 'ok')!, field = first(panel.root, 'glass')
+  panel.focus.focus(ok, { visible: true })
+  root.pointer!.setActive(real(backdrop))                              // the press: the bridge hands the backdrop the keys ...
+  expect(panel.focus.current).toBeNull()                               // ... which blurs the panel
   fire(backdrop.root, 'pointerup', { pointerType: 'mouse' })
   expect(root.pointer!.setActive).toHaveBeenLastCalledWith(panel)
-  root.pointer!.active = real(backdrop)
-  fire(backdrop.root, 'pointercancel', { pointerType: 'touch' })
-  expect(root.pointer!.setActive).toHaveBeenLastCalledWith(panel)
+  expect(panel.focus.current).toBe(ok); expect(ok.state.focusVisible).toBe(true)
+  panel.focus.focus(field, { visible: false })                         // the Input, editing (its IME)
+  expect(root.ime.active).not.toBeNull()
+  root.pointer!.setActive(real(backdrop)); expect(root.ime.active).toBeNull()
+  fire(backdrop.root, 'pointercancel', { pointerType: 'touch' })       // a cancelled press too
+  expect(panel.focus.current).toBe(field); expect(root.ime.active).not.toBeNull()
   fire(backdrop.root, 'click', { pointerType: 'mouse' }); await nextTick()
-  expect(panel.disposed).toBe(false)
+  expect(panel.disposed).toBe(false); expect(open.value).toBe(true)
+})
+it('with closeOnBackdrop on, the press\'s up gives the keys back but not the focus: its click closes', async () => {
+  const open = ref(true)
+  const { root } = mountGlass(() => h(Dialog, { open: open.value, 'onUpdate:open': (v: boolean) => { open.value = v } }, { footer: () => h(Button, { id: 'ok', label: '好' }) }), { motion: 'frozen' })
+  await nextTick(); root.tick(); await flush()
+  const { backdrop, panel } = made(root)
+  expect(panel.focus.current?.id).toBe('ok')
+  root.pointer!.setActive(real(backdrop))
+  fire(backdrop.root, 'pointerup', { pointerType: 'mouse' })
+  expect(root.pointer!.setActive).toHaveBeenLastCalledWith(panel); expect(panel.focus.current).toBeNull()
+  fire(backdrop.root, 'click', { pointerType: 'mouse' }); await nextTick()
+  expect(open.value).toBe(false); expect(root.surfaces).toEqual([])
 })
 it('Escape while a press on the backdrop holds the keys closes too', async () => {
   const open = ref(true)
@@ -383,4 +460,11 @@ it('Dialog is registered with complete manifest metadata', () => {
   expect(Object.keys(m.props.shape)).toEqual(['open', 'title', 'width', 'closeOnBackdrop', 'closeOnEscape'])
   expect(Object.keys(m.events!)).toEqual(['update:open', 'close']); expect(Object.keys(m.slots!)).toEqual(['default', 'footer'])
   expect(m.mistakes!.length).toBeGreaterThan(0)
+  const said = JSON.stringify([m.description, m.mistakes])
+  expect(said).toMatch(/打开期间.*Surface.*上方/)                    // a Surface made while it is open can stack above it
+  expect(said).toMatch(/不滚动.*scroll/)                             // content taller than the viewport is not scrolled
+})
+it('useSpring stays internal: the package does not export it', async () => {
+  const pkg: Record<string, unknown> = await import('../src/index')
+  expect(pkg.Dialog).toBe(Dialog); expect('useSpring' in pkg).toBe(false)
 })
