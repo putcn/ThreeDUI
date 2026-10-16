@@ -3711,6 +3711,55 @@ git commit -m "feat(playground): the WMS dashboard preview — overview with KPI
 
 ---
 
+### Task 9M: Panels on glass ride the glass
+
+Spatial spec §11.8. Since 9I, a Card floats 24 pt up and is 12 pt thick. The Boxes with backgrounds inside it are still drawn into the content RT at the plate, but their text rides the Card's top face 36 pt higher. The affected Boxes are the status chips and the charts' hover panels. Seen off-axis, each Box parts from its own text by about 15 pt. Task 9K worked around it for the LineChart legend; this task fixes it in the library.
+
+**Files:**
+- Modify:
+  - `packages/render/src/surface/partition.ts`: panels split into content panels and foreground panels.
+  - `packages/render/src/panel/batch.ts`: `update(instances, s, lift?)`.
+  - `packages/render/src/surface/surface.ts`: a foreground `PanelBatch` on the plane; `SURFACE_ORDER.panels = 2.75`.
+  - `packages/render/src/surface/stack.ts`: the stack also draws the panels that ride the outer glass.
+- Test: `packages/render/test/partition.test.ts`, `packages/render/test/panel.test.ts`, `packages/render/test/surface.test.ts`, `packages/render/test/stack.test.ts`
+
+**Interfaces:**
+- `Partition.foreground.panels: PanelInstance[]` holds every panel whose node, or an ancestor of it, has glass (`nearest`), with one exception: a glass node's own focus ring stays in `content.panels`, under the glass edge. `content.panels` keeps the rest. `glassOf` maps foreground panels too.
+- `PanelBatch.update(instances, s, lift = () => 0)`: each instance is lifted by `lift(instance)` pt along the plane normal, as `ImageSet.update` lifts its images.
+- `Surface.foregroundPanels: PanelBatch`:
+  - its mesh sits under `this.plane` at `renderOrder = SURFACE_ORDER.panels` (2.75), after the inner glass and before the rims;
+  - its material is `createPanelMaterial(g, this.su)`, so it fades with the Surface;
+  - its lift comes from `liftFor(parts, node)` (the thickness of the glass the panel rides on).
+- `SURFACE_ORDER` gains `panels: 2.75`. Update the `toEqual` pin.
+- `StackPass.update` also takes the foreground panels that ride outer glass, and draws them flat above the outer-glass fill panels.
+
+- [ ] **Step 1: Write the failing tests**
+  - **partition:**
+    - a panel (a Box with `bg: 'accent'`) inside a glass Card goes to `foreground.panels`, with `glassOf` set to the Card;
+    - a panel on the plate stays in `content.panels`;
+    - a glass node's focus ring stays in content.
+  - **panel:** `update` with a lift of 12 pt puts the instance's z (as the vertex node evaluates it, using the file's tsl-eval pattern) 12 pt / ptPerUnit above the plane.
+  - **surface:**
+    - a Card (glass, elevation 24) containing a chip Box has one foreground panel instance;
+    - the foreground panel mesh is a child of `plane` at renderOrder 2.75, and its material references `su.opacity`;
+    - the content pass no longer contains the chip.
+  - **stack:** a chip on an outer Card shows in the stack's panel batch, alongside the Card's fill.
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/render` (FAIL), implement, then run it again (PASS).
+
+- [ ] **Step 3: Typecheck, build; visual baselines (controller)**
+
+Run: `pnpm typecheck && pnpm playground:build && pnpm test`. The controller then runs `pnpm test:visual`. The signup baselines may move where a panel sits on glass. Inspect the diff and regenerate only if the change is exactly "panels now ride their glass".
+
+```bash
+git add packages/render
+git commit -m "feat(render): panels on glass ride the glass's top face like its text, so chips and tags stay with their labels when Cards float"
+```
+
+---
+
 ### Task 10: `useGlassControl` and `<Button>` — visual checkpoint 3
 
 **Files:**
@@ -5149,6 +5198,7 @@ git push origin main
 | Spatial §11.5 LineChart | 9J |
 | Spatial §11.7 visible drop shadows | 9L |
 | Spatial §4 steps 2–5 (WMS preview), §11.4, §11.6 | 9K |
+| Spatial §11.8 panels ride their glass | 9M |
 | Spatial §4 step 1 (login) and settings, §6 visual cases and frame time | 19, 20, 21 |
 | Spatial §8 manifest and acceptance; §9 amendment of core §8.3 | 18, 23; Global Constraints |
 

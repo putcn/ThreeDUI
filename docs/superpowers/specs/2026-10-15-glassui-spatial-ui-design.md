@@ -228,6 +228,7 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 | 9J | vue | `<LineChart>` 2D 折线图（§11.5） |
 | 9L | render + core | 抬起的玻璃投下看得见的影子（§11.7） |
 | 9K | playground + core/render | WMS 仪表盘预览与仓储孪生（§4 第 2–5 步）；实例化物体命中带 `instanceId`（§11.6）；可视检查后给用户看 |
+| 9M | render | 玻璃上的背景面板随玻璃抬起（§11.8） |
 
 对已有任务的调整：
 - **Task 18（manifest）**：收录五个新组件，示例里给出一个完整的 Space/Block 写法；`mistakes` 写明"不要同时用 OrbitControls""Block 必须在 Space 里""`width/height` 是数字"。
@@ -292,4 +293,10 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 - 做法：每个高出其所在面的玻璃元素（高度 = 合成 elevation 减去最近的玻璃祖先的顶面，即该祖先的 elevation + 厚度；没有玻璃祖先时就是合成 elevation；只在 > 0 时）在内容 RT 里画一块柔和的投影贴片（新的装饰种类 `shadow`），位置是元素形状沿主光方向偏移：偏移（pt）= `高度 × (−lₓ/l_z, l_y/l_z)`（l 是方向光的方向：主光位置减其 target，转到该 Surface 的坐标系，y 向下为正；所有 Surface 共用同一方向），每个分量限制在 1.5 × elevation 以内；模糊半径 4 + 0.5 × elevation；不透明度浅色 0.22、深色 0.35。
 - 投影只画在投射者自身轮廓之外，不压暗卡片自己的内容。它在背板上可见，透过卡片玻璃也能看到（折射）。
 - 光方向是 Surface 级的 uniform：方向变化使该 Surface 上最高的投影偏移改变超过 0.5 pt 时，内容 RT 重画。灯光锚定后，视差不触发重画，只有焦点切换时的灯光过渡才会。
+
+### 11.8 玻璃上的背景面板随玻璃抬起（render，9M）
+
+- 9K 的检查发现：Card 浮起 24 pt、厚 12 pt 之后，Card 里带背景的 Box（订单的状态标签、图表的悬停数值面板）仍画在内容 RT 里（背板高度），而它们的文字跟着玻璃顶面抬起 36 pt；斜着看两者错开约 15 pt。
+- 规则：最近的祖先里有玻璃的面板（背景、边框），和文字、图片一样画在那块玻璃的顶面上（抬起该玻璃的厚度，随玻璃的 elevation、倾斜与缩放），排在玻璃之后、rim 与文字之前；没有玻璃祖先的面板照旧画进内容 RT。玻璃节点自己的焦点环仍在内容 RT（在玻璃边缘下方）。
+- 叠层 RT（§2.4）里外层玻璃上的面板也随之画进去（与外层玻璃上的文字一样）。
 
