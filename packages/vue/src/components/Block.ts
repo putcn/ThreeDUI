@@ -1,15 +1,14 @@
-import { computed, h, inject, onBeforeUnmount, onMounted, onUpdated, ref, shallowRef, Teleport, toRef, watch, watchEffect, type ShallowRef } from '@vue/runtime-core'
+import { computed, h, inject, onBeforeUnmount, onMounted, onUpdated, provide, ref, shallowRef, Teleport, toRef, watch, watchEffect, type ShallowRef } from '@vue/runtime-core'
 import { z } from 'zod'
 import { GlassUIError, type Node } from '@glassui/core'
-import type { CreateSurfaceOptions, Surface, SurfacePose } from '@glassui/render'
+import type { CreateSurfaceOptions, Surface } from '@glassui/render'
 import { defineGlassComponent, fallthrough } from '../define'
 import { useMotion, useRoot } from '../inject'
 import { holdContent } from '../renderer'
-import { SPACE, type BlockHandle } from '../spatial/context'
+import { BLOCK, RECEDE, SPACE, type BlockHandle } from '../spatial/context'
 import { checkBackground, useRenderSurface } from '../surface-host'
 
 type Vec3 = [number, number, number]
-type Scale = number | Vec3
 const Vec3 = z.tuple([z.number(), z.number(), z.number()])
 const Scale = z.union([z.number().positive(), z.tuple([z.number().positive(), z.number().positive(), z.number().positive()])])
 /** An enter / leave offset from the rest pose, in the Block's own frame (spatial spec §3.3). */
@@ -26,7 +25,7 @@ const BlockProps = z.object({
   position: Vec3.optional().describe('Block 中心的位置 [x, y, z]，世界单位；省略时由 Space 排在弧上（给了就不占弧上的位置）'),
   rotation: Vec3.optional().describe('旋转 [x, y, z]，弧度，XYZ 顺序；省略时取弧上的朝向（正对弧心），给了 position 而省略它时不旋转'),
   scale: Scale.optional().describe('缩放：一个数或 [x, y, z]（默认 1）'),
-  radius: z.number().min(0).default(48).describe('圆角，pt；里面的 Card 用 radius: concentric 与它同心'),
+  radius: z.number().min(0).default(48).describe('圆角，pt：背板和内容盒的圆角；内容盒里写 radius: concentric 的子项按它减去 40 pt 内边距取圆角（Card 默认 24 pt，不随它变）'),
   background: z.string().default('glass').describe('背景：glass（玻璃背板，默认）、none（透明）或颜色 token / #hex（不透明底色）'),
   ptPerUnit: z.number().positive().optional().describe('每个世界单位多少 pt（默认 244）：越大，同样 pt 尺寸的 Block 在场景里越小'),
   enterFrom: Offset.default({ position: [0, 0, -1.2], scale: 0.92, opacity: 0 }).describe(
@@ -35,28 +34,32 @@ const BlockProps = z.object({
     '离场终点，写法同 enterFrom；飞到这里后 Block 才移除，内容随它一起飞走。默认 { position: [0, 0, -1.5], scale: 0.9, opacity: 0 }：向后飞并淡出；向左飞出如 { position: [-4, 0, -1], opacity: 0 }'),
 })
 type Props = z.output<typeof BlockProps>
-interface Rest { position: Vec3; rotation: Vec3; scale: Scale }
+/** A pose: the scale per axis. */
+interface Rest { position: Vec3; rotation: Vec3; scale: Vec3 }
+/** An offset from a rest pose, in the pose's own frame: an `enterFrom` / `leaveTo` (less its opacity), or `RECEDE`. */
+interface Shift { readonly position?: Readonly<Vec3> | undefined; readonly rotation?: Readonly<Vec3> | undefined; readonly scale?: number | Readonly<Vec3> | undefined }
 
-const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
-const axis = (s: Scale, i: 0 | 1 | 2): number => typeof s === 'number' ? s : s[i]
-const times = (a: Scale, b: Scale): Scale => typeof a === 'number' && typeof b === 'number' ? a * b : [axis(a, 0) * axis(b, 0), axis(a, 1) * axis(b, 1), axis(a, 2) * axis(b, 2)]
+const add = (a: Vec3, b: Readonly<Vec3>): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+const axis = (s: number | Readonly<Vec3>, i: 0 | 1 | 2): number => typeof s === 'number' ? s : s[i]
+const times = (a: Vec3, b: number | Readonly<Vec3>): Vec3 => [a[0] * axis(b, 0), a[1] * axis(b, 1), a[2] * axis(b, 2)]
 /** `v` rotated by the XYZ Euler `r` (three's order: the matrix Rx·Ry·Rz, so about z first). */
-function rotate([x, y, z]: Vec3, [a, b, c]: Vec3): Vec3 {
+function rotate([x, y, z]: Readonly<Vec3>, [a, b, c]: Readonly<Vec3>): Vec3 {
   const x1 = x * Math.cos(c) - y * Math.sin(c), y1 = x * Math.sin(c) + y * Math.cos(c)
   const x2 = x1 * Math.cos(b) + z * Math.sin(b), z2 = z * Math.cos(b) - x1 * Math.sin(b)
   return [x2, y1 * Math.cos(a) - z2 * Math.sin(a), y1 * Math.sin(a) + z2 * Math.cos(a)]
 }
-/** The rest pose with an enter / leave offset applied in the Block's own frame (rest ⊕ offset). */
-const offset = (r: Rest, o: Offset): Required<SurfacePose> => ({
+/** `r` ⊕ `o`: the position offset rotated into `r`'s frame and added, the rotations added, the scales multiplied. */
+const place = (r: Rest, o: Shift): Rest => ({
   position: add(r.position, rotate(o.position ?? [0, 0, 0], r.rotation)),
   rotation: add(r.rotation, o.rotation ?? [0, 0, 0]),
   scale: times(r.scale, o.scale ?? 1),
-  opacity: o.opacity ?? 1,
 })
+/** The rest pose with an enter / leave offset applied in the Block's own frame (rest ⊕ offset), with its opacity. */
+const offset = (r: Rest, o: Offset): Rest & { opacity: number } => ({ ...place(r, o), opacity: o.opacity ?? 1 })
 
 export const Block = defineGlassComponent({
   name: 'Block',
-  description: '空间界面里的一块界面：一块玻璃背板的世界层 Surface，只能放在 <Space> 里（name 在 Space 里唯一）。width / height 是 pt，固定不随内容撑开（ptPerUnit 默认 244 pt 一个世界单位）。没给 position 时 Space 把它排在弧上，镜头对焦到焦点 Block 的正前方。出现时从 enterFrom 弹到原位，被 v-if / v-for 移除或 Space 卸载时飞到 leaveTo 并淡出，内容随它一起飞走后才移除。默认插槽是内容，排在一个纵向排列的内容盒里（padding 40、gap 24）；tw / class / style 落到这个内容盒上。非焦点 Block 看得见也点得着，但一次按下只把它设为焦点（Space 发出 update:focus），不传给里面的控件，也不显示悬停。分组用 <Card>（更薄的玻璃，与 Block 同心）。',
+  description: '空间界面里的一块界面：一块玻璃背板的世界层 Surface，只能放在 <Space> 里（name 在 Space 里唯一）。width / height 是 pt，固定不随内容撑开（ptPerUnit 默认 244 pt 一个世界单位）。没给 position 时 Space 把它排在弧上，镜头对焦到焦点 Block 的正前方。出现时从 enterFrom 弹到原位，被 v-if / v-for 移除或 Space 卸载时飞到 leaveTo 并淡出，内容随它一起飞走后才移除。默认插槽是内容，排在一个纵向排列的内容盒里（padding 40、gap 24）；tw / class / style 落到这个内容盒上。非焦点 Block 向后退一点（沿自身 −z 0.4、缩到 0.96），焦点切换时用弹簧移过去；它看得见也点得着，但一次按下只把它设为焦点（Space 发出 update:focus），不传给里面的控件，也不显示悬停。分组用 <Card>：更薄的玻璃（圆角 24 pt），浮在背板上方 24 pt 并在背板上投下阴影，Block 进场时依次升起。',
   props: BlockProps,
   events: { error: { payload: 'Error', description: '该 Block 的 Surface 渲染失败（它已停止绘制）' } },
   slots: { default: 'Block 的内容（纵向排列，padding 40、gap 24）' },
@@ -94,11 +97,20 @@ export const Block = defineGlassComponent({
   let unregister = space.register(name.value, handle)
   watch(() => v.value.name, n => { const off = space.register(n, handle); unregister(); unregister = off; name.value = n })
   const focused = computed(() => space.focused.value === name.value)
+  // the Cards inside: they hover only while the Block is the focus, and rise in staggered, in setup order. The count
+  // starts over once a tick has passed, so the Cards that appear together form one wave (later ones do not wait on the
+  // first wave's delays)
+  let cards = 0
+  provide(BLOCK, {
+    focused,
+    nextCard: () => { if (cards === 0) void root.afterTick().then(() => { cards = 0 }); return cards++ },
+  })
 
-  /** Where the Block stands: its own position / rotation, else its arc slot's. */
+  /** Where the Block stands: its own position / rotation, else its arc slot's; receded (`RECEDE`) unless focused. */
   const rest = computed((): Rest => {
-    const x = v.value, slot = space.slot(name.value)
-    return { position: x.position ?? slot?.position ?? [0, 0, 0], rotation: x.rotation ?? slot?.rotation ?? [0, 0, 0], scale: x.scale ?? 1 }
+    const x = v.value, slot = space.slot(name.value), s = x.scale ?? 1
+    const own: Rest = { position: x.position ?? slot?.position ?? [0, 0, 0], rotation: x.rotation ?? slot?.rotation ?? [0, 0, 0], scale: typeof s === 'number' ? [s, s, s] : s }
+    return focused.value ? own : place(own, RECEDE)
   })
   const { surface } = useRenderSurface(() => {
     const s = state.value
@@ -111,8 +123,7 @@ export const Block = defineGlassComponent({
     // the enter: placed at rest ⊕ enterFrom, then sprung to its rest pose
     onCreate: s => {
       const from = offset(rest.value, v.value.enterFrom)
-      s.position.set(...from.position); s.rotation.set(...from.rotation)
-      if (typeof from.scale === 'number') s.scale.setScalar(from.scale); else s.scale.set(...from.scale)
+      s.position.set(...from.position); s.rotation.set(...from.rotation); s.scale.set(...from.scale)
       s.opacity = from.opacity
       void s.animateTo({ ...rest.value, opacity: 1 }, { immediate })
     },
@@ -126,7 +137,7 @@ export const Block = defineGlassComponent({
   })
   host = { surface }
   onBeforeUnmount(() => { unregister() })
-  // a new rest pose (its slot moved, its position changed) springs the Block there
+  // a new rest pose (its slot moved, its position changed, the focus came or went) springs the Block there
   watch(() => JSON.stringify(rest.value), () => { void surface.value?.animateTo(rest.value, { immediate }) })
   watchEffect(() => {
     const s = surface.value, { width, height } = v.value

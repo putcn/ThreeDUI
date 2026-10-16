@@ -28,3 +28,22 @@ export interface SpaceContext {
 }
 
 export const SPACE: InjectionKey<SpaceContext> = Symbol('glassui.space')
+
+/**
+ * Where an unfocused Block rests, from its own pose (spatial spec §11.2): composed as `enterFrom` is, the position
+ * offset in the Block's own frame (−z away from the viewer) and the scale multiplied.
+ */
+export const RECEDE = { position: [0, 0, -0.4], scale: 0.96 } as const
+
+/** What a `<Block>` provides to the Cards inside it. */
+export interface BlockContext {
+  /** Whether the Block is the Space's focus: a Card lifts and tilts on hover only then. */
+  focused: Readonly<Ref<boolean>>
+  /**
+   * 0, 1, 2… in Card setup order: where a Card falls in the Block's staggered rise-in. The count starts over once a
+   * tick has passed, so the Cards that appear together form one wave.
+   */
+  nextCard(): number
+}
+
+export const BLOCK: InjectionKey<BlockContext> = Symbol('glassui.block')
