@@ -87,6 +87,7 @@ interface Viewport3DContext { width: number; height: number; reducedMotion: bool
 - **只在世界层**：挂到屏幕层 Surface、节点不属于这个 Surface、同一节点挂两次，都抛 `GlassUIError`。
 - **绘制顺序**：物体一律进透明队列（attach 时把材质设为 `transparent`，深度写入与深度测试保持开启），`renderOrder` 排在本 Surface 的 rim 之后、前景图片与文字之前（新增 `SURFACE_ORDER.viewport = 3.25`）。这保证：本 Block 的背板在它自己的第一次绘制前捕获画面时，图表还没画上去；挡在前面的其它 Block 的背板捕获的是整帧，会正常折射图表。
 - **限制（本期）**：同一 Block 里叠在图表上方的玻璃元素看不到图表（元素玻璃采样的是内容 RT，3D 物体不在其中）。悬停数值标签因此用平面面板，不用玻璃。
+- **物体内部的顺序与投影**：物体里各部件自己的 `renderOrder` 保留为槽内的细分（`viewport ± clamp(自身, 100) × 1e-3`，不越过相邻的 rim 与前景图片）；部件的 `userData.noShadow = true` 时不投影（底板、文字平面这类薄片不应投出方块阴影），Surface 的 `castShadows` 关时一律不投影。
 - **淡出**：attach 时记下每个材质原有的 `opacity` 与 `transparent`，每帧以 原值 × `surface.opacity` 写回；detach 时恢复原值。
 - **光照与阴影**：物体在 UI 场景里，受 UI 灯光照射；`castShadow` 打开，投影落在背板与 Card 上。阴影相机的拟合范围把 `depth` 算进去。
 - **命中**：射线同时测试内容 quad 与已挂物体（递归），取最近者。命中挂载物体时，事件派发给挂载的节点，事件对象多一个 `object`（命中的 Object3D；在 core 里类型为 `unknown`）。节点的悬停范围是"盒子区域 ∪ 物体"：射线落在物体上，即使它在内容面上的投影已出了盒子，也仍算在节点内；`pointermove` 每次带上当前的 `object`（落在盒子空白处时缺省）。
