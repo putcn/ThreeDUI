@@ -1,6 +1,6 @@
 import { it, expect, vi } from 'vitest'
 import { h, nextTick, ref } from '@vue/runtime-core'
-import { absoluteRect, defaultTheme, resolveColor, resolveTextStyle } from '@glassui/core'
+import { absoluteRect, defaultTheme, hitTest, resolveColor, resolveTextStyle } from '@glassui/core'
 import { glassComponents } from '../src/define'
 import { Input } from '../src/components/Input'
 import { Surface } from '../src/components/Surface'
@@ -8,11 +8,17 @@ import { Icon } from '../src/components/Icon'
 import { controlStyle } from '../src/control'
 import { withAlpha } from '../src/colors'
 import { iconCanvas } from '../src/icons'
-import { createFakeRoot, flush } from './fixtures/fake-root'
+import { createFakeRoot, flush, type FakeSurface } from './fixtures/fake-root'
 import { CW } from './fixtures/fake-text'
 import { all, first, mountGlass, mountInSurface, napiCanvas, part, parts } from './fixtures/mount'
 import { fire } from './fixtures/events'
 import { byId } from './fixtures/tree'
+
+/** The `part` of the node the pointer at (x, y) lands on in `s` (its own, or the nearest ancestor's that has one). */
+function hitPart(s: FakeSurface, x: number, y: number): unknown {
+  for (let n = hitTest(s.root, x, y); n; n = n.parent) if (n.props.part !== undefined) return n.props.part
+  return null
+}
 
 // ── the brief's tests ──
 
@@ -439,4 +445,77 @@ it('is registered with complete manifest metadata; a wrong prop is a readable er
   expect(Object.keys(m.events!)).toEqual(['update:modelValue', 'submit', 'focus', 'blur']); expect(Object.keys(m.slots!)).toEqual(['leading', 'trailing'])
   expect(mountGlass(() => h(Input, { type: 'email' })).errors[0]).toMatch(/\[Input\.type\].*你可能想要：text$/)
   expect(mountGlass(() => h(Input, { label: '邮箱' })).errors[0]).toMatch(/\[Input\] 未知属性 "label"/)
+})
+
+// ── fix round 1 ──
+
+it('V1: a double-click on an unfocused Input selects the word, through the tracker and click-to-focus; the field\'s parts never take the pointer', async () => {
+  for (const at of [8, 8.05, 6]) {                              // on boundaries, where the first click's caret appears under the pointer
+    const { c, root, surface: s } = mountInSurface(() => h(Input, { modelValue: 'hello world', style: { width: 300 } }))
+    const r = absoluteRect(part(c, 'field')), x = r.x + at * CW, y = r.y + 5
+    const click = () => { s.pointer.down(x, y); s.focus.focusFromPointer(s.pointer.pressed); s.pointer.up(x, y) }   // as the render's bridge
+    click(); await nextTick(); root.tick()
+    expect(s.focus.current).toBe(first(c, 'glass')); expect(root.ime.active).toMatchObject({ selectionStart: Math.round(at), selectionEnd: Math.round(at) })
+    expect(hitPart(s, x, y)).toBe('field')                      // the caret just placed under the pointer does not take the hit
+    click(); await nextTick()
+    expect(root.ime.active, `at ${at}`).toMatchObject({ selectionStart: 6, selectionEnd: 11 })
+    expect(root.ime.synced.at(-1)).toMatchObject({ selectionStart: 6, selectionEnd: 11 })
+  }
+  // the selection panel and a composition's underline do not take it either
+  const { c, root, surface: s } = mountInSurface(() => h(Input, { modelValue: 'hello world', style: { width: 300 } }))
+  s.focus.focus(first(c, 'glass')); await nextTick()
+  root.ime.active!.onChange({ value: 'hello world', selectionStart: 0, selectionEnd: 5, composition: null }); await nextTick(); root.tick()
+  const r = absoluteRect(part(c, 'field'))
+  expect(hitPart(s, r.x + 2 * CW, r.y + 5)).toBe('field')
+  root.ime.active!.onChange({ value: 'hello worldni', selectionStart: 13, selectionEnd: 13, composition: { start: 11, end: 13 } }); await nextTick(); root.tick()
+  expect(hitPart(s, r.x + 12 * CW, r.y + 22 - 1)).toBe('field')
+})
+it('M1: an outside change during a composition whose commit is refused is applied then, and the next keystroke is the user\'s', async () => {
+  const v = ref<number | null>(1)
+  const { c, root, surface } = mountInSurface(() => h(Input, { type: 'number', modelValue: v.value, 'onUpdate:modelValue': (x: number | null) => { v.value = x } }))
+  surface.focus.focus(first(c, 'glass')); await nextTick()
+  root.ime.fromProxy({ value: '1n', selectionStart: 2, selectionEnd: 2, composition: { start: 1, end: 2 } }); await nextTick()
+  v.value = 5; await nextTick()                                  // the app sets it while the IME composes
+  expect(part(c, 'text').props.value).toBe('1')
+  root.ime.fromProxy({ value: '1你', selectionStart: 2, selectionEnd: 2, composition: null }); await nextTick()   // refused (not a number)
+  expect(part(c, 'text').props.value).toBe('5'); expect(root.ime.synced.at(-1)).toMatchObject({ value: '5', selectionStart: 1, selectionEnd: 1 })
+  root.ime.fromProxy({ value: '56', selectionStart: 2, selectionEnd: 2, composition: null }); await nextTick()
+  expect(v.value).toBe(56); expect(part(c, 'text').props.value).toBe('56')
+})
+it('M2: the clear button does nothing while the IME composes (the proxy would keep its text); after the commit it clears', async () => {
+  const v = ref('abc')
+  const { c, root, surface } = mountInSurface(() => h(Input, { clearable: true, modelValue: v.value, 'onUpdate:modelValue': (x: string) => { v.value = x } }))
+  surface.focus.focus(first(c, 'glass')); await nextTick()
+  root.ime.fromProxy({ value: 'abcni', selectionStart: 5, selectionEnd: 5, composition: { start: 3, end: 5 } }); await nextTick()
+  const synced = root.ime.synced.length
+  fire(part(c, 'clear'), 'click'); await nextTick()
+  expect(part(c, 'text').props.value).toBe('abcni'); expect(v.value).toBe('abc'); expect(root.ime.synced).toHaveLength(synced)
+  root.ime.fromProxy({ value: 'abcnih', selectionStart: 6, selectionEnd: 6, composition: { start: 3, end: 6 } })
+  root.ime.fromProxy({ value: 'abc你好', selectionStart: 5, selectionEnd: 5, composition: null }); await nextTick()
+  expect(v.value).toBe('abc你好')
+  fire(part(c, 'clear'), 'click'); await nextTick()
+  expect(v.value).toBe(''); expect(root.ime.synced.at(-1)).toMatchObject({ value: '', selectionStart: 0, selectionEnd: 0 })
+})
+it('M6: an outside value is shown as an edit would leave it: on one line, held to maxLength, a number field\'s format', async () => {
+  const v = ref<string | number | null>('one\ntwo')
+  const { c, root, surface } = mountInSurface(() => h(Input, { maxLength: 5, modelValue: v.value }))
+  expect(part(c, 'text').props.value).toBe('one t')
+  surface.focus.focus(first(c, 'glass')); await nextTick()
+  v.value = 'a\r\nb'; await nextTick()
+  expect(part(c, 'text').props.value).toBe('a b'); expect(root.ime.synced.at(-1)).toMatchObject({ value: 'a b', selectionStart: 3, selectionEnd: 3 })
+  const n = ref<unknown>(1e21)
+  const m = mountInSurface(() => h(Input, { type: 'number', modelValue: n.value as number }))
+  expect(part(m.c, 'text').props.value).toBe('1000000000000000000000')
+  n.value = '１２。５'; await nextTick(); expect(part(m.c, 'text').props.value).toBe('12.5')
+  n.value = 'abc'; await nextTick(); expect(part(m.c, 'text').props.value).toBe('')
+})
+it('M7: one composing flag: a press or double-click while the IME composes text a number field refused is ignored too', async () => {
+  const { c, root, surface } = mountInSurface(() => h(Input, { type: 'number', modelValue: 12, style: { width: 300 } }))
+  surface.focus.focus(first(c, 'glass')); await nextTick(); root.tick()
+  root.ime.fromProxy({ value: '12n', selectionStart: 3, selectionEnd: 3, composition: { start: 2, end: 3 } }); await nextTick()
+  expect(parts(c, 'composition')).toEqual([])                   // refused: nothing composing shows, yet the IME composes
+  const f = root.ime.active!
+  fire(part(c, 'field'), 'pointerdown', { localX: 0, localY: 5 })
+  fire(part(c, 'field'), 'dblclick', { localX: 0, localY: 5 })
+  expect([f.selectionStart, f.selectionEnd]).toEqual([2, 2])
 })

@@ -107,7 +107,9 @@ const PROXY_ATTRS: readonly (readonly [string, string])[] = [
  *   detaches the field and calls `ImeField.onBlur`. A window or tab switch does not: the page keeps the proxy as its
  *   `activeElement` and focuses it again on return, so the field stays active (as a native input stays focused). Page
  *   code that focuses another element while the window is in the background sends no second blur: `reposition` (every
- *   tick) finds the page focused (`hasFocus`) on an element that is not the proxy, and lets the field go the same way.
+ *   tick) finds the page focused (`hasFocus`) on an element that is not the proxy, and lets the field go the same way —
+ *   once the proxy has held the page focus since the field's `focus`: an engine may ignore a `focus()` that carries no
+ *   user activation (a touch's `pointerdown`), and the field waits for the one its tap's click makes.
  * - A composition cut short (`blur`, an outside blur, another field or element taking over) is reported over: the
  *   field's last `ImeState` has `composition: null`. The report comes once the bridge has let the field go (or taken
  *   the next one), so a field whose `onChange` throws finds the bridge consistent; `onBlur` follows it even then.
@@ -125,6 +127,8 @@ export class ImeBridge {
   private proxy: TextareaLike | null = null
   private tag: 'textarea' | 'input' = 'textarea'
   private composing = false
+  /** The proxy has held the page focus since the active field's `focus` (only then can losing it be leaving). */
+  private held = false
   private compStart = 0
   private compEnd = 0
   /** The active field's last projected caret height (CSS px): used while the caret's bottom cannot be projected. */
@@ -184,6 +188,7 @@ export class ImeBridge {
     this.field = field
     this.place(field, el)   // not `reposition`: the proxy takes the page focus only below
     el.focus({ preventScroll: true })
+    this.held = this.doc.activeElement === el
     this.opts.pointer?.setActive(field.surface)
     if (cut && left) left.onChange(cut)
   }
@@ -211,12 +216,14 @@ export class ImeBridge {
   /**
    * Re-place the proxy at the active caret (the root calls this every tick while a field is active). A caret top that
    * cannot be projected (behind the camera) leaves the proxy where it is; a bottom that cannot keeps the last height.
-   * The page focused (`hasFocus`) on another element than the proxy is leaving: the field is let go (see the class doc).
+   * The page focused (`hasFocus`) on another element than the proxy, once the proxy has held the page focus, is leaving:
+   * the field is let go (see the class doc).
    */
   reposition(): void {
     const f = this.field, el = this.proxy
     if (!f || !el) return
-    if (this.doc.activeElement !== el && this.doc.hasFocus?.() === true) { this.leave(f); return }
+    if (this.doc.activeElement === el) this.held = true
+    else if (this.held && this.doc.hasFocus?.() === true) { this.leave(f); return }
     this.place(f, el)
   }
 

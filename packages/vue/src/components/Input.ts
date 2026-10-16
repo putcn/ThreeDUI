@@ -8,7 +8,7 @@ import { controlStyle, useGlassControl } from '../control'
 import { defineGlassComponent } from '../define'
 import { ICON_ALIASES, ICON_NAMES, type IconName } from '../icons'
 import { useMotion, useRoot, useScheme, useSurfaceRef, useTheme } from '../inject'
-import { filterNumber, fitLength, mask, oneLine, parseNumber, scrollToShow, wordAt } from '../textedit'
+import { filterNumber, fitLength, mask, oneLine, parseNumber, scrollToShow, textOf, wordAt } from '../textedit'
 import { Icon } from './Icon'
 
 type Size = 'small' | 'regular' | 'large'
@@ -46,6 +46,12 @@ const CONTROL = controlStyle()
 /** The clear and eye buttons: fainter under the pointer. */
 const BUTTON: Style = { flexShrink: 0, alignItems: 'center', justifyContent: 'center', transition: { opacity: 'snappy' }, hover: { opacity: 0.7 } }
 
+/**
+ * The field's parts take no pointer: a press anywhere on the field is the field's, so a part that appears under the
+ * pointer (the caret the first click of a double click places) never takes the second click from it.
+ */
+const PART: Style = { position: 'absolute', pointerEvents: 'none' }
+
 /** The caret: its own component, so its blink re-renders it alone. `stamp` changing shows it solid and restarts the blink. */
 const Caret = defineComponent({
   name: 'InputCaret',
@@ -61,13 +67,10 @@ const Caret = defineComponent({
     onBeforeUnmount(stop)
     return () => h('box', {
       part: 'caret',
-      style: { position: 'absolute', left: props.x, top: props.top, width: CARET.width, height: props.height, bg: 'accent', radius: 1, opacity: on.value ? 1 : 0 },
+      style: { ...PART, left: props.x, top: props.top, width: CARET.width, height: props.height, bg: 'accent', radius: 1, opacity: on.value ? 1 : 0 },
     })
   },
 })
-
-/** A model value as the field's text. */
-const format = (m: unknown): string => typeof m === 'string' ? m : typeof m === 'number' && Number.isFinite(m) ? String(m) : ''
 
 export const Input = defineGlassComponent({
   name: 'Input',
@@ -116,7 +119,9 @@ export const Input = defineGlassComponent({
   const hover = useGlassControl(el, { disabled: inert, onActivate: () => {} }).handlers
 
   // ── the field's state: its text, the selection, the IME's composition range, the horizontal scroll ──
-  const text = ref(format(valid.value?.modelValue)), sel = shallowRef<Selection>([text.value.length, text.value.length])
+  /** A model value as the field shows it (one line, `maxLength`, a number's text): as an edit would leave it. */
+  const fromModel = (m: unknown): string => textOf(m, kind.value, valid.value?.maxLength)
+  const text = ref(fromModel(valid.value?.modelValue)), sel = shallowRef<Selection>([text.value.length, text.value.length])
   const comp = shallowRef<Composition | null>(null), scrollX = ref(0)
   /** Focused: the caret shows and the IME bridge has the field. */
   const editing = ref(false)
@@ -132,8 +137,12 @@ export const Input = defineGlassComponent({
    * and its composition).
    */
   let leaving = false
-  /** The text and selection before the running composition: what a refused commit goes back to. */
-  let before: { text: string; sel: Selection } | null = null
+  /**
+   * The IME is composing: the last report carried a composition, shown or refused (a number field's letters). Holds the
+   * text and selection from before it, what a refused commit goes back to; null outside a composition. The one flag a
+   * press, a double click, the clear button and an outside change of the model go by.
+   */
+  let composing: { text: string; sel: Selection } | null = null
   /** The text the model stands for (as given, or as last emitted). */
   let modelText = text.value
   /** The model changed from outside while the IME composed: it is applied when the composition ends. */
@@ -157,9 +166,8 @@ export const Input = defineGlassComponent({
   const caretX = computed(() => xAt(sel.value[1]))
   const selRects = computed(() => { const [a, b] = sel.value; return a < b ? root.text.selectionRects(run.value, undefined, a, b) : [] })
 
-  const numeric = (m: unknown): number | null => typeof m === 'number' ? (Number.isFinite(m) ? m : null) : typeof m === 'string' ? parseNumber(m) : null
   /** Whether the model `m` stands for the text `t` (a number field's `1.` is the model 1). */
-  const matches = (t: string, m: unknown): boolean => kind.value === 'number' ? parseNumber(t) === numeric(m) : t === format(m)
+  const matches = (t: string, m: unknown): boolean => kind.value === 'number' ? parseNumber(t) === parseNumber(fromModel(m)) : t === fromModel(m)
   /** The text as the model's value. */
   const out = (t: string): string | number | null => kind.value === 'number' ? parseNumber(t) : t
 
@@ -197,9 +205,9 @@ export const Input = defineGlassComponent({
   }
   /** The proxy's state after an edit: one line, a number's characters and `maxLength` first; a refused edit goes back. */
   function apply(s: ImeState): void {
-    if (s.composition && !before) before = { text: text.value, sel: sel.value }   // a composition starts
-    const base = before ?? { text: text.value, sel: sel.value }
-    if (!s.composition) before = null
+    if (s.composition && !composing) composing = { text: text.value, sel: sel.value }   // a composition starts
+    const base = composing ?? { text: text.value, sel: sel.value }
+    if (!s.composition) composing = null
     const v = valid.value
     let t: ImeState | null = oneLine(s)
     if (t && kind.value === 'number') {
@@ -208,7 +216,8 @@ export const Input = defineGlassComponent({
     }
     // a native maxlength holds at the commit, not while the IME composes
     if (t && v?.maxLength !== undefined && !t.composition) t = fitLength(base.text, t, v.maxLength)
-    if (!t) { set(base.text, base.sel, null); push(); return }
+    // refused: back to the text before; at a composition's end an outside change made meanwhile is applied now
+    if (!t) { set(base.text, base.sel, null); push(); if (!s.composition) commit(); return }
     set(t.value, [t.selectionStart, t.selectionEnd], t.composition)
     if (t !== s) push()
     if (!t.composition) commit()
@@ -246,7 +255,7 @@ export const Input = defineGlassComponent({
     editing.value = false; dragging = false
     const b = bridge; bridge = null
     b?.blur(field)
-    before = null; outside = false; comp.value = null
+    composing = null; outside = false; comp.value = null
     follow()
   }
   /** A blur that waited for the update: unless focused again meanwhile, editing ends. */
@@ -260,8 +269,8 @@ export const Input = defineGlassComponent({
   // an outside change of the model: the field takes it (the caret at its end), or after the running composition
   watch(() => valid.value?.modelValue, m => {
     if (matches(modelText, m)) return   // what was emitted, coming back
-    modelText = format(m)
-    if (before) { outside = true; return }
+    modelText = fromModel(m)
+    if (composing) { outside = true; return }
     set(modelText, [modelText.length, modelText.length], null); push()
   })
   // a new kind needs the other proxy element (a password's); the bridge swaps it
@@ -299,7 +308,7 @@ export const Input = defineGlassComponent({
     onClick(e: UIEvent) {
       const tap = tapFocus && e.pointerType === 'touch'
       tapFocus = false
-      if (tap && editing.value && !comp.value && bridge) { bridge.blur(field); bridge.focus(field) }
+      if (tap && editing.value && !composing && bridge) { bridge.blur(field); bridge.focus(field) }
     },
     onPointerenter: hover.onPointerenter,
     onPointerleave: hover.onPointerleave,
@@ -316,13 +325,13 @@ export const Input = defineGlassComponent({
   }
   const onField = {
     onPointerdown(e: UIEvent) {
-      if (inert.value || comp.value) return   // mid-composition a press leaves the IME's text alone
+      if (inert.value || composing) return   // mid-composition a press leaves the IME's text alone
       const i = indexAt(e.localX, e.localY)
       anchor = i; dragging = e.pointerType !== 'touch'   // a finger places the caret; it does not drag-select
       select(i, i)
     },
     onDblclick(e: UIEvent) {
-      if (inert.value || comp.value) return
+      if (inert.value || composing) return
       if (kind.value === 'password' && !revealed.value) { select(0, text.value.length); return }   // no words in bullets
       // the character under the pointer (the caret index is the nearest boundary)
       const i = indexAt(e.localX, e.localY), at = i > 0 && xAt(i) > e.localX + scrollX.value ? i - 1 : i
@@ -330,7 +339,8 @@ export const Input = defineGlassComponent({
       select(a, b)
     },
   }
-  const clear = (): void => { set('', [0, 0], null); push(); commit() }
+  // mid-composition the proxy keeps the IME's text (it refuses a sync): the click is ignored, as a press on the field is
+  const clear = (): void => { if (composing) return; set('', [0, 0], null); push(); commit() }
   const toggleEye = (): void => { revealed.value = !revealed.value; follow() }
 
   return () => {
@@ -349,16 +359,16 @@ export const Input = defineGlassComponent({
     const parts: VNode[] = []
     if (on && a < b) {
       const bg = withAlpha('accent', 0.25, t, scheme.value)
-      selRects.value.forEach((r, i) => parts.push(h('box', { key: `selection${i}`, part: 'selection', style: { position: 'absolute', left: r.x - sx, top: r.y, width: r.width, height: r.height, bg } })))
+      selRects.value.forEach((r, i) => parts.push(h('box', { key: `selection${i}`, part: 'selection', style: { ...PART, left: r.x - sx, top: r.y, width: r.width, height: r.height, bg } })))
     }
     parts.push(h('text', {
       key: 'text', part: 'text', value: empty ? v.placeholder ?? '' : shown.value,
       // `0 - sx`: no −0 at the start
-      style: { position: 'absolute', left: 0 - sx, top: 0, fontSize: size.font, fontWeight: WEIGHT, lineHeight: LINE, wrap: false, maxLines: 1, color: empty ? 'tertiaryLabel' : 'label' },
+      style: { ...PART, left: 0 - sx, top: 0, fontSize: size.font, fontWeight: WEIGHT, lineHeight: LINE, wrap: false, maxLines: 1, color: empty ? 'tertiaryLabel' : 'label' },
     }))
     if (c) {
       const x0 = xAt(c.start), x1 = xAt(c.end)
-      parts.push(h('box', { key: 'composition', part: 'composition', style: { position: 'absolute', left: x0 - sx, top: lh - UNDERLINE, width: x1 - x0, height: UNDERLINE, bg: 'label' } }))
+      parts.push(h('box', { key: 'composition', part: 'composition', style: { ...PART, left: x0 - sx, top: lh - UNDERLINE, width: x1 - x0, height: UNDERLINE, bg: 'label' } }))
     }
     if (on && a === b) parts.push(h(Caret, { key: 'caret', x: caretX.value - sx, top: (lh - CARET.height * lh) / 2, height: CARET.height * lh, stamp: stamp.value, live }))
     const dot = Math.round(size.icon * 0.82)

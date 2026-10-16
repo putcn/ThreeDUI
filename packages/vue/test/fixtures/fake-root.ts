@@ -128,6 +128,11 @@ export interface FakeBarMatrix {
  * field's state in `synced` (composition always null, as the proxy holds none of the app's). `placed` is where the proxy
  * would sit, the active caret's top through the root's `screenFromPoint`: set by `focus` and `reposition`, which the
  * fake root's `tick` calls while a field is active, as the real root does.
+ *
+ * `fromProxy(s)` is the proxy's own report, as the real bridge sends it: it hands `s` to the active field and, like the real
+ * bridge, the proxy is `imeComposing` while `s` has a composition. A composing proxy refuses `sync` (nothing recorded, as
+ * the real bridge leaves an IME's text alone); `focus` of another field and `blur` end it. A test that calls a field's
+ * `onChange` itself composes nothing here.
  */
 export interface FakeIme {
   active: ImeField | null
@@ -135,10 +140,13 @@ export interface FakeIme {
   readonly synced: ImeState[]
   readonly blurred: ImeField[]
   placed: { x: number; y: number } | null
+  /** (Not `composing` or `report`: the real bridge's private members of those names would make the intersection `never`.) */
+  imeComposing: boolean
   focus(f: ImeField): void
   blur(f: ImeField): void
   sync(f: ImeField): void
   reposition(): void
+  fromProxy(s: ImeState): void
 }
 
 export interface FakeRoot extends GlassRoot {
@@ -181,11 +189,12 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
   const listeners = new Map<string, Set<(e: never) => void>>()
   const screenFromPoint = (s: Surface, x: number, y: number): { x: number; y: number } => ({ x: x + s.position.x, y: y + s.position.y })
   const ime: FakeIme = {
-    active: null, focused: [], synced: [], blurred: [], placed: null,
-    focus(f) { this.active = f; this.focused.push(f); this.reposition() },
-    blur(f) { this.blurred.push(f); if (this.active === f) this.active = null },
-    sync(f) { this.synced.push({ value: f.value, selectionStart: f.selectionStart, selectionEnd: f.selectionEnd, composition: null }) },
+    active: null, focused: [], synced: [], blurred: [], placed: null, imeComposing: false,
+    focus(f) { if (f !== this.active) this.imeComposing = false; this.active = f; this.focused.push(f); this.reposition() },
+    blur(f) { this.blurred.push(f); if (this.active === f) { this.active = null; this.imeComposing = false } },
+    sync(f) { if (f === this.active && this.imeComposing) return; this.synced.push({ value: f.value, selectionStart: f.selectionStart, selectionEnd: f.selectionEnd, composition: null }) },
     reposition() { const f = this.active; if (!f) return; const c = f.caret(); this.placed = screenFromPoint(f.surface, c.x, c.y) },
+    fromProxy(s) { this.imeComposing = s.composition !== null; this.active?.onChange(s) },
   }
 
   const make = (o: CreateSurfaceOptions): FakeSurface => {

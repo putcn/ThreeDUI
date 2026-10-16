@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filterNumber, fitLength, mask, oneLine, parseNumber, scrollToShow, wordAt } from '../src/textedit'
+import { filterNumber, fitLength, mask, oneLine, parseNumber, scrollToShow, textOf, wordAt } from '../src/textedit'
 
 describe('filterNumber', () => {
   it.each([
@@ -99,5 +99,21 @@ describe('fitLength', () => {
     expect(fitLength('abcd', st('abcdX'), 4)).toBeNull()
     expect(fitLength('ab', st('ab😀'), 3)).toBeNull()
     expect(fitLength('ab', st('abc😀'), 4)).toEqual(st('abc'))
+  })
+})
+
+describe('textOf', () => {
+  it('a model value as a field shows it: on one line, held to maxLength (never splitting a surrogate pair)', () => {
+    expect(textOf('a\r\nb\nc', 'text')).toBe('a b c')
+    expect(textOf('abcdef', 'text', 4)).toBe('abcd')
+    expect(textOf('abc😀', 'password', 4)).toBe('abc')
+    expect(textOf(42, 'text')).toBe('42'); expect(textOf(null, 'text')).toBe(''); expect(textOf(undefined, 'text')).toBe('')
+  })
+  it('a number field\'s format: a number as plain decimals, a string only as far as it is a number', () => {
+    expect(textOf(2.5, 'number')).toBe('2.5'); expect(textOf(-0.25, 'number')).toBe('-0.25')
+    expect(textOf(1e21, 'number')).toBe('1000000000000000000000'); expect(textOf(1e-7, 'number')).toBe('0.0000001')
+    expect(textOf(Number.NaN, 'number')).toBe(''); expect(textOf(null, 'number')).toBe('')
+    expect(textOf(' 12 ', 'number')).toBe('12'); expect(textOf('１２。５', 'number')).toBe('12.5'); expect(textOf('12a', 'number')).toBe('')
+    expect(textOf(123456, 'number', 4)).toBe('1234')
   })
 })

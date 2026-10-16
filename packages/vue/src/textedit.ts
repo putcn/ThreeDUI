@@ -1,4 +1,4 @@
-import type { ImeState } from '@glassui/render'
+import type { ImeField, ImeState } from '@glassui/render'
 
 /**
  * Pure text-editing helpers for `<Input>`. Indices are UTF-16 code units (the proxy's `selectionStart` / `End`, a
@@ -100,4 +100,23 @@ export function fitLength(prev: string, s: ImeState, max: number): ImeState | nu
   if (keep === 0) return null
   const caret = head + keep
   return { value: next.slice(0, caret) + next.slice(next.length - tail), selectionStart: caret, selectionEnd: caret, composition: null }
+}
+
+/** A number as a field shows it: plain decimals (`String` writes 1e21 and 1e-7 with an exponent). */
+const decimal = (n: number): string => {
+  const s = String(n)
+  return s.includes('e') ? n.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 20 }) : s
+}
+
+/**
+ * A model value as a field of `kind` shows it, as an edit would have left it: on one line (each line break a space), a
+ * number field's as a number's text (a finite number in plain decimals; a string only when it is one, the IME's
+ * full-width forms taken; anything else empty), held to `maxLength` code units (never splitting a surrogate pair).
+ */
+export function textOf(model: unknown, kind: ImeField['kind'], maxLength?: number): string {
+  let t: string
+  if (kind === 'number') t = typeof model === 'number' ? (Number.isFinite(model) ? decimal(model) : '') : typeof model === 'string' ? filterNumber('', model.trim()) ?? '' : ''
+  else t = (typeof model === 'string' ? model : typeof model === 'number' && Number.isFinite(model) ? String(model) : '').replace(/\r\n|[\r\n]/g, ' ')
+  if (maxLength === undefined || t.length <= maxLength) return t
+  return t.slice(0, maxLength > 0 && isHigh(t.charCodeAt(maxLength - 1)) ? maxLength - 1 : maxLength)
 }

@@ -356,6 +356,22 @@ describe('ImeBridge', () => {
     expect(changes.at(-1)).toMatchObject({ value: 'abcn', composition: null })
     expect(ta.value).toBe('')
   })
+  it('a proxy that never took the page focus (a touch press: no activation) is not let go by reposition until it has (M5)', () => {
+    const { bridge, doc, field, blurs } = setup()
+    const d = Object.assign(doc, { hasFocus: () => true }), make = d.createElement.bind(d)
+    let honour = false                                           // an engine that ignores a focus() without user activation
+    d.createElement = (tag: string) => { const t = make(tag), own = t.focus; t.focus = () => { if (honour) own() }; return t }
+    d.activeElement = { other: true }
+    bridge.focus(field)                                          // from the touch pointerdown: ignored
+    const ta = d.created[0]!
+    expect(d.activeElement).not.toBe(ta)
+    bridge.reposition(); bridge.reposition()                     // ticks before the tap's click: still the field's
+    expect(bridge.active).toBe(field); expect(blurs).toEqual([])
+    honour = true; bridge.blur(field); bridge.focus(field)       // the tap's click (an activation): focused again
+    expect(d.activeElement).toBe(ta); bridge.reposition(); expect(bridge.active).toBe(field)
+    d.activeElement = { other: true }; bridge.reposition()       // it held the focus once: losing it now is leaving
+    expect(bridge.active).toBeNull(); expect(blurs).toEqual([1])
+  })
   it('focus places the proxy while another element still has the page focus, and does not take that for leaving (N3)', () => {
     const { bridge, doc, field, blurs } = setup()
     const d = Object.assign(doc, { hasFocus: () => true }); d.activeElement = { other: true }
