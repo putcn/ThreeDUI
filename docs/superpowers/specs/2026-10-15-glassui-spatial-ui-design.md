@@ -52,7 +52,7 @@ surface.restPose: Required<SurfacePose>        // 当前动画的终点；没有
 - 每个通道（位置、旋转、缩放、不透明度）各自一根弹簧，由 `root.tick` 推进。默认弹簧 `{ response: 0.55, dampingFraction: 0.86 }`；`spring` 接受核心 spec §4.4 的全部写法（主题预设、`response/dampingFraction`、刚度/阻尼）。
 - 新的 `animateTo` 只改它提到的通道的目标，保留这些通道的当前速度（弹簧连续）。旧调用的 Promise：若有通道被改了目标，以 `false` 结束；否则在它的通道全部停稳时以 `true` 结束。旋转按四元数插值（取短弧）。
 - `immediate: true`、`root.anim.reducedMotion` 为真时：直接写到终点，下一次 `tick` 以 `true` 结束。Surface 已销毁（或 `error` 已置位）：立刻以 `false` 结束（同 Plan 3 账本里 GlassTransition 对"死 Surface"的裁定）。
-- 不透明度作用于该 Surface 的全部绘制：内容 quad、背板 slab、元素玻璃、rim、前景文字与图片、挂在它上面的 3D 物体（§2.3）。阴影落在它自己的内容面上，随内容面一起淡出，不另做处理。
+- 不透明度作用于该 Surface 的全部绘制：内容 quad、背板 slab、元素玻璃、rim、前景文字与图片、挂在它上面的 3D 物体（§2.3）。阴影也随之变淡：玻璃投出的阴影强度乘以这个不透明度（叠在一起的 Block 共用一张阴影贴图，阴影会落到别的 Block 上），动画进行时每帧重绘阴影贴图。
 - 不透明度 < 1 时，这个 Surface 的绘制关闭深度写入（淡出中的 Block 不能在后画的东西上打出"洞"）；= 1 时恢复。
 - 不透明度 = 0 时该 Surface 不绘制、不做屏幕捕获、不参与命中（`layer.visible = false`）。
 - **不在视野内的 Surface 跳过**：投影多边形完全落在视口外时，本帧不绘制、不做屏幕捕获；内容脏标记保留，重新进入视野时补画。
