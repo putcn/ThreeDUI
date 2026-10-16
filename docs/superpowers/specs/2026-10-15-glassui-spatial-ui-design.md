@@ -122,7 +122,7 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 |---|---|---|---|
 | `Space` | 空间容器：排布 Block、持有镜头 rig、管理焦点 | `focus?: string`（`v-model:focus`；省略时取第一个出现的 Block），`radius?: number`（弧半径，世界单位，默认 7），`gap?: number`（相邻 Block 间隔，默认 0.5），`camera?: boolean`（默认 true；false 时只排布与管理焦点，不动相机），`parallax?: boolean`（默认 true） | `update:focus`；默认插槽只放 `Block`（`v-if`/`v-for` 照常可用）。没绑定 `focus` 时 Space 自己记住焦点，点击非焦点 Block 照样切换 |
 | `Block` | 一块玻璃背板的世界层 Surface，装一个界面 | `name: string`（必填，Space 内唯一），`width: number`、`height: number`（pt），`position?`、`rotation?`、`scale?`（同 `Surface`），`radius?: number`（默认 48），`background?: 'glass' \| string`（默认 `'glass'`），`ptPerUnit?: number`（默认 244），`enterFrom?`、`leaveTo?`（`SurfacePose` 形状的偏移，见 §3.3） | `error`；默认插槽；`style`/`tw`/`class` 落到内层内容盒（默认纵向排列、`padding: 40`、`gap: 24`） |
-| `Card` | Block 内的分组容器：更薄的玻璃，圆角与 Block 同心 | `title?: string`（17 pt、600 字重的标题） | 默认插槽；`style`/`tw`/`class` 落到 Card 本身（默认 `bg: 'glass'`、`radius: 'concentric'`、`padding: 24`、`gap: 12`，玻璃厚度 12 pt：主题的默认厚度是短边的比例，大卡片会厚到 60 pt） |
+| `Card` | Block 内的分组容器：更薄的玻璃 | `title?: string`（17 pt、600 字重的标题） | 默认插槽；`style`/`tw`/`class` 落到 Card 本身（默认 `bg: 'glass'`、`radius: 'xl'`（24 pt）、`padding: 24`、`gap: 12`，玻璃厚度 12 pt：主题的默认厚度是短边的比例，大卡片会厚到 60 pt）。不用 `'concentric'`：它只认直接父节点，放在 Block 里是 48 − 40 = 8 pt、放在一行 Stack 里是 0，都显得方（9F 截图检查的裁定） |
 | `Viewport3D` | 通用 3D 插槽：一个布局盒，挂一个 three 物体 | `object: unknown`（一个 `Object3D`），`depth?: number`，`update?: (dt, ctx) => boolean` | `pointerenter/leave/move`、`click`（事件带 `object`） |
 | `BarChart3D` | 内置 3D 柱状图 | `data: { label: string; value: number; color?: string }[]`，`max?: number`（默认把最大值向上取到 1/2/5 × 10ⁿ），`format?: (v: number) => string`（默认最多两位小数） | `select`（点击某根柱子，payload `{ index, label, value }`） |
 
