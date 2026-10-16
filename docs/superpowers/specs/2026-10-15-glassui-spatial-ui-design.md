@@ -276,7 +276,7 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 ### 11.5 2D 折线图 `<LineChart>`（vue，9J）
 
 - props：`labels: string[]`（至少 2 个），`series: { name: string; data: number[]; color?: string }[]`（每条长度等于 `labels`），`height?: number`（默认 200），`format?: (v: number) => string`，`yMin?: number`（默认 0）。
-- 画法：Canvas2D 按 2 倍像素栅格化成一张图，放在一个 `image` 节点里：横向网格线与 y 轴刻度（3–5 个"好看"的刻度）、x 轴标签（最多 6 个，均匀抽取）、平滑曲线、曲线下的渐变面积、顶部图例。颜色 token 按当前主题与明暗解析，明暗切换时重画；宽度变化时重画。
+- 画法：Canvas2D 按 2 倍像素栅格化成一张图，放在一个 `image` 节点里：横向网格线与 y 轴刻度（3–6 个"好看"的刻度，步长 1/2/5 × 10ⁿ）、x 轴标签（最多 6 个，均匀抽取）、平滑曲线、曲线下的渐变面积、顶部图例。颜色 token 按当前主题与明暗解析，明暗切换时重画；宽度变化时重画。
 - 悬停：最近的 x 处画一条竖直准线，旁边浮出一块平面面板，列出各系列在该点的 `format` 值。
 - 错误：系列长度与 `labels` 不一致、数值不是有限数 → `[LineChart.series] …`；`series` 为空 → 显示"暂无数据"。
 
