@@ -287,7 +287,7 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 ### 11.7 抬起的玻璃投下看得见的影子（render + core，9L）
 
 - 9I 之后的检查发现：Card 浮起 24 pt，但看不到投影。VSM 阴影落在内容 quad 上，而玻璃 Block 背板上空着的地方内容 quad 是透明的，玻璃 slab 本身不接收阴影。浮起是最强的深度线索，必须看得见。
-- 做法：每个 `elevation > 0` 的玻璃元素在内容 RT 里画一块柔和的投影贴片（新的装饰种类 `shadow`），位置是元素形状沿主光方向偏移：偏移（pt）= `elevation × (−lₓ/l_z, l_y/l_z)`（l 是主光在该 Surface 坐标系里的方向，y 向下为正），每个分量限制在 1.5 × elevation 以内；模糊半径 4 + 0.5 × elevation；不透明度浅色 0.22、深色 0.35。
+- 做法：每个高出其所在面的玻璃元素（高度 = 合成 elevation 减去最近的玻璃祖先的顶面，即该祖先的 elevation + 厚度；没有玻璃祖先时就是合成 elevation；只在 > 0 时）在内容 RT 里画一块柔和的投影贴片（新的装饰种类 `shadow`），位置是元素形状沿主光方向偏移：偏移（pt）= `高度 × (−lₓ/l_z, l_y/l_z)`（l 是方向光的方向：主光位置减其 target，转到该 Surface 的坐标系，y 向下为正；所有 Surface 共用同一方向），每个分量限制在 1.5 × elevation 以内；模糊半径 4 + 0.5 × elevation；不透明度浅色 0.22、深色 0.35。
 - 投影只画在投射者自身轮廓之外，不压暗卡片自己的内容。它在背板上可见，透过卡片玻璃也能看到（折射）。
-- 光方向是 Surface 级的 uniform：方向变化使偏移改变超过 0.5 pt 时，该 Surface 的内容 RT 重画。灯光锚定后，视差不触发重画，只有焦点切换时的灯光过渡才会。
+- 光方向是 Surface 级的 uniform：方向变化使该 Surface 上最高的投影偏移改变超过 0.5 pt 时，内容 RT 重画。灯光锚定后，视差不触发重画，只有焦点切换时的灯光过渡才会。
 
