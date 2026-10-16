@@ -28,7 +28,7 @@ const across = (v: number, size: number): number => size > 0 ? Math.min(1, Math.
 
 export const Card = defineGlassComponent({
   name: 'Card',
-  description: 'Block 里的分组容器：一块更薄的玻璃（厚 12 pt），圆角 24 pt（主题的 xl），默认纵向排列、padding 24、gap 12，放在 Block 里、Stack 里都一样。它浮在背板上方 24 pt，在背板上投下真实的阴影；指针悬停时上浮到 40 pt 并朝指针倾斜（每个方向最多 4°），离开时回落。悬停只在焦点 Block 里有（非焦点 Block 的内容不接收指针），减少动态效果时只上浮、不倾斜。Block 进场时，里面的 Card 从 0 升到 24 pt，一起出现的按出现顺序每张晚 60 ms；motion 为 frozen 时直接就位。这些都是 Card 自带的，不用写什么。title 是排在最上面的标题（17 pt、600 字重）。style 落到 Card 本身，按键覆盖这些默认值（如 :style="{ flexGrow: 1, flexBasis: 0 }" 让几张 Card 平分一行，:style="{ padding: 16 }" 改内边距）；浮起与倾斜的动画手感也写在 style 的 transition 里（默认 { elevation: smooth, tilt: snappy }）。里面可以再放玻璃控件（按钮、输入框），它们按嵌套玻璃绘制。Card 自己就是玻璃，不用再包玻璃的 Box。',
+  description: 'Block 里的分组容器：一块更薄的玻璃（厚 12 pt），圆角 24 pt（主题的 xl），默认纵向排列、padding 24、gap 12，放在 Block 里、Stack 里都一样。它浮在背板上方 24 pt，在背板上投下真实的阴影；指针悬停时上浮到 40 pt 并朝指针倾斜（每个方向最多 4°），离开时回落。悬停只在焦点 Block 里有（非焦点 Block 的内容不接收指针），触屏没有悬停效果，减少动态效果时只上浮、不倾斜。Block 进场时，里面的 Card 从 0 升到 24 pt，一起出现的按出现顺序每张晚 60 ms；motion 为 frozen 时直接就位。这些都是 Card 自带的，不用写什么。title 是排在最上面的标题（17 pt、600 字重）。style 落到 Card 本身，按键覆盖这些默认值（如 :style="{ flexGrow: 1, flexBasis: 0 }" 让几张 Card 平分一行，:style="{ padding: 16 }" 改内边距）；浮起与倾斜的动画手感也写在 style 的 transition 里（默认 { elevation: smooth, tilt: snappy }）。里面可以再放玻璃控件（按钮、输入框），它们按嵌套玻璃绘制。Card 自己就是玻璃，不用再包玻璃的 Box。',
   props: z.object({
     title: z.string().optional().describe('标题，17 pt、600 字重，排在内容最上面；省略时没有标题'),
   }),
@@ -52,10 +52,12 @@ export const Card = defineGlassComponent({
   /** Back to rest: no tilt, the resting elevation. */
   const settle = (n: Node): void => { hovered = false; n.tilt = { x: 0, y: 0 }; n.elevation = CARD_DEPTH.rest }
   // up to the hover elevation, tilted so its face turns toward the pointer (the edge under it recedes: +tilt.y takes the
-  // right edge back and −tilt.x the top one, in the render's y-up frame); reduced motion lifts without tilting
+  // right edge back and −tilt.x the top one, in the render's y-up frame); reduced motion lifts without tilting. Only a
+  // mouse or a pen hovers (core spec §8.3): a finger dragging over a Card leaves it at rest, as the rig's parallax does
   const onPointermove = (e: UIEvent): void => {
     const n = box.value
     if (!n || (block && !block.focused.value)) return
+    if (e.pointerType !== 'mouse' && e.pointerType !== 'pen') return
     hovered = true
     n.elevation = CARD_DEPTH.hover
     const lx = across(e.localX, n.layout.width), ly = across(e.localY, n.layout.height), t = CARD_DEPTH.tilt

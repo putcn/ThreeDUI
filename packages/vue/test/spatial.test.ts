@@ -377,6 +377,30 @@ it('the manifest: Block no longer calls Card concentric, a one-Card Block is no 
   const block = meta('Block'), card = meta('Card')
   expect(block.description).not.toMatch(/同心/); expect((block.props.shape.radius as { description?: string }).description).not.toMatch(/Card 用 radius: concentric/)
   expect(JSON.stringify(card.mistakes)).not.toMatch(/整个 Block 的内容/)
-  expect(card.description).toMatch(/24 pt/); expect(card.description).toMatch(/40 pt/); expect(card.description).toMatch(/60 ms/); expect(card.description).toMatch(/减少动态效果/)
+  expect(card.description).toMatch(/24 pt/); expect(card.description).toMatch(/40 pt/); expect(card.description).toMatch(/60 ms/); expect(card.description).toMatch(/减少动态效果/); expect(card.description).toMatch(/触屏没有悬停效果/)
   expect(block.description).toMatch(/0\.96/)
+})
+
+// ── 9I fix round 1 ──
+
+it('touch has no hover: a finger over a focused Card neither lifts nor tilts it; a pen does, as a mouse', async () => {
+  const root = createFakeRoot()
+  mountGlass(() => h(Space, null, () => [h(Block, { name: 'a', width: 600, height: 400 }, () => [h(Card, { id: 'c', style: { width: 200, height: 100 } })])]), { root, motion: 'frozen' })
+  await flush(); root.tick()
+  const s = root.surfacesMade[0]!, c = byId(s.root, 'c')!, r = absoluteRect(c)
+  s.pointer.move(r.x + r.width - 1, r.y + 30, 'touch')
+  expect(s.pointer.hovered?.id).toBe('c'); expect(c.elevation).toBe(24); expect(c.tilt).toEqual({ x: 0, y: 0 })
+  s.pointer.move(r.x + r.width - 1, r.y + 30, 'pen')
+  expect(c.elevation).toBe(40); expect(c.tilt.y).toBeGreaterThan(0.06)
+})
+it('a Card unmounted before the first tick sets no rise-in timer', async () => {
+  vi.useFakeTimers()
+  try {
+    const root = createFakeRoot()
+    const m = mountGlass(() => h(Space, null, () => [h(Block, { name: 'a', width: 600, height: 400 }, () => [h(Card, { id: 'c0' }), h(Card, { id: 'c1' })])]), { root }); await flush()
+    const s = root.surfacesMade[0]!, c1 = byId(s.root, 'c1')!
+    m.app.unmount()
+    root.tick(); await flush(); expect(vi.getTimerCount()).toBe(0)          // the pending afterTick found the Card gone
+    vi.advanceTimersByTime(1000); expect(vi.getTimerCount()).toBe(0); expect(c1.elevation).toBe(0); expect(m.errors).toEqual([])
+  } finally { vi.useRealTimers() }
 })
