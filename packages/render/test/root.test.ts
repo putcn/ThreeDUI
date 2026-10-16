@@ -8,6 +8,7 @@ import { fillColors, type Surface } from '../src/surface/surface'
 import { toColor } from '../src/color'
 import type { QualityTier } from '../src/quality'
 import { BarChart } from '../src/chart/bar'
+import { SurfaceChart } from '../src/chart/surface'
 import { UI_KEY } from '../src/lighting/lights'
 
 // Type-level guard (checked by `pnpm typecheck`): the real renderer satisfies the stub-able subset.
@@ -854,6 +855,18 @@ describe('the root API for the Vue layer', () => {
     const { root } = await createRoot()
     root.dispose()
     expect(() => root.createBarChart()).toThrow(/\[UIRoot\.createBarChart\].*dispose/)
+  })
+  it('createSurfaceChart makes a SurfaceChart that draws its labels with the root\'s canvas factory; throws after dispose', async () => {
+    const made: [number, number][] = [], o = base()
+    const root = await createUIRoot({ ...o, createCanvas: ((w: number, h: number) => { made.push([w, h]); return createCanvas(w, h) }) as never })
+    const chart = root.createSurfaceChart()
+    expect(chart).toBeInstanceOf(SurfaceChart)
+    chart.set({ values: [[1, 2], [3, 4]], max: 4, ramp: [[0, 0, 1, 1], [1, 0, 0, 1]] }); chart.labels({ x: ['a', 'b'], y: ['c', 'd'], ticks: ['0', '4'] })
+    const before = made.length
+    chart.update(1 / 60, { width: 400, height: 200, reducedMotion: true, theme: root.theme, scheme: root.scheme })
+    expect(made.length).toBeGreaterThan(before); expect(chart.labelPlanes.x.length).toBe(2)
+    root.dispose()
+    expect(() => root.createSurfaceChart()).toThrow(/\[UIRoot\.createSurfaceChart\].*dispose/)
   })
 })
 

@@ -13,6 +13,7 @@ import { FrameSampler, FrameScheduler } from './scheduler'
 import { projectPolygon } from './project'
 import { CameraRig, type CameraRigOptions } from './rig'
 import { BarChart } from './chart/bar'
+import { SurfaceChart } from './chart/surface'
 
 /** The subset of `WebGPURenderer` the root drives (so tests can pass a stub). */
 export interface UIRenderer extends RendererLike {
@@ -112,6 +113,12 @@ export interface UIRoot {
    * caller's: the root neither holds nor disposes it (`BarChart.dispose`). Throws after `dispose`.
    */
   createBarChart(): BarChart
+  /**
+   * A new outbound heat surface (spatial spec §12.1), for `Surface.attach3D` with its `update` as the attachment's; its
+   * labels are drawn on the root's canvases (`createCanvas`, default DOM ones). It is the caller's: the root neither
+   * holds nor disposes it (`SurfaceChart.dispose`). Throws after `dispose`.
+   */
+  createSurfaceChart(): SurfaceChart
   /**
    * Swaps the theme: the shared context's theme and text measure, the animation runtime's theme, then every Surface
    * restyled (`Surface.restyle`: fills, an opaque background, the glass, every node marked); emits `'theme'`. A theme
@@ -255,7 +262,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     ? new QualityController({ initial: defaultTier({ touch, reducedTransparency: pinned }), cap: defaultTier({ touch, reducedTransparency: false }), reducedTransparency: pinned })
     : new QualityController({ initial: tier, reducedTransparency: pinned })
 
-  const text = opts.text ?? new SystemFontEngine({ createCanvas: opts.createCanvas ?? domCanvas })
+  const createCanvas = opts.createCanvas ?? domCanvas
+  const text = opts.text ?? new SystemFontEngine({ createCanvas })
   const anim = new AnimationRuntime(theme, scheme)
   anim.reducedMotion = opts.reducedMotion ?? motionQuery?.matches ?? false
   const pages = new AtlasPages(text.atlas)
@@ -477,6 +485,10 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     createBarChart() {
       if (disposed) throw new GlassUIError('UIRoot.createBarChart', 'root 已经 dispose')
       return new BarChart()
+    },
+    createSurfaceChart() {
+      if (disposed) throw new GlassUIError('UIRoot.createSurfaceChart', 'root 已经 dispose')
+      return new SurfaceChart({ createCanvas })
     },
     tick(dt) {
       if (disposed) return

@@ -302,8 +302,8 @@ it('LineChart legend: a dot 6 pt before its label, centred on it; in a Card the 
     expect(l.x - (d.x + d.width)).toBe(6)                                             // the gap
     expect(Math.abs(d.y + d.height / 2 - (l.y + l.height / 2))).toBeLessThanOrEqual(0.5)   // centred on the label's line (to yoga's rounding)
   }
-  // the render partition (spatial spec §2.4 / render `partition`): text and images inside glass ride on it; a box's
-  // background never does (it is drawn at the plate, under the glass), so the dot must not be one
+  // the render partition (spatial spec §2.4, §11.8 / render `partition`): text, images and panels inside glass ride on
+  // it; the dot is an image riding the Card's glass with its label, not a panel
   const parts = partition(buildRenderList(s.model, defaultTheme, 'light')), card = chart.parent!   // the Card's box (bg glass)
   for (const item of row.children) {
     const [dot, label] = item.children as [Node, Node]

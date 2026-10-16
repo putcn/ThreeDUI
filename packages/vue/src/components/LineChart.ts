@@ -78,8 +78,8 @@ export const LineChart = defineGlassComponent({
 
   /**
    * A series dot: a `DOT` pt disc in `color`, drawn at `SCALE` into a canvas (one per colour, kept) and shown as an
-   * image. An image beside a label rides on the same glass as the label (a Card's top face); a box with a background
-   * would be drawn under the glass, at the plate, and part from its label as the view turns.
+   * image. Whatever sits inside glass (text, an image, a box's background or border: spatial spec §11.8) rides on that
+   * glass's top face (a Card's), so the dot stays with its label as the view turns.
    */
   const dots = new Map<string, CanvasLike>()
   const dot = (color: RGBA): VNode => {
