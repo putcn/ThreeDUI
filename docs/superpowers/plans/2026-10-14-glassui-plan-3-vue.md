@@ -3760,6 +3760,283 @@ git commit -m "feat(render): panels on glass ride the glass's top face like its 
 
 ---
 
+### Task 9N: `<SurfaceChart3D>` — the outbound heat surface; 3D hits carry their point
+
+Spatial spec §12.1 and §12.3. The user rejected the plain bar chart ("只是把2D的事3D化了"). The heat surface uses the third dimension for real data: hour of day × day × orders.
+
+**Files:**
+- Modify:
+  - `packages/core/src/events/dispatch.ts`: `PointerTarget.point?` and `UIEvent.point?`.
+  - `packages/render/src/pointer.ts`: the 3D hit's point, in anchor-local pt.
+  - `packages/render/src/root.ts`: `createSurfaceChart()`, which receives the root's canvas factory for the label planes.
+  - `packages/vue/src/root.ts`: `GlassRoot` adds `'createSurfaceChart'`.
+  - `packages/vue/test/fixtures/fake-root.ts`: a fake surface chart.
+  - `packages/vue/src/index.ts`.
+- Create:
+  - `packages/render/src/chart/surface.ts`: `SurfaceChart`.
+  - `packages/render/src/chart/labels.ts`: canvas-texture text planes, shared with 9O.
+  - `packages/vue/src/components/SurfaceChart3D.ts`.
+- Test: `packages/core/test/events.test.ts`, `packages/render/test/pointer.test.ts`, `packages/render/test/surface-chart.test.ts` (new), `packages/vue/test/surface-chart.test.ts` (new)
+
+**Interfaces:**
+- **Core:** `PointerTarget.point?: [number, number, number]` and `UIEvent.point?`. Both are copied like `object`, and are absent unless set.
+- **Render, hits:** `hitViewports` sets `target.point` to the hit point transformed into the attachment's anchor-local frame (pt).
+- **Render, `class SurfaceChart extends Group`:**
+  - `set({ values: number[][]; max: number; ramp: RGBA[] })`. `values` is rows × cols, each row the same length, all finite and ≥ 0, at least 2 × 2. `ramp` is 2–6 colours, low → high.
+  - `labels({ x: string[]; y: string[]; ticks: string[] })`. These are the axis labels and the value ticks.
+  - `hover(cell: { row: number; col: number } | null)`.
+  - `cellAt(point: [number, number, number]): { row: number; col: number } | null`. It maps an anchor-local point to the nearest grid vertex.
+  - `update(dt, ctx: Viewport3DContext): boolean`.
+  - `dispose()`.
+- **Geometry**, in pt within the viewport box (W × H):
+  - The grid spans x ∈ [−W/2·0.8, W/2·0.8] (columns), and the depth axis is y, H·0.6 up the plate. Rows recede toward the back of the box, which reads as depth once the chart group is tilted like the twin.
+  - Height runs along z, out of the plate, up to `0.45 × min(W, H)`.
+  - The group is tilted −0.9 rad about x, so the grid lies back like a tabletop and heights stand up toward the viewer. Tune it at the checkpoint.
+  - Vertices take smooth normals. Each vertex colour comes from interpolating `ramp` at `value / max`.
+  - A thin translucent base plate sits under the surface, with grid lines every column and every row.
+  - The label planes from `chart/labels.ts` lie on the base plate's front and left edges and at the tick positions.
+- **Motion:**
+  - Growth: on the first `set`, heights spring from 0 to target, with each row starting 30 ms after the previous one.
+  - A later `set` animates from the current heights.
+  - Reduced motion jumps.
+- **Hover:** a vertical guide line runs from the base to the hovered vertex, with a 5 pt dot on the vertex; the dot uses the ramp's last colour.
+- **`chart/labels.ts`:** `textPlane(text, opts: { size: number; color: RGBA; weight?: number; align?: 'left' | 'center' | 'right'; createCanvas }) : Mesh`. It draws the text at 3× into a canvas texture on a plane sized in pt, with a transparent background. Its material is `MeshBasicNodeMaterial`, `transparent`, `depthWrite` false.
+- **`root.createSurfaceChart(): SurfaceChart`.**
+- **Vue `SurfaceChart3D`:**
+  - Props:
+    - `xLabels: string[]` (≥ 2) and `yLabels: string[]` (≥ 2);
+    - `values: number[][]`, shaped `yLabels.length` × `xLabels.length` (mismatch → `[SurfaceChart3D.values] …`);
+    - `max?`, which defaults to `niceMax` of the largest value;
+    - `ramp?: string[]` of tokens or hex, defaulting to `['#cfd8ff', '#a59bff', 'accent', '#c2185b']`;
+    - `format?`;
+    - `height?`, which defaults to 280.
+  - Events:
+    - `hover`, with payload `{ row, col, value, x: string, y: string } | null`;
+    - `select`.
+  - It renders a column: a `Viewport3D` (`object` = chart, `update` wrapped, `depth` = 0.45·min(W, H) + 20), then a readout row underneath. The readout is a flat row: "{y} · {x} · {format(value)}", or a hint when nothing is hovered.
+  - It uses `useLaidOutWidth` for the box size.
+  - Pointer handling:
+    - On `pointermove`, map `cellAt(e.point)` to the hovered cell. Touch has no hover (§8.3).
+    - `pointerleave` clears the hover.
+    - `click` emits `select`.
+  - Empty `values` show "暂无数据".
+
+- [ ] **Step 1: Write the failing tests**
+  - **core:** the tracker carries `point` on move, down, up and click when the target gives one.
+  - **render:**
+    - `hitSurfaces` on an attached mesh returns `target.point`, matching the mesh's local hit position within 1e-6.
+    - `SurfaceChart`:
+      - the vertex count is rows × cols;
+      - after `update` past the growth, the vertex at (r, c) sits at height `value / max · zMax`;
+      - the colour at the max vertex is the ramp's last colour;
+      - `cellAt` round-trips each vertex position;
+      - `hover` moves the guide;
+      - reduced motion jumps;
+      - `dispose` frees the geometry, materials and label textures.
+    - `textPlane`: the plane is sized from the measured text and its texture has non-zero alpha where the glyphs are.
+  - **vue:**
+    - a mismatch error;
+    - a nice max;
+    - a pointermove with `point` gives the hover payload and the readout text;
+    - touch is ignored;
+    - leave clears the hover;
+    - empty data shows the empty state;
+    - the manifest meta has Chinese descriptions, 2–3 examples and mistakes.
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/core packages/render packages/vue` (FAIL). Implement, then run it again (PASS).
+
+- [ ] **Step 3: Typecheck, build, commit**
+
+Run: `pnpm typecheck && pnpm playground:build && pnpm test`.
+
+```bash
+git add packages
+git commit -m "feat(render,vue,core): SurfaceChart3D — a heat surface over two axes with labels on the base, growth and hover; 3D hits carry their local point"
+```
+
+---
+
+### Task 9O: `<BarMatrix3D>` — the zone × category stock matrix
+
+Spatial spec §12.2.
+
+**Files:**
+- Create: `packages/render/src/chart/matrix.ts` (`BarMatrix`), `packages/vue/src/components/BarMatrix3D.ts`.
+- Modify: `packages/render/src/root.ts` (`createBarMatrix()`), `packages/vue/src/root.ts`, `packages/vue/test/fixtures/fake-root.ts`, `packages/vue/src/index.ts`.
+- Test: `packages/render/test/bar-matrix.test.ts` (new), `packages/vue/test/bar-matrix.test.ts` (new).
+
+**Interfaces:**
+
+Render: `class BarMatrix extends Group`.
+- `set({ values: number[][]; max: number; colors: RGBA[][] })`.
+- `labels({ rows: string[]; cols: string[] })`.
+- `hover(cell | null)`.
+- `update(dt, ctx)`.
+- `dispose()`.
+
+Geometry:
+- One rounded-box mesh per cell, using the 9E bar construction: geometry built at the target height, scale floors at 1e-4, `userData = { row, col }`.
+- Cells sit on a grid that fills the box at 0.8, with each footprint 0.55 of its cell. Heights go along z, up to 0.45·min(W, H).
+- The group tilt matches `SurfaceChart`'s.
+- The base plate carries the row and column labels as `textPlane`s.
+
+Motion and hover:
+- Growth is staggered diagonally: delay (row + col) × 25 ms. Reduced motion jumps.
+- Hover brightens the cell (× 1.2) and lifts its depth (× 1.08).
+
+Vue: `BarMatrix3D`.
+- Props:
+  - `rows: string[]`
+  - `cols: string[]`
+  - `values: number[][]` (rows × cols; a mismatch is an error)
+  - `colorValues?: number[][]` (the same shape)
+  - `colorRamp?: string[]` (default green `#34c759` → amber `#ffb86b` → red `#ff6b6b`)
+  - `colorLabel?: string` (for the legend, e.g. "周转天数")
+  - `max?`
+  - `format?`
+  - `colorFormat?`
+  - `height?` (default 280)
+- Colours: with `colorValues`, each cell takes the ramp colour at its colour value normalised over the matrix's min..max. Without them, it takes the ramp at value/max.
+- Events: `hover` with `{ row, col, value, colorValue?, rowLabel, colLabel } | null`, and `select`.
+- Render:
+  - the `Viewport3D`;
+  - a readout row: "A 区 · 日化 · 4,580 件 · 周转 12 天";
+  - with `colorValues`, a small legend: the colour ramp as a gradient image strip, with its min and max labels.
+- Touch has no hover. Empty data shows "暂无数据".
+
+- [ ] **Step 1: Write the failing tests**
+  - Render:
+    - mesh count = rows × cols;
+    - heights after growth;
+    - diagonal stagger;
+    - colours from `colors`;
+    - a `userData` round-trip;
+    - hover brightness and depth;
+    - reduced motion;
+    - `dispose`.
+  - Vue:
+    - shape errors (values, and colorValues);
+    - colour normalisation (the min cell gets the ramp's first colour, the max cell its last);
+    - hover payload and readout from a pointermove with an `object` whose `userData` has row/col;
+    - touch ignored;
+    - legend present only with `colorValues`;
+    - manifest meta.
+
+- [ ] **Step 2: Run, implement, run** — `pnpm vitest run packages/render packages/vue`.
+
+- [ ] **Step 3: Typecheck, build, commit**
+
+```bash
+git add packages
+git commit -m "feat(render,vue): BarMatrix3D — a rows × columns bar matrix whose colour carries a fourth value, with labels on the base"
+```
+
+---
+
+### Task 9P: The logistics network map; Xuzhou; the new overview charts — visual checkpoint 2e (show the user)
+
+Spatial spec §12.4, §12.5, and §4 as amended (the demo moves to Xuzhou).
+
+**Files:**
+- Modify:
+  - `packages/core/src/events/dispatch.ts`: `UIEvent.buttons?`, `UIEvent.shiftKey?`.
+  - `packages/render/src/pointer.ts`: the bridge passes `buttons` and `shiftKey` on pointer events.
+- Create:
+  - `examples/playground/scripts/fetch-geo.mjs`
+  - `examples/playground/src/wms/geo/xuzhou.json` (generated, committed)
+  - `examples/playground/src/wms/map.ts` (the map model)
+  - `examples/playground/src/wms/Network.vue`
+  - `examples/playground/src/wms/LocationPanel.vue`
+- Modify:
+  - `examples/playground/src/wms/data.ts`: Xuzhou locations, lanes, runs; the heat-surface data (24 h × 14 d); the zone × category matrix with days of cover.
+  - `Overview.vue`: the two new charts.
+  - `Spatial.vue`: the network Block, plus tabs 总览 · 物流网络 · 仓储孪生 · 订单.
+  - `spatial-arc.ts`
+  - `main.ts`: prevent the canvas context menu.
+- Test:
+  - `packages/core/test/events.test.ts`, `packages/render/test/pointer.test.ts`;
+  - the playground tests: `map.test.ts` (new), and `scene.test.ts` (updated).
+
+**Interfaces:**
+
+- **Core and render.** Pointer events carry `buttons?: number` (the DOM bitmask) and `shiftKey?: boolean` when the DOM event had them.
+  - A right-button down still dispatches only `contextmenu`.
+  - The moves that follow carry `buttons & 2`.
+
+- **`fetch-geo.mjs`** (run by the implementer with network access; the output is committed).
+  - Districts: `https://geo.datav.aliyun.com/areas_bound/geojson?code=320300_full`. Keep each district's name, centre and rings, rounded to 5 decimals.
+  - Roads and water: Overpass, for the Xuzhou bbox.
+    - Roads: `highway` in motorway, trunk, primary, secondary, plus their `_link`s. Water: `waterway=river`, plus `natural=water` polygons above a minimum area.
+    - Simplify with Douglas–Peucker at ~25 m.
+    - Keep `cls` per road.
+    - Target ≤ 1.5 MB of JSON.
+  - Also write `{ source: { districts: 'DataV GeoAtlas 320300_full', osm: 'OpenStreetMap contributors via Overpass, <date>' } }`.
+  - If the network is unreachable from the sandbox, report NEEDS_CONTEXT with the exact host and error. Do not hand-craft geography.
+
+- **`map.ts`:** `createNetworkMap(geo, data, opts): { group; update(dt, ctx); hover(id | null); pick(object, instanceId?, point?): Location | null; pan(dx, dy); rotate(dyaw, dpitch); zoom(factor); dispose() }`.
+  - **Projection.** Equirectangular around the city centre, scaled so the city fills the box at the initial zoom.
+  - **Base.** A dark navy plate.
+  - **Districts.** Polygons at `#2a3a63` with 0.9 alpha, extruded 6 pt, with lighter edge lines.
+  - **Roads.** `LineSegments` by class:
+    - motorway `#5fd3ff` at 0.9;
+    - trunk at 0.7;
+    - primary at 0.5;
+    - secondary at 0.3.
+  - **Water.** `#3d7bd9`.
+  - **Locations.** One `InstancedMesh` of hex prisms per kind.
+    - Height is `sqrt(onhand)` scaled.
+    - Colour by status: green `#7ee0b0`, amber `#ffb86b`, red `#ff7b8a`, warehouse gold `#f2c46d`.
+    - The tops get diamond outlines (`LineSegments`).
+    - Warehouses carry billboarded name labels (canvas-texture sprites).
+  - **Lanes.** Arched `TubeGeometry` or `Line2`-like curves.
+    - Width scales with qty; overdue runs are red.
+    - Moving light dots run along each lane, through instanced points advanced in `update`.
+  - **Interaction:**
+    - `zoom` is clamped to [1, 6];
+    - `pan` is clamped to the city bbox;
+    - `rotate` yaws freely and pitches within [0.3, 1.2] rad.
+  - **Initial view:** zoom 1.8, centred on the warehouse cluster ("zoom in 一些").
+  - **Draw-call budget:** ≤ 40.
+
+- **`Network.vue`** is the Block content:
+  - a header: "物流网络 · 徐州", the stats, and a legend;
+  - a large `Viewport3D` (`object` = the map group, `update`, `depth` ≈ 260) on a dark rounded plate;
+  - a footer hint: "滚轮缩放 · 左键平移 · 右键/Shift 旋转";
+  - the attribution "© OpenStreetMap contributors · DataV".
+
+  Interaction:
+  - wheel zooms the map;
+  - left drag pans, using `screenX/screenY` deltas;
+  - right drag (`buttons & 2`) or Shift + left drag rotates.
+
+  The hover picks a location and shows `LocationPanel`: a world glass Surface with `castShadows: false`, placed clear of the map's 3D content and off the header and legend (as BinPanel). It shows the name, kind, on-hand, SKUs, out-of-stock count, and inbound and outbound lanes.
+
+- **`Overview.vue`:**
+  - "近 14 天出库热力" becomes a `SurfaceChart3D` (x = 0–23 时, y = dates, values = orders per hour, with a realistic double peak at 10–11 h and 15–16 h and weekend dips).
+  - "库区 × 品类库存" becomes a `BarMatrix3D` (rows A–F 区; cols 食品, 饮料, 日化, 家居, 数码, 母婴; colour = 周转天数).
+  - The KPIs and copy move to Xuzhou: 云仓 WMS · 徐州一号仓.
+
+- [ ] **Step 1: TDD the core/render `buttons`/`shiftKey` pass-through.**
+
+- [ ] **Step 2: Fetch and commit the GIS data. Write `map.ts`, with tests:**
+  - the projection round-trips the city centre;
+  - every district ring lies inside the bbox;
+  - the instance counts match the data;
+  - `pick` maps an instanced hit to its location;
+  - `zoom`, `pan` and `rotate` are clamped;
+  - `dispose` frees everything;
+  - the draw-call count stays ≤ 40.
+
+- [ ] **Step 3: Build Network.vue, LocationPanel, the Overview charts, and Spatial.vue's new Block, tabs and arc.** Run `pnpm typecheck && pnpm playground:build && pnpm test`.
+
+- [ ] **Step 4: Visual checkpoint 2e (controller, Chrome).** Screenshot the overview (both new charts, with a hover on each), the network map (initial view, zoomed, panned and rotated, with a location hovered), the twin and the orders. Judge each against the Fortbrain reference style and "does 3D mean something here". Fix through the implementer, then **send the screenshots to the user**.
+
+- [ ] **Step 5: Commit** (several commits are fine).
+
+---
+
 ### Task 10: `useGlassControl` and `<Button>` — visual checkpoint 3
 
 **Files:**
@@ -4827,7 +5104,7 @@ it('is up to date', () => {
   else expect(m, 'manifest.json is stale: run `pnpm manifest`').toEqual(committed)
 })
 it('documents every component completely', () => {
-  expect(m.components.map(c => c.name).sort()).toEqual(['Surface', 'ScreenLayer', 'WorldLayer', 'Box', 'Text', 'Icon', 'Stack', 'Space', 'Block', 'Card', 'Viewport3D', 'BarChart3D', 'LineChart', 'Button', 'Switch', 'Checkbox', 'Input', 'Dialog', 'GlassContainer'].sort())
+  expect(m.components.map(c => c.name).sort()).toEqual(['Surface', 'ScreenLayer', 'WorldLayer', 'Box', 'Text', 'Icon', 'Stack', 'Space', 'Block', 'Card', 'Viewport3D', 'BarChart3D', 'LineChart', 'SurfaceChart3D', 'BarMatrix3D', 'Button', 'Switch', 'Checkbox', 'Input', 'Dialog', 'GlassContainer'].sort())
   for (const c of m.components) {
     expect(c.description.length, c.name).toBeGreaterThan(40)
     expect(c.examples.length, c.name).toBeGreaterThanOrEqual(2)
@@ -5199,6 +5476,9 @@ git push origin main
 | Spatial §11.7 visible drop shadows | 9L |
 | Spatial §4 steps 2–5 (WMS preview), §11.4, §11.6 | 9K |
 | Spatial §11.8 panels ride their glass | 9M |
+| Spatial §12.1, §12.3 SurfaceChart3D, hit point | 9N |
+| Spatial §12.2 BarMatrix3D | 9O |
+| Spatial §12.4, §12.5 network map, Xuzhou, buttons | 9P |
 | Spatial §4 step 1 (login) and settings, §6 visual cases and frame time | 19, 20, 21 |
 | Spatial §8 manifest and acceptance; §9 amendment of core §8.3 | 18, 23; Global Constraints |
 
