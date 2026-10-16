@@ -1,11 +1,10 @@
-import { computed, h, inject, markRaw, onBeforeUnmount, provide, shallowRef, Teleport, watch, watchEffect, type InjectionKey } from '@vue/runtime-core'
+import { computed, h, inject, provide, Teleport, watchEffect, type InjectionKey } from '@vue/runtime-core'
 import { z } from 'zod'
-import { GlassUIError, type ColorScheme, type Node, type Theme } from '@glassui/core'
-import type { CreateSurfaceOptions, Surface as RenderSurface } from '@glassui/render'
+import { GlassUIError, type ColorScheme, type Theme } from '@glassui/core'
+import type { CreateSurfaceOptions } from '@glassui/render'
 import { defineGlassComponent } from '../define'
 import { useRoot } from '../inject'
-import { GLASS_SURFACE } from '../keys'
-import { colorOf } from './tokens'
+import { checkBackground, useRenderSurface } from '../surface-host'
 
 type Layer = 'screen' | 'world'
 /** The layer a `<Surface>` without a `layer` prop goes to: the nearest `<ScreenLayer>` / `<WorldLayer>`'s. */
@@ -16,7 +15,7 @@ const LAYER: InjectionKey<Layer> = Symbol('glassui.layer')
  * layers render their slot as it is, a Surface teleports it into the render Surface it makes), so a `tw`, `class`,
  * `style`, `id` or listener would be dropped without a word.
  */
-function noAttrs(name: string, attrs: Record<string, unknown>): void {
+export function noAttrs(name: string, attrs: Record<string, unknown>): void {
   for (const k of Object.keys(attrs)) {
     throw new GlassUIError(`${name}.${k}`, `${name} 不接受 ${k}（它自己不渲染节点，${k} 无处可放）：写在内容里的元素上，如 <Box>`)
   }
@@ -53,12 +52,7 @@ function check(v: Props, layer: Layer, theme: Theme, scheme: ColorScheme): void 
       ? new GlassUIError(`Surface.${k}`, '只用于屏幕层：加 layer="screen" 或放进 <ScreenLayer>（世界层的 Surface 用 position / rotation 摆放）')
       : new GlassUIError(`Surface.${k}`, '只用于世界层（layer="world" 或 <WorldLayer>）：屏幕层的 Surface 用 fill、center 或 left / top 摆放，1 pt = 1 CSS px，始终正对屏幕')
   }
-  const bg = v.background
-  if (bg === 'none' || bg === 'glass') return
-  try { colorOf('Surface.background', bg, theme, scheme) } catch (e) {
-    if (bg.startsWith('#') || /^rgba?\(/.test(bg)) throw e
-    throw new GlassUIError('Surface.background', `未知背景 "${bg}"（none、glass，或颜色 token、#hex）`, { allowed: ['none', 'glass', ...Object.keys(theme.colors[scheme])], got: bg })
-  }
+  checkBackground('Surface', v.background, theme, scheme)
 }
 
 /** What `root.createSurface` gets: the props a render Surface fixes at creation, absent ones left out. */
@@ -99,53 +93,13 @@ export const Surface = defineGlassComponent({
       return { v, layer }
     } catch (error) { return { error } }
   })
-  // what a render Surface fixes at creation; while the props are invalid it keeps its last value (the Surface stays)
-  const key = computed<string | undefined>(prev => {
+  // the render Surface, made from what it fixes at creation; while the props are invalid it stays as it is
+  const { surface } = useRenderSurface(() => {
     const s = state.value
-    if ('error' in s) return prev
+    if ('error' in s) return null
     const { v, layer } = s
-    return JSON.stringify([layer, v.fill, v.left, v.top, v.center, v.background, v.radius, v.ptPerUnit, v.contentScale])
-  })
-  // the Surface (raw: never a proxy, nor proxies of its nodes, whoever holds it), provided as a ref so a Surface made
-  // again is what later `useSurface` reads see
-  const surface = shallowRef<RenderSurface | null>(null)
-  const forward = (e: { error: Error }): void => { emit('error', e.error) }
-  /**
-   * Removes the Surface, releasing first what its trackers hold in the content: the press is cancelled and the hover
-   * left (`pointercancel`, `pointerleave`), the focused node blurred. Disposing alone would leave those nodes pressed,
-   * hovered and focused for good, since the content outlives the Surface (it moves into the next one, or is being
-   * unmounted). Returns what the next Surface takes over: the focused node with its ring, and whether the root's
-   * pointer bridge sent its keys to this Surface.
-   */
-  const drop = (): { focused: Node | null; visible: boolean; keys: boolean } | null => {
-    const s = surface.value
-    if (!s) return null
-    const focused = s.focus.current, held = { focused, visible: focused?.state.focusVisible ?? false, keys: root.pointer?.active === s }
-    s.pointer.cancel(); s.focus.focus(null)
-    s.removeEventListener('error', forward)
-    root.removeSurface(s)
-    surface.value = null
-    return held
-  }
-  /** The node to focus in the new Surface once the Teleport has moved the content there (see the post watcher below). */
-  let refocus: { node: Node; visible: boolean } | null = null
-  watch(key, k => {
-    const s = state.value
-    if (k === undefined || 'error' in s) return
-    const held = drop()
-    const made = markRaw(root.createSurface(options(s.v, s.layer)))
-    made.addEventListener('error', forward)
-    surface.value = made
-    if (held?.keys) root.pointer?.setActive(made)     // Tab and the keys carry on here
-    refocus = held?.focused ? { node: held.focused, visible: held.visible } : null
-  }, { immediate: true })
-  // after the render has moved the content into a new Surface: the node focused in the old one is focused again, its
-  // ring as it was (a no-op when it left the tree in the same update)
-  watch(surface, s => {
-    const r = refocus
-    refocus = null
-    if (s && r) s.focus.focus(r.node, { visible: r.visible })
-  }, { flush: 'post' })
+    return { key: JSON.stringify([layer, v.fill, v.left, v.top, v.center, v.background, v.radius, v.ptPerUnit, v.contentScale]), options: options(v, layer) }
+  }, { onError: e => { emit('error', e) } })
   // what applies in place: size (a fill Surface's is its layer's), transform, flags
   watchEffect(() => {
     const s = surface.value, st = state.value
@@ -157,8 +111,6 @@ export const Surface = defineGlassComponent({
     if (v.scale !== undefined) { if (typeof v.scale === 'number') s.scale.setScalar(v.scale); else s.scale.set(...v.scale) }
     s.interactive = v.interactive; s.billboard = v.billboard
   })
-  provide(GLASS_SURFACE, surface)
-  onBeforeUnmount(() => { drop() })   // before the content unmounts: its blur and pointercancel listeners still run
   return () => {
     noAttrs('Surface', attrs)
     const st = state.value
