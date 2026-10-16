@@ -226,6 +226,7 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 | 9H | render | 灯光锚定在空间里（§11.1） |
 | 9I | vue | 深度：非焦点 Block 后退、Card 浮起、悬停倾斜与上浮、升起入场（§11.2、§11.3） |
 | 9J | vue | `<LineChart>` 2D 折线图（§11.5） |
+| 9L | render + core | 抬起的玻璃投下看得见的影子（§11.7） |
 | 9K | playground + core/render | WMS 仪表盘预览与仓储孪生（§4 第 2–5 步）；实例化物体命中带 `instanceId`（§11.6）；可视检查后给用户看 |
 
 对已有任务的调整：
@@ -282,4 +283,11 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 ### 11.6 实例化物体的命中（core + render，9K）
 
 - 射线命中 `InstancedMesh` 时，`SurfaceHit.target` 与事件对象多带 `instanceId`（命中的实例序号；不是实例化物体时缺省）。孪生的库位用一个 InstancedMesh 画，靠它知道悬停的是哪个库位。
+
+### 11.7 抬起的玻璃投下看得见的影子（render + core，9L）
+
+- 9I 之后的检查发现：Card 浮起 24 pt，但看不到投影。VSM 阴影落在内容 quad 上，而玻璃 Block 背板上空着的地方内容 quad 是透明的，玻璃 slab 本身不接收阴影。浮起是最强的深度线索，必须看得见。
+- 做法：每个 `elevation > 0` 的玻璃元素在内容 RT 里画一块柔和的投影贴片（新的装饰种类 `shadow`），位置是元素形状沿主光方向偏移：偏移（pt）= `elevation × (−lₓ/l_z, l_y/l_z)`（l 是主光在该 Surface 坐标系里的方向，y 向下为正），每个分量限制在 1.5 × elevation 以内；模糊半径 4 + 0.5 × elevation；不透明度浅色 0.22、深色 0.35。
+- 投影只画在投射者自身轮廓之外，不压暗卡片自己的内容。它在背板上可见，透过卡片玻璃也能看到（折射）。
+- 光方向是 Surface 级的 uniform：方向变化使偏移改变超过 0.5 pt 时，该 Surface 的内容 RT 重画。灯光锚定后，视差不触发重画，只有焦点切换时的灯光过渡才会。
 

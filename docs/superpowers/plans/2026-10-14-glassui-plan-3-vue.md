@@ -3542,6 +3542,82 @@ git commit -m "feat(vue): LineChart — a 2D trend chart rasterised at 2×, nice
 
 ---
 
+### Task 9L: Visible drop shadows for elevated glass
+
+Spatial spec §11.7. At the 9I check, the floating Cards cast no visible shadow:
+- the VSM shadow lands on the content quad, which is transparent where the plate is empty;
+- the glass slab itself does not darken.
+
+Floating is the strongest depth cue, so it has to show.
+
+**Files:**
+- Modify:
+  - `packages/core/src/renderlist.ts`: a `shadow` decoration for elevated glass.
+  - `packages/render/src/decoration/material.ts`: `createShadowMaterial`.
+  - `packages/render/src/decoration/batch.ts`: the `'shadow'` kind.
+  - `packages/render/src/surface/partition.ts`: shadows are content.
+  - `packages/render/src/surface/surface.ts`: a shadow batch in the content pass, the shadow-direction uniform, and `setLightDirection`.
+  - `packages/render/src/root.ts`: each tick, pass the key light's direction to each Surface in its local frame.
+- Test: `packages/core/test/renderlist.test.ts`, `packages/render/test/decoration.test.ts`, `packages/render/test/surface.test.ts`, `packages/render/test/root.test.ts`
+
+**Interfaces:**
+- Core:
+  - `DecorationInstance.kind` gains `'shadow'`.
+  - `buildRenderList` emits one `shadow` decoration for each glass node whose composed `elevation > 0`. It carries the glass's rect, radius, corner exponent, transform, opacity, clip and `elevation`, with `color` `[0, 0, 0, 1]` and `strength` 1, at `sortKey(myZ, 'pool')` minus 0.05, so it draws just under the glass's pool.
+- Render:
+  - `SHADOW_DECAL = { alphaLight: 0.22, alphaDark: 0.35, blurBase: 4, blurPerPt: 0.5, maxOffset: 1.5 } as const`.
+  - `createShadowMaterial(geometry, su, dir: UniformNode<'vec2'>, alpha: UniformNode<'float'>)`. Its fragment:
+    - takes a rounded-rect SDF of the caster, offset by `elevation × dir` (pt, per component clamped to `maxOffset × elevation`);
+    - turns it into coverage blurred by `blurBase + blurPerPt × elevation`, using a smoothstep over the blur width on the SDF;
+    - multiplies that by `1 − insideCaster`, the caster's own unblurred SDF with antialiasing, so no shadow falls inside the caster;
+    - multiplies by `alpha × opacity`;
+    - outputs black at that alpha with normal blending.
+    The quad is grown by `maxOffset × elevation + blur` on each side so the blur is not clipped.
+  - `CONTENT_ORDER.shadows = 0.5`, after panels and before pools. Update the `toEqual` pin in `surface.test.ts`.
+  - `Surface.setLightDirection(local: Vector3)`:
+    - `local` is the direction from the Surface toward the key light, in the Surface's own frame, normalised.
+    - It sets `dir = (−x / z, y / z)`, pt per pt of elevation, y down. When `z ≤ 0.1`, z is clamped to 0.1.
+    - When either component of `dir` moved by more than `0.5 / 40`, it marks the content dirty. That is 0.5 pt at a 40 pt elevation.
+  - `root.tick`, after the lights are placed: for each shown world Surface, `setLightDirection(keyWorldPos − surfaceWorldPos)` transformed into the Surface's local frame (inverse world quaternion). Screen Surfaces get the direction in the camera frame.
+  - On a scheme change, `restyle` switches `alpha` between light and dark.
+
+- [ ] **Step 1: Write the failing tests**
+
+- **core:**
+  - An elevated glass node yields a `shadow` decoration with its elevation and a z just under its pool.
+  - An unelevated glass node yields none.
+  - A nested elevated glass yields its own shadow.
+- **decoration.test** (tsl-eval, as the rim tests do):
+  - With `dir = (0, 0.6)`, elevation 24, and a 100 × 60 caster:
+    - a fragment just below the caster's bottom edge has alpha ≈ `0.22 × coverage` with coverage > 0.5;
+    - a fragment inside the caster has alpha 0;
+    - a fragment far outside (100 pt away) has alpha 0.
+  - Doubling the elevation moves the darkest point down.
+- **surface.test:**
+  - A Surface with an elevated glass child has `shadows` instances in its content pass. Its `CONTENT_ORDER` includes `shadows: 0.5`.
+  - `setLightDirection` with a changed direction marks the content dirty; a negligible change does not.
+  - A scheme change to dark sets the alpha to 0.35.
+- **root.test:** after a tick with a world Surface rotated 0.6 rad about y, the direction the Surface received equals the key light's world direction rotated into its frame. Spy on `setLightDirection`.
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/core packages/render` (FAIL). Implement it, then run again (PASS).
+
+- [ ] **Step 3: Typecheck, build; visual baselines (controller)**
+
+Run: `pnpm vitest run packages/core packages/render && pnpm typecheck && pnpm playground:build`. Expected: PASS / exit 0.
+
+The controller runs `pnpm test:visual`:
+- The signup scene has elevated glass, so its baselines may move: drop shadows now appear under its raised elements.
+- Inspect the diff. If it only adds soft shadows where elements are raised, regenerate the baselines (`pnpm test:visual:update`) and commit them with this task.
+
+```bash
+git add packages/core packages/render
+git commit -m "feat(render,core): elevated glass casts a visible soft drop shadow into the content RT, offset along the anchored key light"
+```
+
+---
+
 ### Task 9K: The WMS dashboard preview and the warehouse twin — visual checkpoint 2d (show the user)
 
 Spatial spec §4 (steps 2–5) and §11.4, §11.6. This is the first look the user gets at the commercial demo: it must read like real software and show what 3D adds.
@@ -5071,6 +5147,7 @@ git push origin main
 | Spatial §11.1 lights anchored to the rig | 9H |
 | Spatial §11.2, §11.3 receding Blocks, floating Cards | 9I |
 | Spatial §11.5 LineChart | 9J |
+| Spatial §11.7 visible drop shadows | 9L |
 | Spatial §4 steps 2–5 (WMS preview), §11.4, §11.6 | 9K |
 | Spatial §4 step 1 (login) and settings, §6 visual cases and frame time | 19, 20, 21 |
 | Spatial §8 manifest and acceptance; §9 amendment of core §8.3 | 18, 23; Global Constraints |
