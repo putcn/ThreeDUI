@@ -1,9 +1,9 @@
 import { vi, type Mock } from 'vitest'
 import {
-  AnimationRuntime, createSurface as createModel, createYogaLayout, defaultTheme, EventDispatcher, FocusManager, PointerTracker, resolveTextStyle,
+  AnimationRuntime, createSurface as createModel, createYogaLayout, defaultTheme, EventDispatcher, FocusManager, GlassUIError, PointerTracker, resolveTextStyle,
   type ColorScheme, type MeasureFn, type Node, type SurfaceModel, type Theme,
 } from '@glassui/core'
-import type { BarChart, BarChartData, CameraRig, CreateSurfaceOptions, PoseSpring, Surface, SurfacePose, UIRootEventMap, Viewport3DContext } from '@glassui/render'
+import type { Attach3DOptions, BarChart, BarChartData, CameraRig, CreateSurfaceOptions, PoseSpring, Surface, SurfacePose, UIRootEventMap, Viewport3DContext } from '@glassui/render'
 import type { GlassRoot } from '../../src/root'
 import { createFakeText } from './fake-text'
 
@@ -23,6 +23,9 @@ export interface FakeAnimation {
   opts: { spring?: PoseSpring; immediate?: boolean }
   from: { position: Triple; scale: Triple; opacity: number }
 }
+
+/** One `attach3D` call on a `FakeSurface` that has not been detached: what it was given. */
+export interface FakeAttachment { node: Node; object: unknown; opts: Attach3DOptions }
 
 /** A Surface event, as a render `Surface` (an Object3D) dispatches it. */
 export type FakeSurfaceEvent = { type: 'error'; error: Error } | { type: 'dispose' }
@@ -48,6 +51,13 @@ export interface FakeSurface {
   /** Every `animateTo` call, in order. */
   readonly animations: FakeAnimation[]
   setSize(width: number, height: number): void
+  /**
+   * Records `{ node, object, opts }` in `attached` and returns the detach, which removes the record; on a screen
+   * Surface it throws the render error instead (`[Surface.attach3D] 只能挂在世界层 Surface 上`).
+   */
+  attach3D(node: Node, object: unknown, opts?: Attach3DOptions): () => void
+  /** The attachments not detached yet, in attach order. */
+  readonly attached: FakeAttachment[]
   dispose(): void
   readonly disposed: boolean
   /** Set by `markFailed`: the Surface stopped for good (the root's `tick` skips it), as a render Surface's. */
@@ -124,7 +134,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
       model, root: model.root, created: { ...o }, events, pointer: new PointerTracker(model.root, events, theme), focus: new FocusManager(model.root, events),
       position: vec3(0, 0, 0), rotation: vec3(0, 0, 0), scale: vec3(1, 1, 1),
       billboard: billboard ?? false, trapFocus: false, interactive: interactive ?? true,
-      opacity: 1, animations: [],
+      opacity: 1, animations: [], attached: [],
       get restPose() { return { position: xyz(s.position), rotation: xyz(s.rotation), scale: xyz(s.scale), opacity: s.opacity } },
       animateTo(target, opts = {}) {
         s.animations.push({ target, opts, from: { position: xyz(s.position), scale: xyz(s.scale), opacity: s.opacity } })
@@ -136,6 +146,12 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
         return new Promise<boolean>(resolve => { waiters.push(() => { resolve(!disposed) }) })
       },
       setSize(w, h) { if (disposed) return; model.width = w; model.height = h; model.root.setStyle({ width: w, height: h }) },
+      attach3D(node, object, opts = {}) {
+        if (model.placement === 'screen') throw new GlassUIError('Surface.attach3D', '只能挂在世界层 Surface 上')
+        const record: FakeAttachment = { node, object, opts }
+        s.attached.push(record)
+        return () => { const i = s.attached.indexOf(record); if (i >= 0) s.attached.splice(i, 1) }
+      },
       dispose() {
         if (disposed) return
         disposed = true
