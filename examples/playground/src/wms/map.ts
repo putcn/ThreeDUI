@@ -408,8 +408,11 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
   let box = { width: 0, height: 0 }, fit = 1, hovered: string | null = null, time = 0, dotsPlaced = false, opened = false
   /** The scale the lanes were last built at (their group is scaled by the current one over it), and the hover they show. */
   let laneScale = -1, laneHover: string | null | undefined
-  /** The hover the prisms were last placed for. */
-  let placedHover: string | null | undefined
+  /** What the prisms, the parked dots and the labels were last placed for: the scale, the hover, the eye. */
+  let placedHover: string | null | undefined, placedScale = -1, dotsScale = -1
+  const labelEye = new Vector3(Number.NaN, 0, 0)
+  /** Scratch for the labels' pass: where a top and a centre show, and the placed boxes (x0, y0, x1, y1 each). */
+  const seenAt: [number, number] = [0, 0], boxes = new Float64Array(4 * tagged.length)
   /** Each lane's vertex range in the merged tubes; each moving lane's curve (built at `laneScale`) and length. */
   let ranges: { lane: Lane; start: number; count: number }[] = [], curves: { curve: QuadraticBezierCurve3; length: number }[] = []
   const toPlate = new Matrix4(), mtx = new Matrix4(), face = new Matrix4(), v = new Vector3(), w = new Vector3(), size = new Vector3(), q = new Quaternion(), up = new Vector3(0, 1, 0)
@@ -560,27 +563,34 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
    * window shows it) overlaps one already placed.
    */
   const placeLabels = (): void => {
-    const s = scale(), m = markScale(), withSub = now.zoom >= LABELS.subZoom, placed: [number, number, number, number][] = []
+    const s = scale(), m = markScale(), withSub = now.zoom >= LABELS.subZoom
+    let placed = 0
     for (const t of tagged) {
       const block = withSub ? t.full : t.compact
       // the block's bottom `LABELS.lift` pt over the prism's top
       foot(t.l, s, t.g.position).setZ(Z.base + heightOf(t.l) * m).applyMatrix4(toPlate)
-      const seenTop = win.onPlate(t.g.position)
+      const topShows = win.onPlate(t.g.position, seenAt) !== null
       t.g.position.add(v.set(0, LABELS.lift + block.h / 2, 2))
       // the lines in the block: the name over the second line, or the name alone
       t.name.position.set(0, withSub ? block.h / 2 - LABELS.pad - t.nh / 2 : 0, 0.1)
       t.sub.position.set(0, -block.h / 2 + LABELS.pad + t.sh / 2, 0.1)
       t.sub.visible = withSub
       if (t.back.geometry !== block.geometry) t.back.geometry = block.geometry
-      // its box as the window shows it (the block faces the camera: its size, magnified by its height off the plate)
-      const c = win.onPlate(t.g.position), k = win.eye.z / Math.max(1, win.eye.z - t.g.position.z)
-      const bx = c && [c[0] - block.w * k / 2 - LABELS.gap, c[1] - block.h * k / 2 - LABELS.gap, c[0] + block.w * k / 2 + LABELS.gap, c[1] + block.h * k / 2 + LABELS.gap] as [number, number, number, number]
-      const free = seenTop !== null && bx !== null && placed.every(o => bx[2] < o[0] || bx[0] > o[2] || bx[3] < o[1] || bx[1] > o[3])
+      // its box as the window shows it (the block faces the camera: its size, magnified by its height off the plate),
+      // left out when it overlaps a box already placed
+      let free = topShows && win.onPlate(t.g.position, seenAt) !== null
+      const k = win.eye.z / Math.max(1, win.eye.z - t.g.position.z), hw = block.w * k / 2 + LABELS.gap, hh = block.h * k / 2 + LABELS.gap
+      const x0 = seenAt[0] - hw, x1 = seenAt[0] + hw, y0 = seenAt[1] - hh, y1 = seenAt[1] + hh
+      for (let i = 0; free && i < placed; i++) {
+        const o = i * 4
+        if (!(x1 < boxes[o]! || x0 > boxes[o + 2]! || y1 < boxes[o + 1]! || y0 > boxes[o + 3]!)) free = false
+      }
       t.g.visible = free
-      if (free) placed.push(bx)
+      if (free) { boxes[placed * 4] = x0; boxes[placed * 4 + 1] = y0; boxes[placed * 4 + 2] = x1; boxes[placed * 4 + 3] = y1; placed++ }
       // turned to the camera: the planes' +z toward the eye (the plate's normal until a render tells where it is)
       t.g.quaternion.setFromRotationMatrix(face.lookAt(win.eye, t.g.position, up))
     }
+    labelEye.copy(win.eye)
   }
 
   const map: NetworkMap = {
@@ -608,10 +618,13 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
       if (laneScale < 0 || Math.abs(s / laneScale - 1) > REBUILD || (!busy && s !== laneScale)) buildLanes()
       else if (s !== laneScale) lanesGroup.scale.set(s / laneScale, s / laneScale, 1)
       if (laneHover !== hovered) paintLanes()
-      if (changed || placedHover !== hovered) { placePlaces(); placedHover = hovered }
+      // the prisms and diamonds stand in the marks frame (km × scale): a pan or a turn moves the frame, not them
+      if (s !== placedScale || hovered !== placedHover) { placePlaces(); placedScale = s; placedHover = hovered }
       if (!ctx.reducedMotion && dt > 0 && moving.length) { time += dt; placeDots(); busy = true }
-      else if (!dotsPlaced || changed) placeDots()
-      placeLabels()
+      else if (!dotsPlaced || s !== dotsScale) placeDots()
+      dotsScale = s
+      // the labels stand in the plate's frame, facing the camera: placed again when the view or the eye moves
+      if (changed || labelEye.distanceToSquared(win.eye) > 0.25) placeLabels()
       return busy
     },
     hover(id) {

@@ -508,6 +508,26 @@ describe('the network map', () => {
     expect(((named(m.group, 'roads-motorway') as Mesh).material as Material).opacity).toBeLessThan(((lanes.material as Material).opacity))
   })
 
+  it('a pan or a turn moves the frames only: the prisms and diamonds are written again only for a new scale or hover; the labels only when the view or the eye moves (Task 9P R3)', () => {
+    const m = make(), store = prisms(m.group, 'store'), diamonds = named(m.group, 'diamonds') as LineSegments
+    m.update(1 / 60, ctx())
+    const versions = (): number[] => [store.instanceMatrix.version, diamonds.geometry.getAttribute('position').version]
+    let was = versions()
+    m.pan(40, 10); m.update(1 / 60, ctx()); m.rotate(0.3, 0.1); m.update(1 / 60, ctx())
+    expect(versions()).toEqual(was)
+    m.zoom(1.2); m.update(1 / 60, ctx())
+    expect(versions()[0]).toBeGreaterThan(was[0]!); was = versions()
+    m.hover(ofKind('store')[1]!.id); m.update(1 / 60, ctx())
+    expect(versions()[0]).toBeGreaterThan(was[0]!)
+    // idle frames (the dots running, nothing else): the labels are not placed again
+    const label = named(m.group, `label-${ofKind('warehouse')[0]!.id}`)
+    label.position.set(1e4, 1e4, 1e4)
+    m.update(1 / 60, ctx({ reducedMotion: false })); m.update(1 / 60, ctx({ reducedMotion: false }))
+    expect(label.position.x).toBe(1e4)
+    m.pan(5, 0); m.update(1 / 60, ctx())                                         // the view moved: placed again
+    expect(label.position.x).not.toBe(1e4)
+  })
+
   it('purchase lanes, coming in from far off, run at the lane-weight floor and a little dimmer, unless their place is hovered (Task 9P V8)', () => {
     const m = make(), lanes = named(m.group, 'lanes') as Mesh
     m.update(1 / 60, ctx())

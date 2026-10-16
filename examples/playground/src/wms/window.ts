@@ -25,8 +25,11 @@ export interface MapWindow {
   readonly eye: Vector3
   /** The box (pt) and the corner radius. */
   setBox(width: number, height: number): void
-  /** Where the plate-frame point `p` shows on the plate (the line of sight from `eye` through it), or null outside the window. */
-  onPlate(p: Vector3): [number, number] | null
+  /**
+   * Where the plate-frame point `p` shows on the plate (the line of sight from `eye` through it), written into `out`
+   * (default: a new pair), or null outside the window.
+   */
+  onPlate(p: Vector3, out?: [number, number]): [number, number] | null
 }
 
 /** The window of `group`'s box, its corners rounded `radius` pt. */
@@ -53,10 +56,13 @@ export function createWindow(group: Object3D, radius: number): MapWindow {
       half.value.set(width / 2, height / 2)
       corner = Math.min(radius, width / 2, height / 2); r.value = corner
     },
-    onPlate(p) {
+    onPlate(p, out) {
       const t = eye.z / Math.max(eye.z - p.z, 1e-3), x = eye.x + (p.x - eye.x) * t, y = eye.y + (p.y - eye.y) * t
       const dx = Math.abs(x) - (half.value.x - corner), dy = Math.abs(y) - (half.value.y - corner)
-      return Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0) - corner <= 0 ? [x, y] : null
+      if (Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0) - corner > 0) return null
+      if (!out) return [x, y]
+      out[0] = x; out[1] = y
+      return out
     },
   }
 }
