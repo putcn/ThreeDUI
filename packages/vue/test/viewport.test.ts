@@ -15,7 +15,7 @@ import { byId, tree } from './fixtures/tree'
 const inBlock = (child: () => VNodeChild) => h(Space, { camera: false }, () => [h(Block, { name: 'a', width: 488, height: 488 }, () => [child()])])
 
 it('niceMax and formatValue', () => {
-  expect([0, 0.3, 5, 17, 101].map(niceMax)).toEqual([1, 0.5, 5, 20, 200]); expect(formatValue(1.5)).toBe('1.5'); expect(formatValue(2)).toBe('2'); expect(formatValue(1 / 3)).toBe('0.33')
+  expect([0, 0.3, 5, 17, 101, 236, 186].map(niceMax)).toEqual([1, 0.3, 5, 20, 150, 250, 200]); expect(formatValue(1.5)).toBe('1.5'); expect(formatValue(2)).toBe('2'); expect(formatValue(1 / 3)).toBe('0.33')
 })
 it('Viewport3D attaches its object to its own box, re-attaches on change, detaches on unmount', async () => {
   const root = createFakeRoot(), obj = ref<object>({ isObject3D: true }), show = ref(true)

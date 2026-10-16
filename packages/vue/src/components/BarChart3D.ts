@@ -19,7 +19,7 @@ const BarChart3DProps = z.object({
     value: z.number().min(0).describe('数值：不小于 0 的有限数'),
     color: z.string().optional().describe('柱子的颜色：颜色 token 或 #hex（默认 accent）'),
   })).describe('数据，每项 { label, value, color? }，一项一根柱子，从左到右排列；value 是不小于 0 的有限数。空数组时只显示"暂无数据"'),
-  max: z.number().positive().optional().describe('纵轴最大值：value 等于它的柱子满高（200 pt）；默认把最大的 value 向上取到 1、2、5 × 10ⁿ（全为 0 时取 1）'),
+  max: z.number().positive().optional().describe('纵轴最大值：value 等于它的柱子满高（200 pt）；默认把最大的 value 向上取到好看的刻度顶（236 → 250、17 → 20、101 → 150；全为 0 时取 1）'),
   format: z.custom<(v: number) => string>(v => typeof v === 'function', '需要一个函数 (v: number) => string').optional().describe(
     '悬停标签里数值的写法 (v: number) => string，如 v => `${v} 次`；默认最多两位小数（1.5、2、0.33）'),
 })
