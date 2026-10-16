@@ -12,14 +12,19 @@ export function scrollOffset(n: Node): { x: number; y: number } {
   return n.type === 'scroll' ? { x: finiteOr0(n.props.scrollX), y: finiteOr0(n.props.scrollY) } : { x: 0, y: 0 }
 }
 
-/** The node's rect in Surface pt: its layout plus every ancestor's, minus the scroll offsets of `scroll` ancestors. */
-export function absoluteRect(node: Node): Rect {
+/**
+ * The node's rect in Surface pt: its layout plus every ancestor's, minus the scroll offsets of `scroll` ancestors.
+ * Written into `out` when given (and returned), so a caller that reads it every frame allocates nothing.
+ */
+export function absoluteRect(node: Node, out?: Rect): Rect {
   let x = node.layout.x, y = node.layout.y
   for (let p = node.parent; p; p = p.parent) {
-    const o = scrollOffset(p)
-    x += p.layout.x - o.x; y += p.layout.y - o.y
+    x += p.layout.x; y += p.layout.y
+    if (p.type === 'scroll') { x -= finiteOr0(p.props.scrollX); y -= finiteOr0(p.props.scrollY) }   // as `scrollOffset`
   }
-  return { x, y, width: node.layout.width, height: node.layout.height }
+  if (!out) return { x, y, width: node.layout.width, height: node.layout.height }
+  out.x = x; out.y = y; out.width = node.layout.width; out.height = node.layout.height
+  return out
 }
 
 /**

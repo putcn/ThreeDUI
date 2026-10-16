@@ -126,6 +126,9 @@ describe('hitTest edge cases', () => {
     expect(hitTest(root, 50, 60)?.id).toBe('root')   // b's scrolled rect ends at 50, the viewport too
     sc.setProp('scrollX', Number.NaN)
     expect(absoluteRect(b).x).toBe(0)
+    // into a given rect, returned (a caller that reads it every frame allocates nothing)
+    const out = { x: 1, y: 2, width: 3, height: 4 }
+    expect(absoluteRect(b, out)).toBe(out); expect(out).toEqual({ x: 0, y: 10, width: 100, height: 40 })
   })
   it('resolves radius tokens against the given theme', () => {
     const theme: Theme = { ...defaultTheme, radius: { ...defaultTheme.radius, card: 20 } }
