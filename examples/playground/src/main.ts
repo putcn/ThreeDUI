@@ -1,6 +1,6 @@
 // GlassUI playground: the sign-up form (a screen-layer Surface) and a world-layer Surface over a host three.js scene,
 // the @glassui/vue component gallery (a screen-layer column, with a world-layer panel beside it), and the spatial scene
-// (glass Blocks on an arc, the camera springing to the focused one).
+// (the 云仓 WMS dashboard preview: glass Blocks on an arc, the camera springing to the focused one).
 //   ?scene=signup|world|both|gallery|spatial  (default both)   ?focus=<Block name>  (spatial: the first focus)   ?quality=high|medium|low|minimal  (default auto)   ?webgl  (force WebGL2)
 //   ?hud=0  (no HUD: the visual harness's screenshots must not hold the live fps text; an error still shows)
 //   ?motion=frozen|live  (default live; frozen: transitions, Block flights and the camera complete at once, no parallax: for screenshots)
@@ -174,15 +174,16 @@ async function start(): Promise<UIRoot> {
 }
 
 /**
- * The spatial scene's backdrop: a curved wall about the arc's centre (0, 0, ARC.radius), ARC.radius + 6 out, 11 tall
- * like the plane (a focus pose sees no more than |y| ≈ 3.9), spanning the Blocks' arc angles (read off their rest
- * poses, so it follows a retuned arc) plus 38° on each side: past its outermost Blocks a focus pose sees up to 26° at
- * 16:9 and 32° at 21:9, the rig's ±2.5° parallax included. At the default arc (radius 7) that is −38° to 93°: 131°,
- * an arc of about 30 units (the plane is 16).
+ * The spatial scene's backdrop: a curved wall about the arc's centre (0, 0, ARC.radius), ARC.radius + 4 out, 11 tall
+ * like the plane (a focus pose sees no more than |y| ≈ 4.1), spanning the Blocks' arc angles (read off their rest
+ * poses, the twin's explicit one included: it stands on the arc too, so it follows a retuned arc) plus 34° on each
+ * side: a focus pose stands about 3.6 units from the centre (the WMS Blocks are 900 pt tall) and sees up to 27° past
+ * its Block's angle at 16:9 and 32° at 21:9, the rig's ±2.5° parallax included. At the WMS arc (radius 10) that is
+ * −34° to 95°: 129°, an arc of about 32 units (the plane is 16).
  */
 function spatialWall(blocks: readonly Surface[]): Mesh {
-  const angles = blocks.map(s => -s.restPose.rotation[1]), side = 38 * Math.PI / 180
-  return createCurvedWall({ center: [0, 0, ARC.radius], radius: ARC.radius + 6, from: Math.min(...angles) - side, to: Math.max(...angles) + side, height: 11 })
+  const angles = blocks.map(s => -s.restPose.rotation[1]), side = 34 * Math.PI / 180
+  return createCurvedWall({ center: [0, 0, ARC.radius], radius: ARC.radius + 4, from: Math.min(...angles) - side, to: Math.max(...angles) + side, height: 11 })
 }
 
 /** See `PlaygroundHandle.rectOf`: the node's Surface-pt rect (`absoluteRect`), its corners and centre projected (`screenFromPoint`). */
