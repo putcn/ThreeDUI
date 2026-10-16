@@ -37,6 +37,7 @@ const SurfaceProps = z.object({
   radius: z.number().min(0).default(0).describe('Surface 的圆角，pt'),
   billboard: z.boolean().default(false).describe('世界层：每帧转向相机（此时 rotation 不起作用）'),
   interactive: z.boolean().default(true).describe('是否接收指针；false 时指针穿过它'),
+  castShadows: z.boolean().default(true).describe('是否在界面上投下阴影（默认 true）：false 时它的玻璃、挂在它上面的 3D 物体和内容都不进阴影贴图，自己仍接收阴影。浮在别的面板前方的提示面板常用，免得在后面投下一大块影子'),
   ptPerUnit: z.number().positive().optional().describe('世界层：每个世界单位多少 pt（默认 244）'),
   contentScale: z.number().positive().optional().describe('内容贴图清晰度的倍数（默认 1；大于 1 更清晰，也更占显存）'),
 })
@@ -69,7 +70,7 @@ function options(v: Props, layer: Layer): CreateSurfaceOptions {
 
 export const Surface = defineGlassComponent({
   name: 'Surface',
-  description: '一块 Surface：组件画在它上面。屏幕层（layer="screen"）的 Surface 叠在三维场景之上，1 pt = 1 CSS px，用 fill、center 或 left / top 摆放；世界层（layer="world"）的 Surface 是场景里的一块面板，用 position / rotation / scale 摆放（ptPerUnit：每个世界单位多少 pt）。layer 省略时取最近的 <ScreenLayer> / <WorldLayer>，都没有时为 world。默认插槽是它的内容，排在 Surface 的根里（一个与 Surface 同宽高、纵向排列的 flex 盒子）；Surface 自己不渲染节点，tw / class / style 写在内容里的 <Box> 上。background：none 透明（默认，空白处指针穿过）、glass 一整块玻璃面板、颜色 token 或 #hex 不透明底色。layer、fill、left、top、center、background、radius、ptPerUnit、contentScale 在创建时固定，改它们会重建 Surface（内容移进新的 Surface）；width / height、position / rotation / scale、billboard、interactive 就地生效。第一期没有 shadow（Surface 的玻璃投影到场景，castToWorld 还没有效果）。',
+  description: '一块 Surface：组件画在它上面。屏幕层（layer="screen"）的 Surface 叠在三维场景之上，1 pt = 1 CSS px，用 fill、center 或 left / top 摆放；世界层（layer="world"）的 Surface 是场景里的一块面板，用 position / rotation / scale 摆放（ptPerUnit：每个世界单位多少 pt）。layer 省略时取最近的 <ScreenLayer> / <WorldLayer>，都没有时为 world。默认插槽是它的内容，排在 Surface 的根里（一个与 Surface 同宽高、纵向排列的 flex 盒子）；Surface 自己不渲染节点，tw / class / style 写在内容里的 <Box> 上。background：none 透明（默认，空白处指针穿过）、glass 一整块玻璃面板、颜色 token 或 #hex 不透明底色。layer、fill、left、top、center、background、radius、ptPerUnit、contentScale 在创建时固定，改它们会重建 Surface（内容移进新的 Surface）；width / height、position / rotation / scale、billboard、interactive、castShadows 就地生效。castShadows 为 false 时它不在界面上投影。第一期没有 shadow（Surface 的玻璃投影到场景，castToWorld 还没有效果）。',
   props: SurfaceProps,
   events: { error: { payload: 'Error', description: '该 Surface 的渲染失败（它已停止绘制）' } },
   slots: { default: 'Surface 的内容' },
@@ -109,7 +110,7 @@ export const Surface = defineGlassComponent({
     if (v.position) s.position.set(...v.position)
     if (v.rotation) s.rotation.set(...v.rotation)
     if (v.scale !== undefined) { if (typeof v.scale === 'number') s.scale.setScalar(v.scale); else s.scale.set(...v.scale) }
-    s.interactive = v.interactive; s.billboard = v.billboard
+    s.interactive = v.interactive; s.billboard = v.billboard; s.castShadows = v.castShadows
   })
   return () => {
     noAttrs('Surface', attrs)

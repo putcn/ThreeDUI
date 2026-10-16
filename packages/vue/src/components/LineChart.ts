@@ -45,8 +45,10 @@ const ticksOf = (x: Props): number[] => {
   const all = x.series.flatMap(s => s.data)
   return niceTicks(Math.min(x.yMin, ...all), Math.max(...all))
 }
-/** An 8 pt round dot in `color` (a token or #hex). */
-const dot = (color: string): VNode => h('box', { style: { width: 8, height: 8, radius: 4, bg: color, flexShrink: 0 } })
+/** pt: a series dot's diameter (in the legend and the hover panel). */
+const DOT = 8
+/** An `RGBA` (sRGB 0..1) as a canvas fill style. */
+const css = ([r, g, b, a]: RGBA): string => `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`
 
 export const LineChart = defineGlassComponent({
   name: 'LineChart',
@@ -73,6 +75,24 @@ export const LineChart = defineGlassComponent({
 
   // the chart box's laid-out width, kept current every tick (0 until the first one: nothing drawn yet)
   const box = shallowRef<Node | null>(null), width = useLaidOutWidth(root, box)
+
+  /**
+   * A series dot: a `DOT` pt disc in `color`, drawn at `SCALE` into a canvas (one per colour, kept) and shown as an
+   * image. An image beside a label rides on the same glass as the label (a Card's top face); a box with a background
+   * would be drawn under the glass, at the plate, and part from its label as the view turns.
+   */
+  const dots = new Map<string, CanvasLike>()
+  const dot = (color: RGBA): VNode => {
+    const key = color.join()
+    let src = dots.get(key)
+    if (!src) {
+      src = createCanvas(DOT * SCALE, DOT * SCALE)
+      const g = src.getContext('2d') as unknown as CanvasRenderingContext2D, r = DOT * SCALE / 2
+      g.fillStyle = css(color); g.beginPath(); g.arc(r, r, r, 0, Math.PI * 2); g.fill()
+      dots.set(key, src)
+    }
+    return h('image', { src, style: { width: DOT, height: DOT, flexShrink: 0 } })
+  }
 
   const hovered = shallowRef<number | null>(null)
   const setHover = (i: number | null): void => {
@@ -108,13 +128,13 @@ export const LineChart = defineGlassComponent({
   }
 
   /** The values panel beside the guide at `i`: right of it in the plot's left half, left of it in the right half. */
-  const panel = (x: Props, i: number, w: number, tokens: readonly string[]): VNode => {
+  const panel = (x: Props, i: number, w: number, colors: readonly RGBA[]): VNode => {
     const gx = GUTTER.left + i / (x.labels.length - 1) * (w - GUTTER.left), fmt = x.format ?? formatValue
     const side = gx <= (GUTTER.left + w) / 2 ? { left: gx + PANEL_GAP } : { right: w - gx + PANEL_GAP }
     return h('box', { style: { position: 'absolute', top: 8, ...side, padding: 8, gap: 4, bg: 'fill', radius: 10, border: { width: 1, color: 'separator' } } }, [
       h(Text, { value: x.labels[i]!, size: 13, weight: 600 }),
       ...x.series.map((s, k) => h('box', { style: { flexDirection: 'row', alignItems: 'center', gap: 6 } }, [
-        dot(tokens[k]!),
+        dot(colors[k]!),
         h(Text, { value: [{ text: `${s.name}: `, color: 'secondaryLabel' }, { text: fmt(s.data[i]!) }], size: 13, wrap: false }),
       ])),
     ])
@@ -136,11 +156,11 @@ export const LineChart = defineGlassComponent({
     const image = { width: '100%', height: x.height }
     return h('box', { style: { flexDirection: 'column', gap: 12, alignSelf: 'stretch' } }, [
       h('box', { style: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 } }, x.series.map((d, k) => h('box', { style: { flexDirection: 'row', alignItems: 'center', gap: 6 } }, [
-        dot(tokens[k]!), h(Text, { value: d.name, size: 13, color: 'secondaryLabel' }),
+        dot(colors[k]!), h(Text, { value: d.name, size: 13, color: 'secondaryLabel' }),
       ]))),
       h('box', { ref: box, style: { height: x.height, alignSelf: 'stretch' }, onPointermove, onPointerleave }, [
         h('image', src ? { src, style: image } : { style: image }),
-        i !== null && w > 0 ? panel(x, i, w, tokens) : null,
+        i !== null && w > 0 ? panel(x, i, w, colors) : null,
       ]),
     ])
   }

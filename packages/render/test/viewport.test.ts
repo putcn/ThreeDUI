@@ -117,3 +117,33 @@ describe('Surface.attach3D', () => {
     again(); expect(s.viewports.size).toBe(0); expect(card.children).toContain(vp)
   })
 })
+
+describe('Surface.castShadows (Plan 3 Task 9K fix)', () => {
+  /** Every mesh under the Surface that the key light's shadow pass draws as a caster (three: castShadow), by name or kind. */
+  const casting = (s: Surface): Mesh[] => { const out: Mesh[] = []; s.traverse(o => { if (o instanceof Mesh && o.castShadow) out.push(o) }); return out }
+  /** The content quad's shadow-pass mask: three draws a VSM receiver (the quad) into the map too, unless masked. */
+  const masked = (s: Surface): boolean => (s.contentMesh.material as unknown as { maskShadowNode: unknown }).maskShadowNode != null
+  it('false turns off every caster under the Surface (its glass, its 3D objects) and masks its content quad out of the map; true restores', () => {
+    const { s, vp, mesh } = make(); s.attach3D(vp, mesh); s.tick(1 / 60)
+    expect(s.castShadows).toBe(true)
+    expect(casting(s).length).toBeGreaterThan(1); expect(mesh.castShadow).toBe(true); expect(masked(s)).toBe(false)   // the card's glass and the mesh
+    s.castShadows = false
+    expect(casting(s)).toEqual([]); expect(masked(s)).toBe(true)
+    let n = 0; s.traverse(o => { if (o instanceof Mesh) { n++; expect(o.castShadow).toBe(false) } }); expect(n).toBeGreaterThan(2)
+    s.castShadows = true
+    expect(mesh.castShadow).toBe(true); expect(casting(s).length).toBeGreaterThan(1); expect(masked(s)).toBe(false)
+  })
+  it('holds through a glass rebuild and for an object attached later; a detach gives the object its own value back', () => {
+    const s = new Surface({ id: 'p', width: 300, height: 170, ptPerUnit: 100, placement: 'world', background: 'glass', castShadows: false }, ctx)
+    const card = new Node('box'); card.setStyle({ position: 'absolute', left: 10, top: 10, width: 100, height: 80, bg: 'glass' })
+    const vp = new Node('box'); vp.setStyle({ position: 'absolute', left: 150, top: 20, width: 100, height: 80 })
+    s.root.appendChild(card); s.root.appendChild(vp); s.tick(1 / 60)
+    expect(s.castShadows).toBe(false); expect(masked(s)).toBe(true)
+    const mesh = new Mesh(new BoxGeometry(10, 10, 10), new MeshStandardMaterial()), detach = s.attach3D(vp, mesh); s.tick(1 / 60)
+    s.setQuality({ ...ctx.quality, backFaces: false })                             // the glass draws are made again
+    s.tick(1 / 60)
+    expect(casting(s)).toEqual([])
+    detach(); expect(mesh.castShadow).toBe(false)                                  // its own value (a new Mesh's)
+    s.castShadows = true; expect(casting(s).length).toBeGreaterThan(0); expect(masked(s)).toBe(false)
+  })
+})

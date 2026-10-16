@@ -57,6 +57,15 @@ it('passes the look and placement options through, absent ones absent; WorldLaye
   expect(inner!.created.layer).toBe('world')            // the nearest layer component wins
   expect(explicit!.created.layer).toBe('screen')        // the prop wins over the layer component
 })
+it('castShadows reaches the Surface (default true) and changes in place, without making it again', async () => {
+  const root = createFakeRoot(), casts = ref(false)
+  const { errors } = mountGlass(() => [h(Surface, { width: 300, height: 170, background: 'glass', castShadows: casts.value }), h(Surface, { width: 10, height: 10 })], { root })
+  expect(errors).toEqual([])
+  const [panel, plain] = root.surfacesMade
+  expect(panel!.castShadows).toBe(false); expect(plain!.castShadows).toBe(true)
+  casts.value = true; await nextTick()
+  expect(root.surfacesMade).toHaveLength(2); expect(panel!.castShadows).toBe(true)
+})
 it('a placement, background or creation-fixed look change recreates the Surface and moves the content; size, transform, billboard and interactive do not', async () => {
   const root = createFakeRoot(), props = ref<Record<string, unknown>>({ layer: 'screen', width: 200, height: 100 })
   const { errors } = mountGlass(() => h(Surface, props.value, () => [h(Text, { id: 'in', value: 'in' })]), { root })

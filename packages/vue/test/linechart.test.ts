@@ -1,10 +1,12 @@
 import { it, expect } from 'vitest'
 import { createCanvas, type Canvas } from '@napi-rs/canvas'
 import { h, nextTick, ref, type VNodeChild } from '@vue/runtime-core'
-import { absoluteRect, defaultTheme, resolveColor, type Node, type RGBA } from '@glassui/core'
+import { absoluteRect, buildRenderList, defaultTheme, resolveColor, type Node, type RGBA } from '@glassui/core'
+import { partition } from '@glassui/render/internal'
 import { niceMax, niceTicks } from '../src/chart'
 import { drawLineChart } from '../src/linechart-draw'
 import { Box } from '../src/components/Box'
+import { Card } from '../src/components/Card'
 import { LineChart } from '../src/components/LineChart'
 import { ScreenLayer, Surface } from '../src/components/Surface'
 import { glassComponents } from '../src/define'
@@ -28,6 +30,15 @@ const near = (px: ArrayLike<number>, c: RGBA) => rgb255(c).every((v, i) => Math.
 const isRed = (px: ArrayLike<number>) => px[0]! > 200 && px[1]! < 80 && px[3]! > 128
 /** The hover panel among the chart box's children (a `v-if` placeholder anchor is absolute too, but no box). */
 const isPanel = (n: Node) => n.type === 'box' && n.style.position === 'absolute'
+/** The chart's image: the one image as wide as its box (the legend's and the panel's dots are images too). */
+function chartImage(n: Node): Node {
+  const all: Node[] = []
+  const walk = (m: Node): void => { if (m.type === 'image') all.push(m); m.children.forEach(walk) }
+  walk(n)
+  const img = all.find(i => i.style.width === '100%')
+  if (!img) throw new Error('no chart image')
+  return img
+}
 const base = { width: 200, height: 100, scale: 2, grid: [0, 0, 0, 0.1] as RGBA, text: [0, 0, 0, 1] as RGBA, font: 'sans-serif', format: String, hover: null }
 
 it('niceTicks covers the range in 1/2/5 steps', () => {
@@ -45,7 +56,7 @@ it('drawLineChart puts a series where its value says', () => {
 it('LineChart draws into an image twice its laid-out size; legend; mismatch errors; empty says so', async () => {
   const root = createFakeRoot()
   const c = await laidOut(root, () => h(Box, { style: { width: 400 } }, () => [h(LineChart, { labels: ['一', '二', '三'], series: [{ name: '入库', data: [1, 3, 2] }, { name: '出库', data: [2, 1, 4] }] })]))
-  const img = first(c, 'image'), src = img.props.src as { width: number; height: number }
+  const img = chartImage(c), src = img.props.src as { width: number; height: number }
   expect(src.width).toBe(800); expect(src.height).toBe(400)
   expect(JSON.stringify(tree(c))).toContain('入库'); expect(JSON.stringify(tree(c))).toContain('出库')
   expect(mountGlass(() => h(LineChart, { labels: ['a', 'b'], series: [{ name: 'x', data: [1] }] })).errors[0]).toMatch(/\[LineChart\.series\].*"x".*1 个点.*2 个/)
@@ -56,7 +67,7 @@ it('hover picks the nearest index, emits it and shows the values panel', async (
   mountGlass(() => onSurface(() => h(Box, { style: { width: 400 } }, () => [h(LineChart, { id: 'lc', labels: ['一', '二', '三'], series: [{ name: '入库', data: [1, 3, 2] }], format: (v: number) => `${v} 件`, onHover: (e: unknown) => seen.push(e) })])), { root })
   root.tick(); await flush()
   const c = root.surfacesMade[0]!.root
-  const img = first(c, 'image'), r = absoluteRect(img)
+  const img = chartImage(c), r = absoluteRect(img)
   expect(r.width).toBe(400)
   // the chart box is the image's parent; localX = 44 + (400 − 44) · 0.5 → index 1
   img.parent!.handlers.get('pointermove')!({ localX: 44 + 178, localY: 50 } as never); await nextTick()
@@ -172,10 +183,14 @@ it('LineChart: series colours default to accent, success, danger, secondaryLabel
   const root = createFakeRoot()
   const series = [0, 1, 2, 3, 4].map(i => ({ name: `S${i}`, data: [i === 0 ? 2 : 4, i === 0 ? 2 : 4] }))
   const c = await laidOut(root, () => h(Box, { style: { width: 400 } }, () => [h(LineChart, { labels: ['一', '二'], series: [...series.slice(0, 4), { ...series[4]!, color: '#00ff00' }, { name: 'S5', data: [4, 4] }] })]))
-  const dots = first(c, 'box').children[0]!.children[0]!.children.map(item => item.children[0]!.style.bg)
-  expect(dots).toEqual(['accent', 'success', 'danger', 'secondaryLabel', '#00ff00', 'success'])
+  // each legend dot is an image of a disc in its series' colour (its centre pixel)
+  const dots = first(c, 'box').children[0]!.children[0]!.children.map(item => item.children[0]!)
+  expect(dots.every(d => d.type === 'image')).toBe(true)
+  const colours = ['accent', 'success', 'danger', 'secondaryLabel', '#00ff00', 'success'].map(t => resolveColor(t, defaultTheme, 'light'))
+  dots.forEach((d, k) => expect(near(probe(d.props.src, 4, 4), colours[k]!), `dot ${k}`).toBe(true))
+  expect(dots[1]!.props.src).toBe(dots[5]!.props.src)                                 // one canvas per colour
   // series 0 is flat at 2 of 0..4 (ticks 0, 1, 2, 3, 4): halfway down the 178 pt plot, drawn in accent
-  const img = first(c, 'image'), light = img.props.src
+  const img = chartImage(c), light = img.props.src
   expect(near(probe(light, 222, 89), resolveColor('accent', defaultTheme, 'light'))).toBe(true)
   root.emit('theme', { theme: root.theme, scheme: 'dark', contrast: false }); await nextTick()
   expect(img.props.src).not.toBe(light)
@@ -185,7 +200,7 @@ it('LineChart: yMin is where the y axis starts; data under it extends the axis d
   const draw = async (yMin: number | undefined, low: number) => {
     const root = createFakeRoot()
     const c = await laidOut(root, () => h(Box, { style: { width: 400 } }, () => [h(LineChart, { labels: ['一', '二'], series: [{ name: 'a', data: [low, low] }, { name: 'b', data: [80, 80] }], ...(yMin !== undefined ? { yMin } : {}) })]))
-    return first(c, 'image').props.src
+    return chartImage(c).props.src
   }
   const accent = resolveColor('accent', defaultTheme, 'light')
   expect(near(probe(await draw(undefined, 70), 222, 178 * (1 - 70 / 80)), accent)).toBe(true)   // 0..80
@@ -195,7 +210,7 @@ it('LineChart: yMin is where the y axis starts; data under it extends the axis d
 it('LineChart: a hover clamps to the ends; the panel sits right of the guide, left of it in the right half; it lists every series', async () => {
   const root = createFakeRoot(), seen: unknown[] = []
   const c = await laidOut(root, () => h(Box, { style: { width: 400 } }, () => [h(LineChart, { labels: ['10-01', '10-02', '10-03'], series: [{ name: '入库', data: [1, 3, 2] }, { name: '出库', data: [2, 1, 4] }], onHover: (e: unknown) => seen.push(e) })]))
-  const box = first(c, 'image').parent!, move = (x: number) => box.handlers.get('pointermove')!({ localX: x, localY: 50 } as never)
+  const box = chartImage(c).parent!, move = (x: number) => box.handlers.get('pointermove')!({ localX: x, localY: 50 } as never)
   move(-30); await nextTick()
   expect(seen).toEqual([{ index: 0, label: '10-01', values: [1, 2] }])
   const panel = box.children.find(isPanel)!
@@ -212,7 +227,7 @@ it('LineChart: a hover clamps to the ends; the panel sits right of the guide, le
 it('LineChart: a hovered index the labels drop is hovered no more', async () => {
   const root = createFakeRoot(), seen: unknown[] = [], three = { labels: ['一', '二', '三'], series: [{ name: 'a', data: [1, 2, 3] }] }, data = ref(three)
   const c = await laidOut(root, () => h(Box, { style: { width: 400 } }, () => [h(LineChart, { ...data.value, onHover: (e: unknown) => seen.push(e) })]))
-  const box = first(c, 'image').parent!
+  const box = chartImage(c).parent!
   box.handlers.get('pointermove')!({ localX: 9999, localY: 50 } as never); await nextTick()
   expect(seen.at(-1)).toMatchObject({ index: 2 })
   data.value = { labels: ['一', '二'], series: [{ name: 'a', data: [1, 2] }] }; await nextTick()
@@ -223,7 +238,7 @@ it('LineChart: a hovered index the labels drop is hovered no more', async () => 
 it('LineChart redraws only when what it draws changes', async () => {
   const root = createFakeRoot(), tick = ref(0), d = ref([1, 2, 3])
   const c = await laidOut(root, () => h(Box, { id: `b${tick.value}`, style: { width: 400 } }, () => [h(LineChart, { labels: ['一', '二', '三'], series: [{ name: 'a', data: [...d.value] }] })]))
-  const img = first(c, 'image'), before = img.props.src
+  const img = chartImage(c), before = img.props.src
   tick.value++; await nextTick(); root.tick(); await flush()
   expect(img.props.src).toBe(before)                                                       // equal props, a new array: the same drawing
   d.value = [3, 2, 1]; await nextTick()
@@ -232,7 +247,7 @@ it('LineChart redraws only when what it draws changes', async () => {
 it('LineChart redraws when only its box is resized: no new props, a 600 px canvas at 300 pt', async () => {
   const root = createFakeRoot(), w = ref(400), labels = ['一', '二', '三'], series = [{ name: '入库', data: [1, 3, 2] }]
   const c = await laidOut(root, () => h(Box, { style: { width: w.value } }, () => [h(LineChart, { labels, series })]))
-  const img = first(c, 'image')
+  const img = chartImage(c)
   expect((img.props.src as Canvas).width).toBe(800)
   w.value = 300; await nextTick(); root.tick(); await flush()
   expect((img.props.src as Canvas).width).toBe(600); expect((img.props.src as Canvas).height).toBe(400)
@@ -249,7 +264,7 @@ it('the width loop ends once the root has no Surfaces: a disposed root, whose af
 it('LineChart: a touch does not hover (core spec §8.3); a mouse does', async () => {
   const root = createFakeRoot(), seen: unknown[] = []
   const c = await laidOut(root, () => h(Box, { style: { width: 400 } }, () => [h(LineChart, { labels: ['一', '二', '三'], series: [{ name: '入库', data: [1, 3, 2] }], onHover: (e: unknown) => seen.push(e) })]))
-  const img = first(c, 'image'), box = img.parent!, src = img.props.src
+  const img = chartImage(c), box = img.parent!, src = img.props.src
   box.handlers.get('pointermove')!({ localX: 222, localY: 50, pointerType: 'touch' } as never); await nextTick()
   expect(seen).toEqual([]); expect(box.children.some(isPanel)).toBe(false); expect(img.props.src).toBe(src)
   box.handlers.get('pointermove')!({ localX: 222, localY: 50, pointerType: 'mouse' } as never); await nextTick()
@@ -274,4 +289,26 @@ it('LineChart is registered with complete manifest metadata', () => {
   const mistakes = c.glass.mistakes!.map(m => m.mistake).join('\n')
   expect(mistakes).toMatch(/data.*对象/); expect(mistakes).toMatch(/labels.*长度/)
   expect(Object.keys(c.glass.events!)).toEqual(['hover'])
+})
+
+it('LineChart legend: a dot 6 pt before its label, centred on it; in a Card the dot rides the Card\'s glass with the label', async () => {
+  const root = createFakeRoot()
+  mountGlass(() => onSurface(() => h(Card, null, () => [h(LineChart, { labels: ['一', '二'], series: [{ name: '入库', data: [1, 2] }, { name: '出库', data: [2, 3] }] })])), { root })
+  root.tick(); await flush(); root.tick()
+  const s = root.surfacesMade[0]!, chart = chartImage(s.root).parent!.parent!, row = chart.children[0]!
+  for (const item of row.children) {
+    const [dot, label] = item.children as [Node, Node], d = absoluteRect(dot), l = absoluteRect(label)
+    expect([d.width, d.height]).toEqual([8, 8])
+    expect(l.x - (d.x + d.width)).toBe(6)                                             // the gap
+    expect(Math.abs(d.y + d.height / 2 - (l.y + l.height / 2))).toBeLessThanOrEqual(0.5)   // centred on the label's line (to yoga's rounding)
+  }
+  // the render partition (spatial spec §2.4 / render `partition`): text and images inside glass ride on it; a box's
+  // background never does (it is drawn at the plate, under the glass), so the dot must not be one
+  const parts = partition(buildRenderList(s.model, defaultTheme, 'light')), card = chart.parent!   // the Card's box (bg glass)
+  for (const item of row.children) {
+    const [dot, label] = item.children as [Node, Node]
+    expect(parts.foreground.images.some(i => i.node === dot)).toBe(true)
+    expect(parts.glassOf.get(dot)?.node).toBe(card); expect(parts.glassOf.get(label)?.node).toBe(card)
+    expect(parts.content.panels.some(p => p.node === dot)).toBe(false)
+  }
 })

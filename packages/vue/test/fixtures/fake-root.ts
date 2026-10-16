@@ -39,6 +39,8 @@ export interface FakeSurface {
   readonly events: EventDispatcher; readonly pointer: PointerTracker; readonly focus: FocusManager
   readonly position: FakeVec3; readonly rotation: FakeVec3; readonly scale: FakeVec3
   billboard: boolean; trapFocus: boolean; interactive: boolean
+  /** As `Surface.castShadows` (default true): only recorded. */
+  castShadows: boolean
   /** The whole Surface's opacity (default 1); `animateTo` sets it at once. */
   opacity: number
   /** The current pose (`animateTo` applies its target at once, so it is also where the animation ends). */
@@ -124,7 +126,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
   const listeners = new Map<string, Set<(e: never) => void>>()
 
   const make = (o: CreateSurfaceOptions): FakeSurface => {
-    const { layer = 'screen', fill: _fill, center: _center, left: _left, top: _top, interactive, castToWorld: _cast, contentScale: _scale, billboard, ...rest } = o
+    const { layer = 'screen', fill: _fill, center: _center, left: _left, top: _top, interactive, castToWorld: _cast, castShadows, contentScale: _scale, billboard, ...rest } = o
     const model = createModel(layer === 'screen' ? { ...rest, ptPerUnit: 1, placement: 'screen' } : { ...rest, placement: 'world' })
     const events = new EventDispatcher(), listeners = new Map<string, Set<FakeListener>>()
     const dispatch = (e: FakeSurfaceEvent): void => { for (const fn of [...listeners.get(e.type) ?? []]) fn(e) }
@@ -133,7 +135,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     const s: FakeSurface = {
       model, root: model.root, created: { ...o }, events, pointer: new PointerTracker(model.root, events, theme), focus: new FocusManager(model.root, events),
       position: vec3(0, 0, 0), rotation: vec3(0, 0, 0), scale: vec3(1, 1, 1),
-      billboard: billboard ?? false, trapFocus: false, interactive: interactive ?? true,
+      billboard: billboard ?? false, trapFocus: false, interactive: interactive ?? true, castShadows: castShadows ?? true,
       opacity: 1, animations: [], attached: [],
       get restPose() { return { position: xyz(s.position), rotation: xyz(s.rotation), scale: xyz(s.scale), opacity: s.opacity } },
       animateTo(target, opts = {}) {

@@ -1,6 +1,6 @@
 import { AddEquation, Box3, Color, CustomBlending, Euler, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Quaternion, Vector2, Vector3, type Camera, type Material, type Object3DEventMap, type Texture } from 'three'
 import { MeshBasicNodeMaterial, MeshStandardNodeMaterial, type UniformNode } from 'three/webgpu'
-import { float, screenUV, texture, uniform, uv, vec2 } from 'three/tsl'
+import { bool, float, screenUV, texture, uniform, uv, vec2 } from 'three/tsl'
 import {
   apply, buildRenderList, createSurface, effectiveStyle, EventDispatcher, FocusManager, GlassUIError, hitTest, PointerTracker, resolveColor,
   type AnimationRuntime, type ColorScheme, type GlassInstance, type LayoutEngine, type MeasureFn, type Node, type RenderList, type RGBA, type SurfaceModel, type Theme, type UIEventType,
@@ -35,6 +35,8 @@ export interface SurfaceOptions {
   contentScale?: number
   /** Default false. A world Surface that turns to face the camera every tick (`Surface.billboard`); no effect on the screen layer. */
   billboard?: boolean
+  /** Default true: whether the Surface shadows the UI (`Surface.castShadows`). */
+  castShadows?: boolean
 }
 /** The quality knobs a Surface reads (`QualityProfile` in `quality.ts` extends it into a full tier). */
 export interface QualitySettings {
@@ -242,6 +244,9 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The content plane: the content quad, the glass, rims and what rides on glass; at z = `contentPlaneZ`. */
   readonly plane = new Object3D()
   interactive: boolean
+  /** `castShadows`: the casters as set, and the element glass draws (the casters among `glassMeshes`). */
+  private casts: boolean
+  private readonly casters: Mesh[] = []
   /** `SurfaceOptions.castToWorld`: no effect yet (planned). */
   castToWorld: boolean
   /**
@@ -334,6 +339,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.name = this.model.id
     this.interactive = opts.interactive ?? true
     this.castToWorld = opts.castToWorld ?? false
+    this.casts = opts.castShadows ?? true
     this.billboard = opts.billboard ?? false
     this.contentScale = opts.contentScale ?? 1
     this.pointer = new PointerTracker(this.model.root, this.events, ctx.theme)
@@ -366,6 +372,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     // the raycast hit's way back to its Surface; not enumerable, so `toJSON`/`clone` (which stringify userData) skip the cycle
     Object.defineProperty(this.contentMesh.userData, 'surface', { value: this, enumerable: false })
     this.plane.add(this.contentMesh)
+    this.maskContentShadow()
 
     this.syncPyramid(this.quality)
     this.buildGlass(this.quality)
@@ -406,7 +413,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private buildGlass(q: QualitySettings): void {
     for (const m of this.glassMeshes) m.removeFromParent()
     for (const gm of this.glassMaterials) gm.dispose()
-    this.glassMeshes.length = 0; this.glassMaterials.length = 0
+    this.glassMeshes.length = 0; this.glassMaterials.length = 0; this.casters.length = 0
     const slab = this.backgroundGlass, screen = this.screen, mode = q.glassMode
     // the 'fill' mode's colours, from the shared context as it is now (a quality change after a contrast change sees it)
     const fills = fillColors(this.ctx.theme, this.ctx.scheme, { contrast: this.ctx.contrast })
@@ -437,8 +444,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
         if (!on) continue
         const gm = createGlassMaterial({ geometry: batch.geometry, K: batch.K, backdrop: 'panel', side, surface: this.su, ...source, ...behind, ...optics, fill: fills.glass, border: fills.border })
         const mesh = new Mesh(batch.geometry, gm.material)
-        mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = true; mesh.receiveShadow = false
-        this.plane.add(mesh); this.glassMeshes.push(mesh); this.glassMaterials.push(gm); made.push({ mesh, gm })
+        mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = this.casts; mesh.receiveShadow = false
+        this.plane.add(mesh); this.glassMeshes.push(mesh); this.casters.push(mesh); this.glassMaterials.push(gm); made.push({ mesh, gm })
       }
       return made
     }
@@ -718,6 +725,29 @@ export class Surface extends Object3D<SurfaceEventMap> {
   get viewports(): ReadonlyMap<Node, Viewport3DAttachment> { return this.attachments }
 
   /**
+   * Whether the Surface shadows the UI (default true; `SurfaceOptions.castShadows`): false takes every caster of its
+   * out of the key light's shadow map, its element glass and its attached 3D objects (`attach3D`; a detach gives an
+   * object its own `castShadow` back), and masks its content quad out of the map too (three draws a receiver into a
+   * VSM map, so the quad would cast its whole rectangle). Its own content still receives shadows. The background slab
+   * never casts. Takes effect at once, and holds through rebuilds.
+   */
+  get castShadows(): boolean { return this.casts }
+  set castShadows(v: boolean) {
+    if (v === this.casts) return
+    this.casts = v
+    for (const m of this.casters) m.castShadow = v
+    for (const a of this.attachments.values()) a.castShadows = v
+    this.maskContentShadow()
+  }
+
+  /** The content quad in the shadow pass: as three draws it (a receiver) while the Surface casts, discarded while it does not. */
+  private maskContentShadow(): void {
+    const m = this.contentMesh.material as MeshStandardNodeMaterial, mask = this.casts ? null : bool(false)
+    if (m.maskShadowNode === mask) return
+    m.maskShadowNode = mask; m.needsUpdate = true
+  }
+
+  /**
    * Attaches a three.js `object` to `node` (spatial spec §2.3; `Viewport3DAttachment`): from the next `tick` it stands
    * on the face `node`'s box sits on (its nearest glass ancestor's top, else the content plane), centred on the box,
    * 1 local unit = 1 pt; it draws in the transparent queue after the rims (`SURFACE_ORDER.viewport`), casts shadows,
@@ -737,6 +767,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     if (this.attachments.has(node)) throw new GlassUIError(scope, '这个节点已经挂了一个 3D 物体：先卸下')
     if ((object as Partial<Object3D> | null)?.isObject3D !== true) throw new GlassUIError(scope, 'object 必须是 three.js 的 Object3D')
     const a = new Viewport3DAttachment(node, object, opts, SURFACE_ORDER.viewport, this.drawOrder)
+    a.castShadows = this.casts
     this.attachments.set(node, a)
     this.plane.add(a.anchor)
     return () => {

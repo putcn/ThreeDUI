@@ -190,6 +190,21 @@ describe('applyWheel', () => {
 })
 
 describe('PointerBridge.handle', () => {
+  it('every pointer event it dispatches carries the pointer\'s canvas px (screenX, screenY), the canvas offset taken off', () => {
+    const { btn, bridge, canvas } = scene(), got: unknown[] = []
+    canvas.getBoundingClientRect = () => ({ left: 10, top: 20, width: 800, height: 600 })
+    for (const t of ['pointerenter', 'pointermove', 'pointerdown', 'pointerup', 'click', 'wheel', 'contextmenu', 'pointerleave'] as const) btn.setHandler(t, e => got.push([t, e.screenX, e.screenY]))
+    bridge.handle('pointermove', { clientX: 210, clientY: 160, pointerType: 'mouse' })
+    bridge.handle('pointerdown', { clientX: 211, clientY: 160, pointerType: 'mouse', pointerId: 1, button: 0 })
+    bridge.handle('pointerup', { clientX: 212, clientY: 161, pointerType: 'mouse', pointerId: 1, button: 0 })
+    bridge.handle('wheel', { clientX: 213, clientY: 162, deltaY: 10 })
+    bridge.handle('pointerdown', { clientX: 214, clientY: 163, pointerType: 'mouse', button: 2 })
+    bridge.handle('pointermove', { clientX: 5, clientY: 5, pointerType: 'mouse' })   // off the button, and the canvas's (−5, −15)
+    expect(got).toEqual([
+      ['pointerenter', 200, 140], ['pointermove', 200, 140], ['pointerdown', 201, 140], ['pointerup', 202, 141], ['click', 202, 141],
+      ['wheel', 203, 142], ['contextmenu', 204, 143], ['pointerleave', -5, -15],
+    ])
+  })
   it('routes move/down/up into the surface tracker and emits click', () => {
     const { s, btn, bridge, canvas } = scene()
     const click = vi.fn(); s.events.on(btn, 'click', click)

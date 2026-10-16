@@ -4,7 +4,7 @@ import { GlassUIError } from '../src/errors'
 import { defaultTheme, type Theme } from '../src/style/theme'
 import { createYogaLayout, type LayoutEngine } from '../src/layout/yoga'
 import { absoluteRect, hitTest, pointerReachable } from '../src/events/hit'
-import { EventDispatcher, PointerTracker } from '../src/events/dispatch'
+import { EventDispatcher, PointerTracker, type UIEvent } from '../src/events/dispatch'
 import { createSurface } from '../src/surface'
 import { validateStyle } from '../src/style/schema'
 
@@ -321,6 +321,30 @@ describe('3D targets (Plan 3 Task 9C)', () => {
     tracker.move(-1000, -1000, 'mouse', { node: target, object: obj })                   // the same node, a plain object
     expect(got).toEqual([['pointermove', obj, undefined, false]])
     expect('instanceId' in d.dispatch(target, 'click', {})).toBe(false)
+  })
+})
+
+describe('screen position (Plan 3 Task 9K fix)', () => {
+  it('the tracker carries screenX / screenY (canvas CSS px) onto every event of a call that names them', () => {
+    const { tracker, d, btn } = scene(), got: unknown[] = []
+    for (const t of ['pointerenter', 'pointermove', 'pointerdown', 'pointerup', 'click', 'pointerleave', 'pointercancel', 'contextmenu'] as const) d.on(btn, t, e => got.push([t, e.screenX, e.screenY]))
+    tracker.move(70, 70, 'mouse', undefined, { x: 400, y: 300 })
+    tracker.down(70, 70, 'mouse', undefined, { x: 401, y: 300 })
+    tracker.up(71, 70, 'mouse', undefined, { x: 402, y: 301 })
+    tracker.contextMenu(71, 70, 'mouse', { x: 403, y: 302 })
+    tracker.down(71, 70, 'mouse', undefined, { x: 404, y: 303 }); tracker.cancel()   // the cancel at the last position
+    expect(got).toEqual([
+      ['pointerenter', 400, 300], ['pointermove', 400, 300], ['pointerdown', 401, 300], ['pointerup', 402, 301], ['click', 402, 301],
+      ['contextmenu', 403, 302], ['pointerdown', 404, 303], ['pointercancel', 404, 303], ['pointerleave', 404, 303],
+    ])
+  })
+  it('a call that names none leaves both keys absent (as do events no pointer caused)', () => {
+    const { root, tracker, d, btn } = scene(), seen: UIEvent[] = []
+    d.on(btn, 'pointermove', e => seen.push(e)); d.on(btn, 'click', e => seen.push(e))
+    tracker.move(70, 70, 'mouse', undefined, { x: 1, y: 2 })
+    tracker.move(70, 70); tracker.down(70, 70); tracker.up(70, 70)
+    expect(seen.slice(1).map(e => ['screenX' in e, 'screenY' in e])).toEqual([[false, false], [false, false]])
+    expect('screenX' in d.dispatch(root, 'keydown', { key: 'a' })).toBe(false)
   })
 })
 
