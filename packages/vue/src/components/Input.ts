@@ -74,7 +74,7 @@ const Caret = defineComponent({
 
 export const Input = defineGlassComponent({
   name: 'Input',
-  description: '单行文本输入框（Liquid Glass 控件）：胶囊形清玻璃，里面是可编辑的文字，前面可放图标。用 v-model 双向绑定。打字、输入法（中文拼音等，组字时下划线标出、候选窗出现在光标下方）、复制粘贴、撤销都由页面里一个看不见的原生输入框代理，世界层（场景里的面板）上同样可用。type：text 文本（默认）；password 显示为圆点，右侧的眼睛图标切换明文；number 只接受数字（可带负号与一个小数点），v-model 得到 number，空或只有 "-" 时为 null。点击放置光标，拖动选择，双击选中一个词；文字超出时随光标横向滚动；粘贴的多行文字换行变成空格。Enter 发出 submit，Escape 退出编辑；Tab 在 Surface 的可聚焦控件间移动（键盘聚焦时全选并显示焦点环）。v-model 只在组字结束后更新（与 Vue 原生 input 的 v-model 一致）。clearable 在有内容时显示清除按钮；maxLength 限制长度（UTF-16 码元，同原生 maxlength）。size：small 高 36、regular 高 52、large 高 84（参考稿的输入框）。纵向容器里默认拉满宽度，横向容器里约十个字宽。鼠标、触控笔悬停时上浮、朝指针倾斜（最多 3°）、高光增强；按下不缩小。disabled 时变淡、不响应、不在 Tab 顺序里。没有 label：标签用它上方的 Text，提示用 placeholder。',
+  description: '单行文本输入框（Liquid Glass 控件）：胶囊形清玻璃，里面是可编辑的文字，前面可放图标。用 v-model 双向绑定。打字、输入法（中文拼音等，组字时下划线标出、候选窗出现在光标下方）、复制粘贴、撤销都由页面里一个看不见的原生输入框代理，世界层（场景里的面板）上同样可用。type：text 文本（默认）；password 显示为圆点，右侧的眼睛图标切换明文；number 只接受数字（可带负号与一个小数点），v-model 得到 number，空或只有 "-" 时为 null。点击放置光标，拖动选择，双击选中一个词；文字超出时随光标横向滚动；粘贴的多行文字换行变成空格。Enter 发出 submit，Escape 退出编辑（这一按键照样向外层传递：在 Dialog 里按 Escape 直接关闭对话框）；Tab 在 Surface 的可聚焦控件间移动（键盘聚焦时全选并显示焦点环）。v-model 只在组字结束后更新（与 Vue 原生 input 的 v-model 一致）。clearable 在有内容时显示清除按钮；maxLength 限制长度（UTF-16 码元，同原生 maxlength）。size：small 高 36、regular 高 52、large 高 84（参考稿的输入框）。纵向容器里默认拉满宽度，横向容器里约十个字宽。鼠标、触控笔悬停时上浮、朝指针倾斜（最多 3°）、高光增强；按下不缩小。disabled 时变淡、不响应、不在 Tab 顺序里。没有 label：标签用它上方的 Text，提示用 placeholder。',
   props: z.object({
     modelValue: z.union([z.string(), z.number(), z.null()]).optional().describe('输入的值；用 v-model 双向绑定（受控：外部改变时输入框跟着变）。type="number" 时是 number 或 null'),
     placeholder: z.string().optional().describe('值为空（且没有在组字）时显示的提示文字，三级标签色'),
@@ -244,7 +244,14 @@ export const Input = defineGlassComponent({
     onChange: apply,
     onKey(e) {
       if (e.key === 'Enter') { emit('submit', out(text.value)); return true }
-      if (e.key === 'Escape') { surfaceRef.value?.focus.focus(null); return true }
+      if (e.key === 'Escape') {
+        // the keydown goes on up the tree from the field, as the canvas's keys go from the focused node (a Dialog
+        // around it closes on it); then the field is left
+        const s = surfaceRef.value, n = el.value
+        if (s && n) s.events.dispatch(n, 'keydown', { key: 'Escape' })
+        surfaceRef.value?.focus.focus(null)
+        return true
+      }
       return false
     },
     onBlur() { const s = surfaceRef.value, n = el.value; if (s && n && s.focus.current === n) s.focus.focus(null) },
