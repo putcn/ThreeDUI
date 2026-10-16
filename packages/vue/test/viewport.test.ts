@@ -32,6 +32,14 @@ it('Viewport3D re-emits pointer events with the object', async () => {
   const s = root.surfacesMade[0]!; s.pointer.move(-999, -999, 'mouse', { node: byId(s.root, 'vp')!, object: obj })
   expect(moves).toEqual([obj])
 })
+it('Viewport3D re-emits the instanceId of an instanced hit (absent otherwise)', async () => {
+  const root = createFakeRoot(), moves: unknown[] = [], obj = { isObject3D: true }
+  mountGlass(() => inBlock(() => h(Viewport3D, { id: 'vp', object: obj, onPointermove: (e: UIEvent) => moves.push([e.object, e.instanceId, 'instanceId' in e]) })), { root }); await flush(); root.tick()
+  const s = root.surfacesMade[0]!, vp = byId(s.root, 'vp')!
+  s.pointer.move(-999, -999, 'mouse', { node: vp, object: obj, instanceId: 41 })
+  s.pointer.move(-999, -999, 'mouse', { node: vp, object: obj })
+  expect(moves).toEqual([[obj, 41, true], [obj, undefined, false]])
+})
 it('Viewport3D refuses a scroll ancestor and a non-object', async () => {
   const a = mountGlass(() => inBlock(() => h('scroll', null, [h(Viewport3D, { object: { isObject3D: true } })]))); await flush()
   expect(a.errors.join()).toMatch(/\[Viewport3D\] 不能放在 scroll 里/)

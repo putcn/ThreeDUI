@@ -19,6 +19,8 @@ export interface UIEvent {
    * core does not know three); absent unless the pointer is on one.
    */
   object?: unknown
+  /** Which instance of `object` the pointer is on, when `object` is instanced (a three.js `InstancedMesh`); absent otherwise. */
+  instanceId?: number
   propagationStopped: boolean
   /** Lets the remaining listeners on the current node run, then stops bubbling (DOM semantics). */
   stopPropagation(): void
@@ -55,6 +57,7 @@ export class EventDispatcher {
       ...(init.deltaX !== undefined ? { deltaX: init.deltaX } : {}),
       ...(init.deltaY !== undefined ? { deltaY: init.deltaY } : {}),
       ...(init.object !== undefined ? { object: init.object } : {}),
+      ...(init.instanceId !== undefined ? { instanceId: init.instanceId } : {}),
       propagationStopped: false,
       stopPropagation: () => { e.propagationStopped = true },   // a closure, so it also works destructured
     }
@@ -77,9 +80,10 @@ export class EventDispatcher {
 
 /**
  * Where a pointer landed when it is not for the hit test to say: a 3D object (`object`, a three.js `Object3D`, typed
- * `unknown` in core) that the renderer hit and that is attached to `node`.
+ * `unknown` in core) that the renderer hit and that is attached to `node`; `instanceId`, the instance hit when the object
+ * is instanced (an `InstancedMesh`), absent otherwise.
  */
-export interface PointerTarget { node: Node; object: unknown }
+export interface PointerTarget { node: Node; object: unknown; instanceId?: number }
 
 /** A second `click` this soon (ms) after the first, this close (pt), on the same node, also fires `dblclick`. */
 const DBLCLICK = { ms: 500, pt: 4 } as const
@@ -95,15 +99,16 @@ const DBLCLICK = { ms: 500, pt: 4 } as const
  * dirty) before events are dispatched, so listeners see it.
  * `move`, `down` and `up` may name a `target` (a 3D object the renderer hit, and the node it is attached to): while
  * `pointerReachable(target.node, root)`, that node is the hit, whatever `hitTest` says at (x, y), and every event the
- * call dispatches carries `object`; otherwise the hit test decides as usual and no event carries one.
+ * call dispatches carries `object` (and the target's `instanceId`, when it has one); otherwise the hit test decides as
+ * usual and no event carries either.
  * Call `cancel()` when the pointer is lost or leaves the Surface.
  */
 export class PointerTracker {
   /** Hit node first, then its ancestors up to `root`, as of the last hover / press. */
   private hoverPath: Node[] = []
   private pressPath: Node[] = []
-  /** The last position, and the 3D object it was on (absent when none): the init of every event dispatched. */
-  private last: { x: number; y: number; pointerType: PointerType; object?: unknown } = { x: 0, y: 0, pointerType: 'mouse' }
+  /** The last position, and the 3D object (and instance) it was on (absent when none): the init of every event dispatched. */
+  private last: { x: number; y: number; pointerType: PointerType; object?: unknown; instanceId?: number } = { x: 0, y: 0, pointerType: 'mouse' }
   private lastClick: { node: Node; t: number; x: number; y: number } | null = null
   private readonly now: () => number
 
@@ -163,10 +168,10 @@ export class PointerTracker {
     this.hover(null)
   }
 
-  /** The node at (x, y), or `target`'s while it is reachable (then `last` carries its object); records `last`. */
+  /** The node at (x, y), or `target`'s while it is reachable (then `last` carries its object and instance); records `last`. */
   private locate(x: number, y: number, pointerType: PointerType, target?: PointerTarget): Node | null {
     if (target && pointerReachable(target.node, this.root)) {
-      this.last = { x, y, pointerType, object: target.object }
+      this.last = { x, y, pointerType, object: target.object, ...(target.instanceId !== undefined ? { instanceId: target.instanceId } : {}) }
       return target.node
     }
     this.last = { x, y, pointerType }

@@ -310,6 +310,18 @@ describe('3D targets (Plan 3 Task 9C)', () => {
     tracker.move(-1000, -1000, 'mouse', { node: target, object: obj })     // far outside its rect: the target wins
     expect(tracker.hovered).toBe(target); expect(got).toEqual([['enter', obj], ['move', obj]])
   })
+  it('an instanced target carries its instanceId on every event; without one the events have no instanceId key', () => {
+    const { root, tracker, d } = scene(), target = root.children[0]!, obj = { isObject3D: true }, got: unknown[] = []
+    for (const t of ['pointerenter', 'pointermove', 'pointerdown', 'pointerup', 'click'] as const) d.on(target, t, e => got.push([t, e.object, e.instanceId, 'instanceId' in e]))
+    tracker.move(-1000, -1000, 'mouse', { node: target, object: obj, instanceId: 7 })
+    tracker.down(-1000, -1000, 'mouse', { node: target, object: obj, instanceId: 0 })   // 0 is an instance, not absence
+    tracker.up(-1000, -1000, 'mouse', { node: target, object: obj, instanceId: 3 })
+    expect(got).toEqual([['pointerenter', obj, 7, true], ['pointermove', obj, 7, true], ['pointerdown', obj, 0, true], ['pointerup', obj, 3, true], ['click', obj, 3, true]])
+    got.length = 0
+    tracker.move(-1000, -1000, 'mouse', { node: target, object: obj })                   // the same node, a plain object
+    expect(got).toEqual([['pointermove', obj, undefined, false]])
+    expect('instanceId' in d.dispatch(target, 'click', {})).toBe(false)
+  })
 })
 
 describe('element handlers, dblclick and contextmenu (Plan 3 seams)', () => {

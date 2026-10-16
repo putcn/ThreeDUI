@@ -6,7 +6,7 @@ import { defineGlassComponent } from '../define'
 import { useSurfaceRef } from '../inject'
 import { isHeld } from '../renderer'
 
-const EVENT = 'UIEvent，object 为命中的 Object3D（不在物体上时缺省）'
+const EVENT = 'UIEvent，object 为命中的 Object3D（不在物体上时缺省）；命中 InstancedMesh 时 instanceId 为命中的实例序号（否则缺省）'
 
 const Viewport3DProps = z.object({
   object: z.custom<object>(v => typeof v === 'object' && v !== null, '需要一个 three.js 的 Object3D').describe(
@@ -23,7 +23,7 @@ export const Viewport3D = defineGlassComponent({
   events: {
     pointerenter: { payload: EVENT, description: '指针进入盒子或其上的物体' },
     pointerleave: { payload: EVENT, description: '指针离开盒子与物体' },
-    pointermove: { payload: EVENT, description: '指针在盒子或物体上移动；在物体上时 object 是命中的那个（如一根柱子），用它的 userData 区分' },
+    pointermove: { payload: EVENT, description: '指针在盒子或物体上移动；在物体上时 object 是命中的那个（如一根柱子），用它的 userData 区分；InstancedMesh 用 instanceId 区分是哪一个实例' },
     click: { payload: EVENT, description: '点击盒子或物体；点在物体上时 object 是命中的那个' },
   },
   examples: [

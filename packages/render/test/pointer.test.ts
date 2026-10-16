@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { BoxGeometry, Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Ray, Raycaster, Vector2, Vector3 } from 'three'
+import { BoxGeometry, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Ray, Raycaster, Vector2, Vector3 } from 'three'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
 import { Surface, type SurfaceContext } from '../src/surface/surface'
@@ -512,13 +512,14 @@ describe('PointerBridge.handle', () => {
 })
 
 describe('3D viewport hits', () => {
-  const world = () => {
+  /** A 400 × 300 pt world Surface (100 pt a unit) facing a camera 5 units away; `object` (default `mesh`) attached to a 100 × 80 box at its centre. */
+  const world = (object?: Object3D) => {
     const camera = new PerspectiveCamera(50, 800 / 600, 0.1, 100); camera.position.set(0, 0, 5); camera.updateMatrixWorld(true)
     const s = new Surface({ id: 'w', width: 400, height: 300, ptPerUnit: 100, placement: 'world' }, ctx); s.updateMatrixWorld(true)
     const vp = new Node('box'); vp.setStyle({ position: 'absolute', left: 150, top: 110, width: 100, height: 80 })
     const host = new Node('box'); host.setStyle({ width: 400, height: 300, bg: 'fill' }); host.appendChild(vp); s.root.appendChild(host)
     const mesh = new Mesh(new BoxGeometry(40, 40, 60), new MeshBasicMaterial()); mesh.position.z = 30   // stands 60 pt proud
-    s.attach3D(vp, mesh); s.tick(0); s.updateMatrixWorld(true)
+    s.attach3D(vp, object ?? mesh); s.tick(0); s.updateMatrixWorld(true)
     const bridge = new PointerBridge({ canvas: fakeCanvas(), camera, surfaces: () => [s] })
     return { camera, s, vp, host, mesh, bridge }
   }
@@ -560,5 +561,21 @@ describe('3D viewport hits', () => {
     bridge.handle('pointerdown', { clientX: 400, clientY: 300, pointerType: 'mouse', pointerId: 1, button: 0 })
     bridge.handle('pointerup', { clientX: 400, clientY: 300, pointerType: 'mouse', pointerId: 1, button: 0 })
     expect(ups).toEqual([['pointerdown', mesh], ['pointerup', mesh], ['click', mesh]])
+  })
+  it('an InstancedMesh hit names the instance (instanceId) on the target and on the events; a plain mesh hit has none', () => {
+    // three 30 pt cubes in a row, 50 pt apart, their fronts 55 pt proud: instance 0 over Surface x = 150, 1 over 200, 2 over 250
+    const row = new InstancedMesh(new BoxGeometry(30, 30, 30), new MeshBasicMaterial(), 3)
+    for (let i = 0; i < 3; i++) row.setMatrixAt(i, new Matrix4().makeTranslation((i - 1) * 50, 0, 40))
+    const { camera, s, vp, bridge } = world(row)
+    /** Canvas px x over Surface x `pt` at the cubes' fronts (0.55 units proud: 4.45 from the camera). */
+    const at = (pt: number): number => 400 + (pt - 200) / 100 * 300 / (Math.tan(25 * Math.PI / 180) * 4.45)
+    expect(hitSurfaces(rayAt(camera, at(250), 300), [s])!.target).toEqual({ node: vp, object: row, instanceId: 2 })
+    expect(hitSurfaces(rayAt(camera, at(150), 300), [s])!.target).toEqual({ node: vp, object: row, instanceId: 0 })   // 0 is an instance
+    const seen: unknown[] = []
+    vp.setHandler('pointermove', e => seen.push([e.object, e.instanceId]))
+    bridge.handle('pointermove', { clientX: at(200), clientY: 300, pointerType: 'mouse' })
+    expect(seen).toEqual([[row, 1]])
+    const plain = world(), hit = hitSurfaces(rayAt(plain.camera, 400, 300), [plain.s])!
+    expect(hit.target).toEqual({ node: plain.vp, object: plain.mesh }); expect('instanceId' in hit.target!).toBe(false)
   })
 })
