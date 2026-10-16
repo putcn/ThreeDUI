@@ -248,8 +248,12 @@ export abstract class FrameChart extends Group {
   protected readonly createCanvas: CanvasFactory
   /** The last `update`'s context: the box, the motion preference and the theme. */
   protected ctx: Viewport3DContext | null = null
-  /** The eye the chart was last laid out for (`Viewport3DContext.eye`): it refits only when that moves far enough (`eyeMoved`). */
-  private fittedEye: readonly [number, number, number] | undefined = undefined
+  /**
+   * The eye the chart is fitted to (a copy of a `Viewport3DContext.eye`'s values: the context's tuple is rewritten each
+   * tick); `hasEye` whether there is one. It refits only when the eye moves far enough (`eyeMoved`).
+   */
+  private readonly fitted: [number, number, number] = [0, 0, 0]
+  private hasEye = false
   /** Something the layout depends on changed since the last one (data, labels). */
   protected dirty = true
 
@@ -282,18 +286,21 @@ export abstract class FrameChart extends Group {
   protected prepare(ctx: Viewport3DContext): boolean {
     const resized = ctx.width !== this.ctx?.width || ctx.height !== this.ctx?.height
     // the eye it is fitted for: kept until it moves far enough, so a Card's hover lift does not refit (breathe)
-    const refit = eyeMoved(ctx.eye, this.fittedEye)
-    this.ctx = refit || !this.ctx ? ctx : { ...ctx, ...(this.fittedEye ? { eye: this.fittedEye } : {}) }
+    const refit = eyeMoved(ctx.eye, this.hasEye ? this.fitted : undefined)
+    this.ctx = ctx
     if (!this.hasData()) return false
     this.inner.visible = ctx.width > 0 && ctx.height > 0
     if (!this.inner.visible) return false
     this.paint(ctx)
-    if (resized || refit || this.dirty) { this.fittedEye = ctx.eye; this.layout(this.ctx) }
+    if (resized || refit || this.dirty) {
+      if (refit) { this.hasEye = ctx.eye !== undefined; if (ctx.eye) { this.fitted[0] = ctx.eye[0]; this.fitted[1] = ctx.eye[1]; this.fitted[2] = ctx.eye[2] } }
+      this.layout(ctx)
+    }
     return true
   }
 
-  /** The view a layout in `ctx` fits the frame to (`seatFrame`): its eye and box, when it has an eye. */
+  /** The view a layout in `ctx`'s box fits the frame to (`seatFrame`): the eye it is fitted to, when it has one. */
   protected viewOf(ctx: Viewport3DContext): FrameView | undefined {
-    return ctx.eye ? { eye: ctx.eye, width: ctx.width, height: ctx.height } : undefined
+    return this.hasEye ? { eye: this.fitted, width: ctx.width, height: ctx.height } : undefined
   }
 }

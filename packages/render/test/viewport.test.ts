@@ -60,6 +60,10 @@ describe('Surface.attach3D', () => {
     // a Surface resting at half scale is framed from half as far, which in its own pt is as far
     s.scale.setScalar(0.5); s.tick(1 / 60)
     expect(update.mock.lastCall![1].eye![2]).toBeCloseTo(d - 12, 6)
+    // one tuple, the attachment's, rewritten each tick (no tuple a tick): the node moved, its values follow
+    const first = update.mock.calls[1]![1].eye
+    vp.setStyle({ left: 40 }); s.tick(1 / 60)
+    expect(update.mock.lastCall![1].eye).toBe(first); expect(update.mock.lastCall![1].eye![0]).toBeCloseTo(70, 9)
   })
   it('hides the anchor while the node is out of the tree; glassBounds covers depth', () => {
     const { s, card, vp, mesh } = make(); s.attach3D(vp, mesh, { depth: 50 }); s.tick(1 / 60)

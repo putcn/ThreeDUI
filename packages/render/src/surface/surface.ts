@@ -25,7 +25,7 @@ import { SurfaceLuma } from '../luma'
 import { liftFor, partition, splitNested, type Partition } from './partition'
 import { StackPass } from './stack'
 import { toColor } from '../color'
-import { Viewport3DAttachment, type Attach3DOptions } from '../viewport'
+import { Viewport3DAttachment, type Attach3DOptions, type Viewport3DStep } from '../viewport'
 import { fitDistance } from '../rig'
 
 export interface SurfaceOptions {
@@ -830,10 +830,11 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** Places, fades and updates every attachment from the current list (`Viewport3DAttachment.step`); after layout. */
   private stepViewports(dt: number, list: RenderList): void {
     const { theme, scheme, anim } = this.ctx, v = this.focusView, { width: W, height: H, ptPerUnit: ppu } = this.model
-    // the focus pose's distance from the content plane in this Surface's own pt: the fit at its rest size, over its scale
-    const [sx, sy, sz] = this.restPose.scale
-    const focus = v ? fitDistance(W / ppu * Math.abs(sx), H / ppu * Math.abs(sy), v.fovDeg, v.aspect, v.margin) / Math.abs(sz || 1) * ppu : undefined
-    const step = { root: this.root, surface: this.model, glass: list.glass, opacity: this.fade, context: { reducedMotion: anim.reducedMotion, theme, scheme }, ...(focus !== undefined && Number.isFinite(focus) ? { focus } : {}) }
+    // the focus pose's distance from the content plane in this Surface's own pt: the fit is linear in the size, so a
+    // uniform rest scale (a Block's, receding or not) cancels and the Surface's own size gives it
+    const focus = v ? fitDistance(W / ppu, H / ppu, v.fovDeg, v.aspect, v.margin) * ppu : Number.NaN
+    const step: Viewport3DStep = { root: this.root, surface: this.model, glass: list.glass, opacity: this.fade, context: { reducedMotion: anim.reducedMotion, theme, scheme } }
+    if (Number.isFinite(focus)) step.focus = focus
     for (const a of this.attachments.values()) if (a.step(dt, step)) this.needsFrame = true
   }
 

@@ -420,6 +420,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   let lastFitted = -1, looping = false, disposed = false
   /** The last `createCameraRig`'s (a disposed one stays until the next). */
   let rig: CameraRig | null = null
+  /** The view a rig frames a world Surface with (`Surface.focusView`): one object, its values rewritten each tick. */
+  const focusView: { fovDeg: number; aspect: number; margin: number } = { fovDeg: 38, aspect: 1, margin: RIG_MARGIN }
   const scheduler = new FrameScheduler(), frames = new FrameSampler()
 
   /**
@@ -548,8 +550,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       // the view a rig frames a Surface with: what its 3D attachments are fitted to be seen from (`Viewport3DContext.eye`);
       // none for an orthographic camera (no perspective to fit for)
       const persp = (camera as PerspectiveCamera).isPerspectiveCamera === true ? camera as PerspectiveCamera : null
-      const view = persp && { fovDeg: persp.getEffectiveFOV(), aspect: size.x / Math.max(1, size.y), margin: rig && !rig.disposed ? rig.margin : RIG_MARGIN }
-      for (const s of surfaces) if (s.model.placement === 'world') s.focusView = view
+      if (persp) { focusView.fovDeg = persp.getEffectiveFOV(); focusView.aspect = size.x / Math.max(1, size.y); focusView.margin = rig && !rig.disposed ? rig.margin : RIG_MARGIN }
+      for (const s of surfaces) if (s.model.placement === 'world') s.focusView = persp && focusView
       const epoch = text.atlas.epoch
       each(s => s.tick(dt))
       // the pages are shared: a later Surface's glyphs may have evicted an earlier one's this tick

@@ -6,7 +6,8 @@ import { absoluteRect, effectiveStyle, type ColorScheme, type GlassInstance, typ
  * the object is seen from when the camera rig focuses its Surface (the focus pose's camera, square in front of the
  * Surface at its fit distance; spatial spec §2.2), in the anchor's frame (pt: x right, y up, z out of the face the box
  * stands on), so a model can fit itself to show inside its box from there. It follows the rest pose, not the moving
- * camera (no parallax, no flight); absent when the root names no view (`Viewport3DStep.focus`).
+ * camera (no parallax, no flight); absent when the root names no view (`Viewport3DStep.focus`). The `eye` tuple is the
+ * attachment's own, rewritten every tick: copy its values to keep them.
  */
 export interface Viewport3DContext { width: number; height: number; reducedMotion: boolean; theme: Theme; scheme: ColorScheme; eye?: readonly [number, number, number] }
 export interface Attach3DOptions {
@@ -102,6 +103,8 @@ export class Viewport3DAttachment {
   readonly object: Object3D
   /** Hidden until the first `step` places it, and while the node is out of the Surface's tree or not displayed. */
   readonly anchor = new Group()
+  /** `Viewport3DContext.eye`, rewritten each step (no tuple a tick). */
+  private readonly eye: [number, number, number] = [0, 0, 0]
   private readonly opts: Attach3DOptions
   private readonly renderOrder: number
   /** What this attachment adopted, with the step that last saw it under `object`. */
@@ -163,9 +166,14 @@ export class Viewport3DAttachment {
       this.face = faceUnder(this.node, s.glass)
       this.anchor.position.set((rect.x + rect.width / 2 - W / 2) / ppu, (H / 2 - rect.y - rect.height / 2) / ppu, this.face / ppu)
       this.anchor.scale.setScalar(1 / ppu)
-      // the focus pose's camera, on the Surface's axis: from the anchor (the box centre on its face) back to the centre and out
-      const eye = s.focus === undefined ? {} : { eye: [W / 2 - rect.x - rect.width / 2, rect.y + rect.height / 2 - H / 2, s.focus - this.face] as const }
-      more = this.opts.update?.(dt, { width: rect.width, height: rect.height, ...s.context, ...eye }) === true
+      const ctx: Viewport3DContext = { width: rect.width, height: rect.height, reducedMotion: s.context.reducedMotion, theme: s.context.theme, scheme: s.context.scheme }
+      if (s.focus !== undefined) {
+        // the focus pose's camera, on the Surface's axis: from the anchor (the box centre on its face) back to the centre and out
+        const e = this.eye
+        e[0] = W / 2 - rect.x - rect.width / 2; e[1] = rect.y + rect.height / 2 - H / 2; e[2] = s.focus - this.face
+        ctx.eye = e
+      }
+      more = this.opts.update?.(dt, ctx) === true
       // `update` may have detached this attachment: then it has restored everything, and must not adopt again
       if (this.disposed) return more
     }

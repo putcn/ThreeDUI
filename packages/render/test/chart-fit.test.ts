@@ -83,6 +83,17 @@ describe('3D charts fit their box as the focus pose sees them (Task 9P V2)', () 
       expect(Math.abs(b.x0 + b.x1) / 2).toBeLessThan(1); expect(Math.abs(b.y0 + b.y1) / 2).toBeLessThan(1)
     })
   }
+  it('the eye tuple a context carries is rewritten each tick (the attachment\'s own): the chart keeps its own copy, and refits when the values move far enough', () => {
+    const c = matrix(), eye: [number, number, number] = [...OFF]
+    c.update(1 / 60, ctx({ eye }))
+    const k = c.inner.scale.x
+    eye[2] -= 16; c.update(1 / 60, ctx({ eye }))                                     // the same tuple, a little moved
+    expect(c.inner.scale.x).toBe(k)
+    eye[0] = 0; eye[1] = 0; eye[2] = OFF[2]; c.update(1 / 60, ctx({ eye }))           // the same tuple, far moved
+    expect(c.inner.scale.x).not.toBe(k)
+    const b = seen(points(c), [0, 0, OFF[2]])
+    expect(Math.abs(b.x0 + b.x1) / 2).toBeLessThan(1.5)
+  })
   it('BarMatrix: a hovered bar on the front corner stays inside too (the fit allows for its lift)', () => {
     const c = matrix()
     c.update(1 / 60, ctx({ eye: OFF }))

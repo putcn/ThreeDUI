@@ -725,13 +725,17 @@ describe('the root API for the Vue layer', () => {
     expect(() => ortho.createCameraRig()).toThrow(/PerspectiveCamera/)
   })
   it('tick tells world Surfaces the view a rig frames them with (fov, aspect, margin): the rig\'s margin, else the default; an orthographic camera none (Task 9P V2)', async () => {
-    const { root, camera } = await createRoot()
+    const { root, camera, renderer } = await createRoot()
     const s = root.createSurface({ layer: 'world', width: 244, height: 244 }), screen = root.createSurface({ width: 100, height: 100 })
     root.tick(0)
     expect(s.focusView).toEqual({ fovDeg: camera.getEffectiveFOV(), aspect: 800 / 600, margin: 0.08 })
     expect(screen.focusView).toBeNull()
     root.createCameraRig({ margin: 0.2 }); root.tick(0)
     expect(s.focusView!.margin).toBe(0.2)
+    // one object for every Surface, its values rewritten each tick (no view a tick): a new viewport size follows
+    const other = root.createSurface({ layer: 'world', width: 100, height: 100 }), view = s.focusView
+    renderer.getSize = (t: Vector2) => t.set(1000, 500); root.tick(0)
+    expect(s.focusView).toBe(view); expect(other.focusView).toBe(view); expect(view!.aspect).toBe(2)
     const ortho = await createUIRoot({ ...base(), camera: new OrthographicCamera() })
     const w = ortho.createSurface({ layer: 'world', width: 244, height: 244 }); ortho.tick(0)
     expect(w.focusView).toBeNull()
