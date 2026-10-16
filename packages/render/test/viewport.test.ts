@@ -95,6 +95,19 @@ describe('Surface.attach3D', () => {
     const inner = new Group(); g.add(inner); s.tick(1 / 60); expect(inner.renderOrder).toBe(5)
     detach(); expect([g.renderOrder, inner.renderOrder, mesh.renderOrder]).toEqual([7, 0, 0])
   })
+  it('fades what update writes and adopts what update adds, in the same tick', () => {
+    const { s, vp, mesh, mat } = make(), late = new MeshStandardMaterial({ opacity: 0.5 }), added = new Mesh(new BoxGeometry(1, 1, 1), late)
+    s.attach3D(vp, mesh, { update: () => { mat.opacity = 0.6; if (!added.parent) mesh.add(added); return false } }); s.opacity = 0.5
+    s.tick(1 / 60)
+    expect(mat.opacity).toBeCloseTo(0.3)
+    expect([late.transparent, added.renderOrder, added.castShadow]).toEqual([true, SURFACE_ORDER.viewport, true]); expect(late.opacity).toBeCloseTo(0.25)
+    s.tick(1 / 60); expect(mat.opacity).toBeCloseTo(0.3)
+  })
+  it('an update that detaches its own attachment leaves nothing adopted', () => {
+    const { s, vp, mesh, mat } = make(); s.opacity = 0.5
+    const detach = s.attach3D(vp, mesh, { update: () => { detach(); return false } }); s.tick(1 / 60)
+    expect([mat.transparent, mat.opacity, mesh.renderOrder, mesh.parent]).toEqual([false, 0.8, 0, null]); expect(s.viewports.size).toBe(0)
+  })
   it('skips update while the node is not shown; a stale detach leaves a new attachment alone', () => {
     const { s, card, vp, mesh } = make(), update = vi.fn(() => false)
     const detach = s.attach3D(vp, mesh, { update }); vp.setStyle({ display: 'none' }); s.tick(1 / 60)

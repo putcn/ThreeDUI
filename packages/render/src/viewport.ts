@@ -63,7 +63,7 @@ function faceUnder(n: Node, glass: readonly GlassInstance[]): number {
  * A three.js object attached to a layout node of a world Surface (`Surface.attach3D`, spatial spec §2.3). `anchor` is a
  * child of the Surface's content plane holding `object`: its origin at the centre of the node's box, z = 0 on the face
  * the box sits on (`base`), x right, y up, z out, 1 local unit = 1 pt. `step` (every Surface tick, after the render
- * list) places it, adopts the object and runs `update`; `dispose` (the detach, or the Surface's dispose) undoes both.
+ * list) places it, runs `update`, then adopts the object; `dispose` (the detach, or the Surface's dispose) undoes both.
  *
  * Adoption, each step so that drawables added later are adopted too: every drawable under `object` (anything with a
  * material) gets `renderOrder` (`SURFACE_ORDER.viewport`: after the Surface's rims, before its foreground images and
@@ -116,21 +116,28 @@ export class Viewport3DAttachment {
   get base(): number { return this.face }
 
   /**
-   * One Surface tick: adopts and fades the object, shows the anchor while the node is under `root` and displayed, and
-   * then only places it at the node's box (`absoluteRect`) on its face and calls `update`. True when `update` asked for
-   * another frame. A throw from `update` propagates (the Surface fails). Nothing after `dispose`.
+   * One Surface tick: shows the anchor while the node is under `root` and displayed, and then only places it at the
+   * node's box (`absoluteRect`) on its face and calls `update`; last, shown or not, adopts and fades the object, so
+   * what `update` wrote or added this tick (an opacity, a new mesh) is faded and sorted in the frame it first draws.
+   * True when `update` asked for another frame. A throw from `update` propagates (the Surface fails). Nothing after
+   * `dispose`.
    */
   step(dt: number, s: Viewport3DStep): boolean {
     if (this.disposed) return false
-    this.adopt(s.opacity)
     const shown = displayed(this.node, s.root)
     this.anchor.visible = shown
-    if (!shown) return false
-    const rect = absoluteRect(this.node), { width: W, height: H, ptPerUnit: ppu } = s.surface
-    this.face = faceUnder(this.node, s.glass)
-    this.anchor.position.set((rect.x + rect.width / 2 - W / 2) / ppu, (H / 2 - rect.y - rect.height / 2) / ppu, this.face / ppu)
-    this.anchor.scale.setScalar(1 / ppu)
-    return this.opts.update?.(dt, { width: rect.width, height: rect.height, ...s.context }) === true
+    let more = false
+    if (shown) {
+      const rect = absoluteRect(this.node), { width: W, height: H, ptPerUnit: ppu } = s.surface
+      this.face = faceUnder(this.node, s.glass)
+      this.anchor.position.set((rect.x + rect.width / 2 - W / 2) / ppu, (H / 2 - rect.y - rect.height / 2) / ppu, this.face / ppu)
+      this.anchor.scale.setScalar(1 / ppu)
+      more = this.opts.update?.(dt, { width: rect.width, height: rect.height, ...s.context }) === true
+      // `update` may have detached this attachment: then it has restored everything, and must not adopt again
+      if (this.disposed) return more
+    }
+    this.adopt(s.opacity)
+    return more
   }
 
   /** Adopts what is new under `object`, fades every material to `opacity` × its own, and lets go of what left. */
