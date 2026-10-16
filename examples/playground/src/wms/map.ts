@@ -75,23 +75,25 @@ const ORDER = { plate: 0, districts: 1, lakes: 2, rivers: 3, edges: 4, roads: 5,
 /**
  * Roads by class, brightest last (drawn on top): the colour's alpha and, for the trunk roads and motorways, a width (pt
  * at zoom MARK_ZOOM): a flat ribbon on the ground (spatial spec §12.4: layered by width and brightness); the others are
- * 1-px lines.
+ * 1-px lines. A lace under the lanes: the widest road stays narrower than the narrowest city lane (`LANES`).
  */
 export const ROADS = [
   { cls: 'secondary', alpha: 0.3 }, { cls: 'primary', alpha: 0.5 },
-  { cls: 'trunk', alpha: 0.7, width: 1.3 }, { cls: 'motorway', alpha: 0.9, width: 2.0 },
+  { cls: 'trunk', alpha: 0.4, width: 0.8 }, { cls: 'motorway', alpha: 0.55, width: 1.2 },
 ] as const
 const COLORS = {
   plate: '#121a33', plateEdge: '#080c18', district: '#2a3a63', districtSide: '#1a2545', edge: '#6f89cc', road: '#5fd3ff', water: '#3d7bd9',
-  transfer: '#9ee6ff', purchase: '#eaf4ff', planned: '#46618f', overdue: '#ff5d73', dot: '#ffffff', overdueDot: '#ffb0ba', diamond: '#ffffff',
+  transfer: '#ffffff', purchase: '#eaf4ff', planned: '#46618f', overdue: '#ff5d73', dot: '#ffffff', overdueDot: '#ffb0ba', diamond: '#ffffff',
   label: [0.93, 0.95, 1, 1] as RGBA, sublabel: [0.62, 0.7, 0.85, 1] as RGBA, backdrop: '#0b1226',
 } as const
 /**
- * The lanes: a tube's radius is `floor` + `extra` × √(pieces / the most), pt at zoom MARK_ZOOM (a purchase, coming in
- * from far off, at the floor); its colour at full strength for a lane of the hovered place, `purchase` for a purchase
- * otherwise (a little dimmer than the city's runs), and `others` for every lane not the hovered place's.
+ * The lanes, what the map is about (they stand out over the roads' lace): a city run's tube (a transfer, white) is
+ * `base` + `extra` × √(pieces / the most a transfer carries) pt in radius at zoom MARK_ZOOM, so even the lightest is
+ * wider than a motorway ribbon; a purchase, coming in from far off, sits at the `floor`. Colour: full strength for a
+ * lane of the hovered place, `purchase` for a purchase otherwise (a little dimmer than the city's runs), and `others`
+ * for every lane not the hovered place's.
  */
-export const LANES = { floor: 0.45, extra: 0.9, dim: { purchase: 0.62, others: 0.28 }, arc: { rise: 0.22, min: 8, max: 100 } } as const
+export const LANES = { floor: 0.45, base: 0.65, extra: 0.7, dim: { purchase: 0.62, others: 0.28 }, arc: { rise: 0.22, min: 8, max: 100 } } as const
 /**
  * The labels: a dark `backdrop` behind each (so a lane or prism behind does not cross it), `pad` pt round its text;
  * the second lines only from zoom `subZoom`; a label whose box would overlap one already placed is left out (warehouses
@@ -505,7 +507,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
 
   /** The lanes' tubes at the current scale (one merged mesh, a vertex range a lane) and the moving lanes' curves. */
   const buildLanes = (): void => {
-    const s = scale(), m = markScale(), maxQty = Math.max(1, ...network.lanes.map(l => l.qty)), parts: BufferGeometry[] = [], a = new Vector3(), b = new Vector3()
+    const s = scale(), m = markScale(), maxQty = Math.max(1, ...network.lanes.filter(l => l.kind === 'transfer').map(l => l.qty)), parts: BufferGeometry[] = [], a = new Vector3(), b = new Vector3()
     const byLane = new Map<Lane, { curve: QuadraticBezierCurve3; length: number }>()
     ranges = []
     let start = 0
@@ -515,7 +517,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
       const curve = new QuadraticBezierCurve3(a.clone(), mid.setZ(mid.z + 2 * h), b.clone())
       byLane.set(lane, { curve, length: curve.getLength() })
       if (len < 1) continue   // its ends one place: an arc too small to draw
-      const r = (lane.kind === 'purchase' ? LANES.floor : LANES.floor + LANES.extra * Math.sqrt(lane.qty / maxQty)) * m
+      const r = (lane.kind === 'purchase' ? LANES.floor : LANES.base + LANES.extra * Math.sqrt(Math.min(1, lane.qty / maxQty))) * m
       const tube = new TubeGeometry(curve, Math.round(clamp(len / 14, 12, 64)), r, 5, false)
       const n = tube.getAttribute('position').count
       tube.setAttribute('color', new Float32BufferAttribute(new Float32Array(n * 3), 3))

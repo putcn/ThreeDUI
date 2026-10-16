@@ -422,8 +422,8 @@ describe('the network map', () => {
       } else expect(o).toBeInstanceOf(LineSegments)
       expect(((o as Mesh).material as Material).opacity).toBe(r.alpha)
     }
-    expect(ROADS.find(r => r.cls === 'motorway')!).toMatchObject({ width: 2.0, alpha: 0.9 })
-    expect(ROADS.find(r => r.cls === 'trunk')!).toMatchObject({ width: 1.3, alpha: 0.7 })
+    expect(ROADS.find(r => r.cls === 'motorway')!).toMatchObject({ width: 1.2, alpha: 0.55 })
+    expect(ROADS.find(r => r.cls === 'trunk')!).toMatchObject({ width: 0.8, alpha: 0.4 })
   })
 
   it('a ribbon\'s width stays its pt width at any zoom (growing with the places\' √ zoom): one geometry, its half width in km set as the view moves', () => {
@@ -433,9 +433,9 @@ describe('the network map', () => {
     // the material's half width (km) × the ground's scale (pt a km) × 2: the ribbon's width on the ground, pt
     const widthPt = (): number => 2 * halfKm(motorway) * ground.scale.x
     const zoomNow = (): number => m.view.zoom
-    expect(widthPt()).toBeCloseTo(2.0 * Math.sqrt(zoomNow() / MARK_ZOOM), 6)
+    expect(widthPt()).toBeCloseTo(1.2 * Math.sqrt(zoomNow() / MARK_ZOOM), 6)
     m.zoom(1.5); m.update(1 / 60, ctx())
-    expect(widthPt()).toBeCloseTo(2.0 * Math.sqrt(zoomNow() / MARK_ZOOM), 6)
+    expect(widthPt()).toBeCloseTo(1.2 * Math.sqrt(zoomNow() / MARK_ZOOM), 6)
     expect(motorway.geometry).toBe(g0)                                             // no rebuild for a zoom
   })
 
@@ -488,6 +488,26 @@ describe('the network map', () => {
     expect(lanes.geometry).not.toBe(g1)
   })
 
+  it('the lanes stand out over the roads: at the opening zoom every city run is white and at least as wide as a motorway ribbon (Task 9P R2)', () => {
+    const m = make(), lanes = named(m.group, 'lanes') as Mesh, ground = named(m.group, 'ground')
+    m.update(1 / 60, ctx({ width: 1520, height: 780 }))
+    const motorway = 2 * halfKm(named(m.group, 'roads-motorway') as Mesh) * ground.scale.x, pos = lanes.geometry.getAttribute('position'), col = lanes.geometry.getAttribute('color')
+    expect(motorway).toBeCloseTo(1.2 * Math.sqrt(m.view.zoom / MARK_ZOOM), 6)
+    const diameter = (l: (typeof network.lanes)[number]): number => {
+      const r = laneRange(m, l), c = new Vector3(), p = new Vector3()
+      for (let i = 0; i < 5; i++) c.add(p.fromBufferAttribute(pos, r.start + i).divideScalar(5))
+      return 2 * p.fromBufferAttribute(pos, r.start).distanceTo(c)
+    }
+    const runs = network.lanes.filter(l => l.kind === 'transfer' && l.status !== 'planned')
+    for (const l of runs) {
+      expect(diameter(l), l.id).toBeGreaterThanOrEqual(motorway)
+      const i = laneRange(m, l).start
+      expect([col.getX(i), col.getY(i), col.getZ(i)]).toEqual([1, 1, 1])
+    }
+    // the roads under them: a lace, dimmer than the lanes
+    expect(((named(m.group, 'roads-motorway') as Mesh).material as Material).opacity).toBeLessThan(((lanes.material as Material).opacity))
+  })
+
   it('purchase lanes, coming in from far off, run at the lane-weight floor and a little dimmer, unless their place is hovered (Task 9P V8)', () => {
     const m = make(), lanes = named(m.group, 'lanes') as Mesh
     m.update(1 / 60, ctx())
@@ -496,7 +516,7 @@ describe('the network map', () => {
     const avg = (lane: typeof purchase): number => { const r = laneRange(m, lane), c = col(); let s = 0; for (let i = r.start; i < r.start + r.count; i++) s += c.getX(i) + c.getY(i) + c.getZ(i); return s / r.count }
     const want = new Color('#eaf4ff'), full = want.r + want.g + want.b
     expect(avg(purchase)).toBeCloseTo(full * LANES.dim.purchase, 4)
-    expect(avg(transfer)).toBeCloseTo(new Color('#9ee6ff').r + new Color('#9ee6ff').g + new Color('#9ee6ff').b, 4)
+    expect(avg(transfer)).toBeCloseTo(3, 4)                                         // a city run: white, at full strength
     m.hover(purchase.to); m.update(1 / 60, ctx())
     expect(avg(purchase)).toBeCloseTo(full, 4)
     // its tube is the thinnest: at the floor
