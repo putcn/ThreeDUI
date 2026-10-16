@@ -269,7 +269,7 @@ describe('Surface', () => {
     const { s, btn } = signup()
     s.root.appendChild(image('photo', new Texture(), 300, 30)); btn.appendChild(image('icon', new Texture(), 8, 8, 32, 32))
     s.tick(1 / 60)
-    expect(SURFACE_ORDER).toEqual({ slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, images: 3.5, glyphs: 4 })
+    expect(SURFACE_ORDER).toEqual({ slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 })
     expect(CONTENT_ORDER).toEqual({ panels: 0, pools: 1, images: 1.5, glyphs: 2 })
     const fg = meshes(s)
     const quad = fg.filter(m => m.renderOrder === SURFACE_ORDER.content)

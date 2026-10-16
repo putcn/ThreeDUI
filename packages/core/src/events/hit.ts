@@ -91,3 +91,19 @@ export function hitTest(root: Node, x: number, y: number, theme: Theme = default
   const r = absoluteRect(root)
   return visit(root, r.x - root.layout.x, r.y - root.layout.y, { transform: IDENTITY, radius: 0, w: root.layout.width, h: root.layout.height, pointerEvents: 'auto' })
 }
+
+/**
+ * Whether the pointer may land on `n` inside `root`'s tree without a hit test (a 3D object attached to it was hit):
+ * false when `n` is not `root` or under it, or when `n` or a node above it up to `root` has an effective (state
+ * branches applied) `display: 'none'` or `pointerEvents: 'none'`. `'box-none'` does not block: it makes only that
+ * node itself transparent, not what is below it. Unlike `hitTest`'s inheritance, a descendant's `'auto'` does not
+ * reopen a `'none'` subtree here.
+ */
+export function pointerReachable(n: Node, root: Node): boolean {
+  for (let p: Node | null = n; p; p = p.parent) {
+    const s = effectiveStyle(p)
+    if (s.display === 'none' || s.pointerEvents === 'none') return false
+    if (p === root) return true
+  }
+  return false
+}

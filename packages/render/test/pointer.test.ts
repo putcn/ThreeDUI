@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { Object3D, PerspectiveCamera, Ray, Raycaster, Vector2, Vector3 } from 'three'
+import { BoxGeometry, Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Ray, Raycaster, Vector2, Vector3 } from 'three'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
 import { Surface, type SurfaceContext } from '../src/surface/surface'
@@ -508,5 +508,57 @@ describe('PointerBridge.handle', () => {
     bridge.attach()
     expect(canvas.tabIndex).toBe(-1)
     expect(canvas.addEventListener.mock.calls.map(c => c[0]).sort()).toEqual(['pointercancel', 'pointerdown', 'pointerleave', 'pointermove', 'pointerup', 'wheel'])
+  })
+})
+
+describe('3D viewport hits', () => {
+  const world = () => {
+    const camera = new PerspectiveCamera(50, 800 / 600, 0.1, 100); camera.position.set(0, 0, 5); camera.updateMatrixWorld(true)
+    const s = new Surface({ id: 'w', width: 400, height: 300, ptPerUnit: 100, placement: 'world' }, ctx); s.updateMatrixWorld(true)
+    const vp = new Node('box'); vp.setStyle({ position: 'absolute', left: 150, top: 110, width: 100, height: 80 })
+    const host = new Node('box'); host.setStyle({ width: 400, height: 300, bg: 'fill' }); host.appendChild(vp); s.root.appendChild(host)
+    const mesh = new Mesh(new BoxGeometry(40, 40, 60), new MeshBasicMaterial()); mesh.position.z = 30   // stands 60 pt proud
+    s.attach3D(vp, mesh); s.tick(0); s.updateMatrixWorld(true)
+    const bridge = new PointerBridge({ canvas: fakeCanvas(), camera, surfaces: () => [s] })
+    return { camera, s, vp, host, mesh, bridge }
+  }
+  it('a 3D object nearer than the quad wins and names its node and object', () => {
+    const { camera, s, vp, mesh } = world()
+    const h = hitSurfaces(rayAt(camera, 400, 300), [s])!
+    expect(h.target).toEqual({ node: vp, object: mesh }); expect(h.x).toBeCloseTo(200, 0); expect(h.y).toBeCloseTo(150, 0)
+    const blank = hitSurfaces(rayAt(camera, 400 - 60, 300), [s])!      // on the box, beside the mesh
+    expect(blank.target).toBeUndefined()
+  })
+  it('the node hovers over its object and its box alike; moves carry the object only over the object', () => {
+    const { vp, mesh, bridge } = world(), seen: unknown[] = []
+    vp.setHandler('pointermove', e => seen.push(e.object))
+    bridge.handle('pointermove', { clientX: 400, clientY: 300, pointerType: 'mouse' })
+    expect(vp.state.hover).toBe(true); expect(seen.at(-1)).toBe(mesh)
+    bridge.handle('pointermove', { clientX: 340, clientY: 300, pointerType: 'mouse' })
+    expect(vp.state.hover).toBe(true); expect(seen.at(-1)).toBeUndefined()
+    bridge.handle('pointermove', { clientX: 20, clientY: 20, pointerType: 'mouse' })
+    expect(vp.state.hover).toBe(false)
+  })
+  it('a node that cannot take the pointer is skipped: the press goes where hitTest says', () => {
+    const { host, vp, bridge } = world(); host.setStyle({ pointerEvents: 'none' })
+    const down = vi.fn(); vp.setHandler('pointerdown', down)
+    const rootDown = vi.fn(); host.parent!.setHandler('pointerdown', rootDown)
+    bridge.handle('pointerdown', { clientX: 400, clientY: 300, pointerType: 'mouse', pointerId: 1, button: 0 })
+    expect(down).not.toHaveBeenCalled(); expect(rootDown).toHaveBeenCalledWith(expect.not.objectContaining({ object: expect.anything() }))
+  })
+  it('a 3D object takes the pointer over an empty area of a bare Surface; a hidden part or anchor is not hit', () => {
+    const { camera, s, vp, host, mesh } = world(); host.setStyle({ bg: 'none' }); s.tick(0)
+    const rc = rayAt(camera, 400, 300)
+    expect(s.takesPointer(200, 150)).toBe(false)
+    expect(hitSurfaces(rc, [s])?.target).toEqual({ node: vp, object: mesh })
+    mesh.visible = false; expect(hitSurfaces(rc, [s])).toBeNull()
+    mesh.visible = true; s.viewports.get(vp)!.anchor.visible = false; expect(hitSurfaces(rc, [s])).toBeNull()
+  })
+  it('a press on the object and its up over it both carry the object', () => {
+    const { vp, mesh, bridge } = world(), ups: unknown[] = []
+    for (const t of ['pointerdown', 'pointerup', 'click'] as const) vp.setHandler(t, e => ups.push([t, e.object]))
+    bridge.handle('pointerdown', { clientX: 400, clientY: 300, pointerType: 'mouse', pointerId: 1, button: 0 })
+    bridge.handle('pointerup', { clientX: 400, clientY: 300, pointerType: 'mouse', pointerId: 1, button: 0 })
+    expect(ups).toEqual([['pointerdown', mesh], ['pointerup', mesh], ['click', mesh]])
   })
 })

@@ -8,6 +8,7 @@ export { createUIRoot, type UIRoot, type UIRootOptions, type UIRootEventMap, typ
 export { Surface, fillColors, type SurfaceOptions, type SurfaceEventMap, type FillColors } from './surface/surface'
 export type { SurfacePose, PoseSpring } from './surface/motion'
 export type { CameraRig, CameraRigOptions } from './rig'
+export type { Viewport3DAttachment, Viewport3DContext, Attach3DOptions } from './viewport'
 export { ScreenLayer, type ScreenPlacement } from './surface/screen'
 export { QUALITY, QualityController, type QualityTier, type QualityProfile } from './quality'
 export { defaultImageLoader, type ImageLoader, type ImageSource } from './image/images'

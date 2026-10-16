@@ -3,7 +3,7 @@ import { Node } from '../src/node'
 import { GlassUIError } from '../src/errors'
 import { defaultTheme, type Theme } from '../src/style/theme'
 import { createYogaLayout, type LayoutEngine } from '../src/layout/yoga'
-import { absoluteRect, hitTest } from '../src/events/hit'
+import { absoluteRect, hitTest, pointerReachable } from '../src/events/hit'
 import { EventDispatcher, PointerTracker } from '../src/events/dispatch'
 import { createSurface } from '../src/surface'
 import { validateStyle } from '../src/style/schema'
@@ -21,7 +21,8 @@ function scene() {
   const hidden = box({ position: 'absolute', left: 0, top: 0, width: 200, height: 200, display: 'none' }, 'hidden')
   root.appendChild(panel); panel.appendChild(btn); panel.appendChild(over); root.appendChild(ghost); root.appendChild(hidden)
   engine.compute(root, 200, 200)
-  return { root, panel, btn, over, ghost, hidden }
+  const d = new EventDispatcher(), tracker = new PointerTracker(root, d)
+  return { root, panel, btn, over, ghost, hidden, d, tracker }
 }
 
 describe('hitTest', () => {
@@ -291,6 +292,23 @@ describe('PointerTracker semantics', () => {
     p.down(100, 80); p.down(55, 55)
     expect(s.btn.state.pressed).toBe(false)
     expect(p.pressed?.id).toBe('panel')
+  })
+})
+
+describe('3D targets (Plan 3 Task 9C)', () => {
+  it('pointerReachable: none or display none on the path blocks; box-none does not; outside the root is unreachable', () => {
+    const root = new Node('box'), a = new Node('box'), b = new Node('box'); root.appendChild(a); a.appendChild(b)
+    expect(pointerReachable(b, root)).toBe(true)
+    a.setStyle({ pointerEvents: 'box-none' }); expect(pointerReachable(b, root)).toBe(true)
+    a.setStyle({ pointerEvents: 'none' }); expect(pointerReachable(b, root)).toBe(false)
+    a.setStyle({ pointerEvents: 'auto', display: 'none' }); expect(pointerReachable(b, root)).toBe(false)
+    expect(pointerReachable(new Node('box'), root)).toBe(false)
+  })
+  it('the tracker honours a reachable target and carries its object on every event', () => {
+    const { root, tracker, d } = scene(), target = root.children[0]!, obj = { isObject3D: true }, got: unknown[] = []
+    d.on(target, 'pointerenter', e => got.push(['enter', e.object])); d.on(target, 'pointermove', e => got.push(['move', e.object]))
+    tracker.move(-1000, -1000, 'mouse', { node: target, object: obj })     // far outside its rect: the target wins
+    expect(tracker.hovered).toBe(target); expect(got).toEqual([['enter', obj], ['move', obj]])
   })
 })
 

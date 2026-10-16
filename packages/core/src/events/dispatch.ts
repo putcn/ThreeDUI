@@ -1,6 +1,6 @@
 import type { Node } from '../node'
 import { defaultTheme, type Theme } from '../style/theme'
-import { absoluteRect, hitTest } from './hit'
+import { absoluteRect, hitTest, pointerReachable } from './hit'
 
 /** Every event type, in one list the type is read from (a renderer maps `onClick` → `'click'` against it). */
 export const UI_EVENT_TYPES = ['pointerdown', 'pointerup', 'pointermove', 'pointerenter', 'pointerleave', 'pointercancel', 'click', 'dblclick', 'contextmenu', 'wheel', 'keydown', 'keyup', 'focus', 'blur', 'press', 'change'] as const
@@ -14,6 +14,11 @@ export interface UIEvent {
   localX: number; localY: number
   pointerType: PointerType
   key?: string; deltaX?: number; deltaY?: number
+  /**
+   * The 3D object the pointer is on (a three.js `Object3D` attached to the target or an ancestor, typed `unknown` here:
+   * core does not know three); absent unless the pointer is on one.
+   */
+  object?: unknown
   propagationStopped: boolean
   /** Lets the remaining listeners on the current node run, then stops bubbling (DOM semantics). */
   stopPropagation(): void
@@ -49,6 +54,7 @@ export class EventDispatcher {
       ...(init.key !== undefined ? { key: init.key } : {}),
       ...(init.deltaX !== undefined ? { deltaX: init.deltaX } : {}),
       ...(init.deltaY !== undefined ? { deltaY: init.deltaY } : {}),
+      ...(init.object !== undefined ? { object: init.object } : {}),
       propagationStopped: false,
       stopPropagation: () => { e.propagationStopped = true },   // a closure, so it also works destructured
     }
@@ -69,6 +75,12 @@ export class EventDispatcher {
   }
 }
 
+/**
+ * Where a pointer landed when it is not for the hit test to say: a 3D object (`object`, a three.js `Object3D`, typed
+ * `unknown` in core) that the renderer hit and that is attached to `node`.
+ */
+export interface PointerTarget { node: Node; object: unknown }
+
 /** A second `click` this soon (ms) after the first, this close (pt), on the same node, also fires `dblclick`. */
 const DBLCLICK = { ms: 500, pt: 4 } as const
 
@@ -81,13 +93,17 @@ const DBLCLICK = { ms: 500, pt: 4 } as const
  * `DBLCLICK` (time from `opts.now`, default `performance.now()`), is followed by `dblclick` there (a third click starts
  * over). `contextMenu` is a secondary-button press. State is updated through `Node.setState` (which marks the nodes
  * dirty) before events are dispatched, so listeners see it.
+ * `move`, `down` and `up` may name a `target` (a 3D object the renderer hit, and the node it is attached to): while
+ * `pointerReachable(target.node, root)`, that node is the hit, whatever `hitTest` says at (x, y), and every event the
+ * call dispatches carries `object`; otherwise the hit test decides as usual and no event carries one.
  * Call `cancel()` when the pointer is lost or leaves the Surface.
  */
 export class PointerTracker {
   /** Hit node first, then its ancestors up to `root`, as of the last hover / press. */
   private hoverPath: Node[] = []
   private pressPath: Node[] = []
-  private last: { x: number; y: number; pointerType: PointerType } = { x: 0, y: 0, pointerType: 'mouse' }
+  /** The last position, and the 3D object it was on (absent when none): the init of every event dispatched. */
+  private last: { x: number; y: number; pointerType: PointerType; object?: unknown } = { x: 0, y: 0, pointerType: 'mouse' }
   private lastClick: { node: Node; t: number; x: number; y: number } | null = null
   private readonly now: () => number
 
@@ -102,14 +118,14 @@ export class PointerTracker {
   get hovered(): Node | null { return this.hoverPath[0] ?? null }
   get pressed(): Node | null { return this.pressPath[0] ?? null }
 
-  move(x: number, y: number, pointerType: PointerType = 'mouse'): void {
-    const hit = this.locate(x, y, pointerType)
+  move(x: number, y: number, pointerType: PointerType = 'mouse', target?: PointerTarget): void {
+    const hit = this.locate(x, y, pointerType, target)
     this.hover(hit)
     if (hit) this.d.dispatch(hit, 'pointermove', this.last)
   }
 
-  down(x: number, y: number, pointerType: PointerType = 'mouse'): void {
-    const hit = this.locate(x, y, pointerType)
+  down(x: number, y: number, pointerType: PointerType = 'mouse', target?: PointerTarget): void {
+    const hit = this.locate(x, y, pointerType, target)
     this.hover(hit)
     this.release()   // a press whose up was lost
     if (!hit) return
@@ -118,19 +134,19 @@ export class PointerTracker {
     this.d.dispatch(hit, 'pointerdown', this.last)
   }
 
-  up(x: number, y: number, pointerType: PointerType = 'mouse'): void {
-    const hit = this.locate(x, y, pointerType)
+  up(x: number, y: number, pointerType: PointerType = 'mouse', target?: PointerTarget): void {
+    const hit = this.locate(x, y, pointerType, target)
     const was = this.pressed
     this.release()
     this.hover(hit)
     if (hit) this.d.dispatch(hit, 'pointerup', this.last)
-    const target = was && hit ? this.commonAncestor(was, hit) : null
-    if (!target) return
+    const clicked = was && hit ? this.commonAncestor(was, hit) : null
+    if (!clicked) return
     const t = this.now(), prev = this.lastClick, at = this.last   // read before listeners can move the pointer
-    const double = prev !== null && prev.node === target && t - prev.t <= DBLCLICK.ms && Math.hypot(x - prev.x, y - prev.y) <= DBLCLICK.pt
-    this.lastClick = double ? null : { node: target, t, x, y }
-    this.d.dispatch(target, 'click', at)
-    if (double) this.d.dispatch(target, 'dblclick', at)
+    const double = prev !== null && prev.node === clicked && t - prev.t <= DBLCLICK.ms && Math.hypot(x - prev.x, y - prev.y) <= DBLCLICK.pt
+    this.lastClick = double ? null : { node: clicked, t, x, y }
+    this.d.dispatch(clicked, 'click', at)
+    if (double) this.d.dispatch(clicked, 'dblclick', at)
   }
 
   /** A secondary-button press: `contextmenu` at the hit node; no press state (the DOM presses nothing either). */
@@ -147,7 +163,12 @@ export class PointerTracker {
     this.hover(null)
   }
 
-  private locate(x: number, y: number, pointerType: PointerType): Node | null {
+  /** The node at (x, y), or `target`'s while it is reachable (then `last` carries its object); records `last`. */
+  private locate(x: number, y: number, pointerType: PointerType, target?: PointerTarget): Node | null {
+    if (target && pointerReachable(target.node, this.root)) {
+      this.last = { x, y, pointerType, object: target.object }
+      return target.node
+    }
     this.last = { x, y, pointerType }
     return hitTest(this.root, x, y, this.theme)
   }

@@ -1,8 +1,10 @@
 import { Matrix4, Plane, Ray, Raycaster, Vector2, Vector3, type Camera, type Intersection, type Object3D } from 'three'
-import { scrollOffset, type Node, type PointerType } from '@glassui/core'
+import { scrollOffset, type Node, type PointerTarget, type PointerType } from '@glassui/core'
 import type { Surface } from './surface/surface'
+import type { Viewport3DAttachment } from './viewport'
 
-export interface SurfaceHit { surface: Surface; x: number; y: number; distance: number }
+/** `target`: present when the ray hit a 3D object attached to a node (`Surface.attach3D`), naming the node and the object hit. */
+export interface SurfaceHit { surface: Surface; x: number; y: number; distance: number; target?: PointerTarget }
 
 /** `o` and every ancestor are visible (three's raycaster does not check this). */
 function shown(o: Object3D | null): boolean {
@@ -21,10 +23,22 @@ const surfaceOf = (h: Intersection): Surface => h.object.userData.surface as Sur
  * app's). Coplanar hits (the screen layer's Surfaces share one plane) are tried from the highest `drawOrder` down: the
  * one drawn on top first. A hit its Surface does not take (an empty area of a bare 'none' Surface, e.g. a full-screen
  * HUD) falls through to the next. Reads the meshes' current `matrixWorld` (the root updates them each tick before routing).
+ *
+ * The same Surfaces' 3D attachments (`Surface.viewports`, shown anchors only) are raycast too, recursively, and only
+ * where every ancestor of the object hit is visible: the nearest such hit wins over the quad hit when it is nearer, or
+ * when no quad hit was taken (a 3D object takes the pointer even over an empty area of a 'none' Surface). It carries
+ * `target` (the attached node and the object hit), and its (x, y) is the hit point taken into the content quad's
+ * space (straight down onto the content plane), through `pointFromUV`.
  */
 export function hitSurfaces(raycaster: Raycaster, surfaces: readonly Surface[]): SurfaceHit | null {
-  const targets = surfaces.filter(s => s.interactive && !s.error && shown(s.contentMesh)).map(s => s.contentMesh)
-  const hits = raycaster.intersectObjects(targets, false)
+  const eligible = surfaces.filter(s => s.interactive && !s.error && shown(s.contentMesh))
+  const quad = hitQuads(raycaster, eligible), solid = hitViewports(raycaster, eligible)
+  return solid && (!quad || solid.distance < quad.distance) ? solid : quad
+}
+
+/** The content-quad part of `hitSurfaces`. */
+function hitQuads(raycaster: Raycaster, surfaces: readonly Surface[]): SurfaceHit | null {
+  const hits = raycaster.intersectObjects(surfaces.map(s => s.contentMesh), false)
   for (let i = 0; i < hits.length;) {
     // the coplanar group starting at hit i, on top first (a stable sort: ties keep the raycaster's order)
     const near = hits[i]!.distance
@@ -38,6 +52,26 @@ export function hitSurfaces(raycaster: Raycaster, surfaces: readonly Surface[]):
       if (surface.takesPointer(x, y)) return { surface, x, y, distance: h.distance }
     }
     i = j
+  }
+  return null
+}
+
+const hitPoint = new Vector3()
+
+/** The 3D-attachment part of `hitSurfaces`: the nearest visible object hit under a shown anchor of `surfaces`. */
+function hitViewports(raycaster: Raycaster, surfaces: readonly Surface[]): SurfaceHit | null {
+  const owner = new Map<Viewport3DAttachment, Surface>(), anchors: Object3D[] = []
+  for (const s of surfaces) for (const a of s.viewports.values()) if (shown(a.anchor)) { owner.set(a, s); anchors.push(a.anchor) }
+  if (!anchors.length) return null
+  for (const h of raycaster.intersectObjects(anchors, true)) {
+    if (!shown(h.object)) continue   // three does not skip hidden descendants
+    // up to its anchor (an object's own `userData.viewport`, if it has one, is not ours)
+    let a: Viewport3DAttachment | undefined, surface: Surface | undefined
+    for (let o: Object3D | null = h.object; o && !surface; o = o.parent) { a = o.userData.viewport as Viewport3DAttachment | undefined; surface = a && owner.get(a) }
+    if (!a || !surface) continue
+    const at = surface.contentMesh.worldToLocal(hitPoint.copy(h.point))
+    const [x, y] = surface.pointFromUV(at.x + 0.5, at.y + 0.5)
+    return { surface, x, y, distance: h.distance, target: { node: a.node, object: h.object } }
   }
   return null
 }
@@ -120,6 +154,9 @@ const FAR = -1e6
  * adopted. Tab steps through its focusables and is prevented, except past the last (Shift+Tab: before the first), which
  * blurs and lets the browser move focus out of the canvas — unless the Surface traps focus (`Surface.trapFocus`, a modal
  * dialog): then Tab wraps to the first (Shift+Tab to the last), is always prevented and never leaves.
+ * A hit on a 3D object (`SurfaceHit.target`) hands the tracker of the Surface it belongs to its node and object with
+ * the move, down or up (the node takes the event while it can take the pointer, and the event carries `object`); a
+ * press captured by another Surface gets none.
  * `handle` is the testable core; `attach` wires the canvas events to it.
  */
 export class PointerBridge {
@@ -172,6 +209,11 @@ export class PointerBridge {
     return hit?.surface === s ? [hit.x, hit.y] : pointOnSurfacePlane(this.raycaster.ray, s)
   }
 
+  /** The 3D object hit, for `s`'s tracker: only when the hit is on `s` (a press captured by another Surface gets none). */
+  private targetOn(s: Surface, hit: SurfaceHit | null): PointerTarget | undefined {
+    return hit?.surface === s ? hit.target : undefined
+  }
+
   /** Makes `s` the hovered Surface, clearing the hover (and press-glow point) of the one it replaces. */
   private hover(s: Surface | null, type: PointerType): void {
     const prev = this.hovered
@@ -211,7 +253,7 @@ export class PointerBridge {
         const s = this.pressing ? this.active : hit?.surface ?? null
         this.hover(s, ptype)
         const pt = s && this.pointOn(s, hit)
-        if (s && pt) { s.setPointer(pt); s.pointer.move(pt[0], pt[1], ptype) }
+        if (s && pt) { s.setPointer(pt); s.pointer.move(pt[0], pt[1], ptype, this.targetOn(s, hit)) }
         break
       }
       case 'pointerdown': {
@@ -230,7 +272,7 @@ export class PointerBridge {
         this.setActive(hit?.surface ?? null)
         this.hover(hit?.surface ?? null, ptype)
         if (!hit) break
-        hit.surface.setPointer([hit.x, hit.y]); hit.surface.pointer.down(hit.x, hit.y, ptype)
+        hit.surface.setPointer([hit.x, hit.y]); hit.surface.pointer.down(hit.x, hit.y, ptype, hit.target)
         // a pointerdown listener moved the keys elsewhere (`setActive`: a dialog opened): the press is over, nothing
         // to focus or capture here
         if (this.active !== hit.surface) { hit.surface.pointer.cancel(); hit.surface.setPointer(null); break }
@@ -247,7 +289,7 @@ export class PointerBridge {
         const s = this.pressing ? this.active : hit?.surface ?? null
         const captured = this.pressing
         this.pressing = false
-        if (s) { const [x, y] = this.pointOn(s, hit) ?? [FAR, FAR]; s.pointer.up(x, y, ptype) }
+        if (s) { const [x, y] = this.pointOn(s, hit) ?? [FAR, FAR]; s.pointer.up(x, y, ptype, this.targetOn(s, hit)) }
         // the tracker re-hovered `s` at the up; once released, a Surface it is not over loses the hover
         this.hover(hit?.surface === s ? s : null, ptype)
         if (captured && e.pointerId !== undefined) this.opts.canvas.releasePointerCapture?.(e.pointerId)

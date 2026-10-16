@@ -24,6 +24,7 @@ import { KawasePyramid } from '../blur/kawase'
 import { SurfaceLuma } from '../luma'
 import { liftFor, partition, type Partition } from './partition'
 import { toColor } from '../color'
+import { Viewport3DAttachment, type Attach3DOptions } from '../viewport'
 
 export interface SurfaceOptions {
   id?: string; width: number; height: number; ptPerUnit?: number; placement?: 'screen' | 'world'; background?: 'none' | 'glass' | string; cornerRadius?: number; interactive?: boolean
@@ -66,8 +67,11 @@ export interface SurfaceEventMap extends Object3DEventMap {
   dispose: object
 }
 
-/** `renderOrder` of each draw inside a Surface's `layer`; images take [images, images + ½) in z order (`ImageSet`). */
-export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, images: 3.5, glyphs: 4 } as const
+/**
+ * `renderOrder` of each draw inside a Surface's `layer`; images take [images, images + ½) in z order (`ImageSet`);
+ * `viewport`: the 3D objects attached to its nodes (`Surface.attach3D`), over the rims and under what rides on glass.
+ */
+export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 } as const
 export { SLAB_FROST } from '../glass/frost'
 /** `renderOrder` of each draw inside the content RT's scene. */
 export const CONTENT_ORDER = { panels: 0, pools: 1, images: 1.5, glyphs: 2 } as const
@@ -185,7 +189,8 @@ function createCaptureProbe(capture: ScreenCapture): Mesh<PlaneGeometry, MeshBas
  *
  * Every draw lives under `layer`, a `Group` whose `renderOrder` is `drawOrder`: three sorts by the nearest group's order
  * first, so Surfaces draw one after another (the root sets `drawOrder`, nearer = higher) instead of layer by layer
- * across Surfaces. No `Group` sits below it. The glass material takes its mesh-local z = 0 as the content plane, so
+ * across Surfaces. No `Group` sits below it whose `renderOrder` is not `drawOrder` too (the 3D attachments' anchors and
+ * the Groups in their objects carry it). The glass material takes its mesh-local z = 0 as the content plane, so
  * everything on that plane is a child of `plane` (an `Object3D` at z = `contentPlaneZ`: the background slab's
  * thickness, 0 without one) and instance matrices stay plane-relative.
  *
@@ -194,6 +199,10 @@ function createCaptureProbe(capture: ScreenCapture): Mesh<PlaneGeometry, MeshBas
  * `opacity` fades the whole Surface: every draw on its plane multiplies its alpha by it (`su.opacity`), the content
  * pass's draws never (the RT is faded once, on its quad). Below 1 the content quad writes no depth; at 0, or while the
  * root has `culled` it (out of view), `layer` is hidden: nothing draws, captures or takes the pointer.
+ *
+ * 3D viewports (spatial spec §2.3): `attach3D` hangs a three.js object off a node of a world Surface, on an anchor in
+ * `plane` that every `tick` places at the node's box (`Viewport3DAttachment`); it fades with `opacity`, raises
+ * `glassBounds` by its `depth`, and the pointer hits it with the content quad (`hitSurfaces`).
  */
 export class Surface extends Object3D<SurfaceEventMap> {
   readonly model: SurfaceModel
@@ -285,6 +294,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The atlas epoch the glyph batches were last built at (the pages are shared: another Surface may have seen the change). */
   private seenEpoch: number
   private isDisposed = false
+  private readonly attachments = new Map<Node, Viewport3DAttachment>()
 
   constructor(opts: SurfaceOptions, ctx: SurfaceContext) {
     super()
@@ -477,9 +487,15 @@ export class Surface extends Object3D<SurfaceEventMap> {
   get root(): Node { return this.model.root }
   /** Units: 0, or the background slab's thickness (it follows the Surface size). */
   get contentPlaneZ(): number { return this.plane.position.z }
-  /** This Surface's place among the others (the `layer` group's `renderOrder`): higher draws later. */
+  /**
+   * This Surface's place among the others (the `layer` group's `renderOrder`): higher draws later. The 3D attachments'
+   * Groups carry it too (`Viewport3DAttachment.groupOrder`), so their objects sort among this Surface's draws.
+   */
   get drawOrder(): number { return this.layer.renderOrder }
-  set drawOrder(v: number) { this.layer.renderOrder = v }
+  set drawOrder(v: number) {
+    this.layer.renderOrder = v
+    for (const a of this.attachments.values()) a.groupOrder = v
+  }
 
   /**
    * The whole Surface's visual opacity, 0–1 (default 1): every draw on its plane multiplies its alpha by it. Setting it
@@ -616,6 +632,37 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The pointer's position on this Surface (pt), or null when it is elsewhere: where a press glows (the bridge sets it). */
   setPointer(pt: [number, number] | null): void { this.pointerPt = pt }
 
+  /** The 3D objects attached to this Surface's nodes (`attach3D`), by node. */
+  get viewports(): ReadonlyMap<Node, Viewport3DAttachment> { return this.attachments }
+
+  /**
+   * Attaches a three.js `object` to `node` (spatial spec §2.3; `Viewport3DAttachment`): from the next `tick` it stands
+   * on the face `node`'s box sits on (its nearest glass ancestor's top, else the content plane), centred on the box,
+   * 1 local unit = 1 pt; it draws in the transparent queue after the rims (`SURFACE_ORDER.viewport`), casts shadows,
+   * fades with `opacity`, and the pointer hits it as part of `node` (`hitSurfaces`: events carry `object`).
+   * `opts.depth` (pt, default the node's width) is how far it rises, for the shadow fit; `opts.update` runs every tick
+   * the anchor is shown (true asks for a frame; a throw fails the Surface). Returns the detach: it restores what was
+   * adopted and takes the object off (nothing is disposed); `dispose` does the same for every attachment. Throws a
+   * `GlassUIError` on a screen Surface, for a node not in this Surface's tree, a node already attached, or an `object`
+   * that is not an `Object3D`.
+   */
+  attach3D(node: Node, object: Object3D, opts: Attach3DOptions = {}): () => void {
+    const scope = 'Surface.attach3D'
+    if (this.model.placement === 'screen') throw new GlassUIError(scope, '只能挂在世界层 Surface 上')
+    let under = false
+    for (let p: Node | null = node; p && !under; p = p.parent) under = p === this.root
+    if (!under) throw new GlassUIError(scope, '节点不在这个 Surface 里')
+    if (this.attachments.has(node)) throw new GlassUIError(scope, '这个节点已经挂了一个 3D 物体：先卸下')
+    if ((object as Partial<Object3D> | null)?.isObject3D !== true) throw new GlassUIError(scope, 'object 必须是 three.js 的 Object3D')
+    const a = new Viewport3DAttachment(node, object, opts, SURFACE_ORDER.viewport, this.drawOrder)
+    this.attachments.set(node, a)
+    this.plane.add(a.anchor)
+    return () => {
+      if (this.attachments.get(node) === a) this.attachments.delete(node)
+      a.dispose()
+    }
+  }
+
   /**
    * Layout → animation → render list → batches (sets `contentDirty`). A throw fails the Surface instead of propagating;
    * a failed or disposed Surface does nothing.
@@ -644,7 +691,15 @@ export class Surface extends Object3D<SurfaceEventMap> {
       // ones only need a frame
       if (this.contentImages.pollChanged()) this.contentDirty = true
       if (this.foregroundImages.pollChanged()) this.needsFrame = true
+      if (this.attachments.size && this.list) this.stepViewports(dt, this.list)
     } catch (e) { this.markFailed(e) }
+  }
+
+  /** Places, fades and updates every attachment from the current list (`Viewport3DAttachment.step`); after layout. */
+  private stepViewports(dt: number, list: RenderList): void {
+    const { theme, scheme, anim } = this.ctx
+    const step = { root: this.root, surface: this.model, glass: list.glass, opacity: this.fade, context: { reducedMotion: anim.reducedMotion, theme, scheme } }
+    for (const a of this.attachments.values()) if (a.step(dt, step)) this.needsFrame = true
   }
 
   private fill(list: RenderList, p: Partition): void {
@@ -799,17 +854,22 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** `dispose` has run: the Surface's resources are freed and it does nothing any more. */
   get disposed(): boolean { return this.isDisposed }
 
-  /** Surface-local bounds of the content face up to the top of its tallest glass (for the shadow-camera fit). */
+  /**
+   * Surface-local bounds of the content face up to the top of its tallest glass, or of its tallest shown 3D attachment
+   * (its face plus its `depth`), for the shadow-camera fit and the view culling.
+   */
   get glassBounds(): Box3 {
     const ppu = this.model.ptPerUnit, w = this.model.width / ppu, h = this.model.height / ppu
     let top = this.contentPlaneZ
     for (const g of this.list?.glass ?? []) top = Math.max(top, this.contentPlaneZ + (g.elevation + g.params.thickness) / ppu)
+    for (const a of this.attachments.values()) if (a.anchor.visible) top = Math.max(top, this.contentPlaneZ + (a.base + a.depth) / ppu)
     return new Box3(new Vector3(-w / 2, -h / 2, 0), new Vector3(w / 2, h / 2, top + 0.01))   // never flat
   }
 
   /**
    * Frees everything the Surface holds (its animation and layout state, render targets, geometries, materials,
-   * captures), detaches it from its parent, then emits `{ type: 'dispose' }` (the root it belongs to drops it then, so a
+   * captures), detaches its 3D attachments (restoring what they adopted; the objects are the owners' and are not
+   * freed), detaches it from its parent, then emits `{ type: 'dispose' }` (the root it belongs to drops it then, so a
    * Surface disposed directly leaves `root.surfaces` too; a throwing listener is logged). Idempotent: a second call
    * frees nothing and emits nothing.
    */
@@ -817,6 +877,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
     if (this.isDisposed) return
     this.isDisposed = true   // first: a throw below must not lead to anything being freed twice
     try {
+      for (const a of this.attachments.values()) a.dispose()   // first: the owners' materials go back whatever fails below
+      this.attachments.clear()
       this.motion.stop()   // a pending `animateTo` resolves false
       this.ctx.anim.forget(this.root)
       this.ctx.layout.dispose(this.root)
