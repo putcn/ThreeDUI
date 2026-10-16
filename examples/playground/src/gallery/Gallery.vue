@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // The component gallery (`?scene=gallery`): every @glassui/vue component, section by section. The content sits on the
 // wall with no glass under it (spec §8.3: glass on controls, never on content areas); the controls (Buttons, Switches,
-// Checkboxes) are glass right on the wall, with no panel behind them. Beside the column stands a world-layer <Surface>:
-// a glass panel in the scene, turned about Y, with hover and clicks of its own.
+// Checkboxes, Inputs) are glass right on the wall, with no panel behind them. Beside the column stands a world-layer
+// <Surface>: a glass panel in the scene, turned about Y, with hover, clicks and an Input of its own.
 import { computed, h, onBeforeUnmount, ref, type FunctionalComponent } from 'vue'
-import { Box, Button, Checkbox, Icon, ICON_NAMES, Stack, Surface, Switch, Text, useScheme } from '@glassui/vue'
+import { Box, Button, Checkbox, Icon, ICON_NAMES, Input, Stack, Surface, Switch, Text, useScheme } from '@glassui/vue'
 
 // The page is a vertical `scroll` (the wheel scrolls it once later sections outgrow the viewport). No page fill: the
 // content sits on the wall itself, which the later sections' glass refracts.
@@ -63,6 +63,13 @@ const channels = ref([{ key: 'mail', label: '邮件', on: true }, { key: 'sms', 
 const allOn = computed(() => channels.value.every(c => c.on))
 const someOn = computed(() => !allOn.value && channels.value.some(c => c.on))
 const setAll = (on: boolean) => { for (const c of channels.value) c.on = on }
+
+/** The Inputs section: every field is v-model'd; the reference's three report what Enter submitted. */
+const nickname = ref(''), city = ref('杭州市西湖区文三路 90 号'), secret = ref('glass-ui-2026'), qty = ref<number | null>(12)
+const query = ref('液态玻璃'), poem = ref('春眠不觉晓，处处闻啼鸟。夜来风雨声，花落知多少。')
+const fullName = ref(''), email = ref(''), password = ref(''), submitted = ref('')
+/** The world panel's field. */
+const note = ref('')
 </script>
 
 <template>
@@ -309,23 +316,82 @@ const setAll = (on: boolean) => { for (const c of channels.value) c.on = on }
           <Text :value="`条款：${terms ? '已同意' : '未同意'} · 记住我：${rememberMe ? '开' : '关'}；Tab 聚焦时显示焦点环`" size="sm" color="secondaryLabel" />
         </Stack>
       </Stack>
+
+      <Stack id="inputs" :gap="24">
+        <Stack :gap="12">
+          <Stack direction="horizontal" justify="between" align="end">
+            <Text value="Inputs" size="xl" :weight="700" />
+            <Text value="输入框 · v-model · 输入法、复制粘贴、撤销由页面里的原生输入框代理" size="sm" color="secondaryLabel" :style="{ marginBottom: 3 }" />
+          </Stack>
+          <Box :style="{ height: 1, bg: 'separator' }" />
+        </Stack>
+
+        <!-- glass right on the wall, as the other controls: each kind in a row -->
+        <Stack :gap="16">
+          <Stack direction="horizontal" :gap="16" align="center">
+            <RowCaption value="EMPTY · 占位提示" />
+            <Input v-model="nickname" placeholder="你的昵称" :style="{ width: 340 }" />
+          </Stack>
+          <Stack direction="horizontal" :gap="16" align="center">
+            <RowCaption value="FILLED · 已填写" />
+            <Input v-model="city" :style="{ width: 340 }" />
+          </Stack>
+          <Stack direction="horizontal" :gap="16" align="center">
+            <RowCaption value="PASSWORD · 密码" />
+            <Input v-model="secret" type="password" leading-icon="lock" placeholder="密码" :style="{ width: 340 }" />
+          </Stack>
+          <Stack direction="horizontal" :gap="16" align="center">
+            <RowCaption value="NUMBER · 数字" />
+            <Input v-model="qty" type="number" placeholder="0" :style="{ width: 200 }" />
+            <Text :value="`v-model：${qty === null ? 'null' : qty}`" size="sm" color="secondaryLabel" />
+          </Stack>
+          <Stack direction="horizontal" :gap="16" align="center">
+            <RowCaption value="CLEARABLE · 可清除" />
+            <Input v-model="query" clearable leading-icon="search" placeholder="搜索" :style="{ width: 340 }" />
+          </Stack>
+          <Stack direction="horizontal" :gap="16" align="center">
+            <RowCaption value="DISABLED · 禁用" />
+            <Input model-value="不可编辑" disabled leading-icon="user" :style="{ width: 340 }" />
+          </Stack>
+          <Stack direction="horizontal" :gap="16" align="center">
+            <RowCaption value="CHINESE · 中文 · 长文本滚动" />
+            <Input v-model="poem" :style="{ width: 340 }" />
+          </Stack>
+          <Stack direction="horizontal" :gap="16" align="center">
+            <RowCaption value="SIZES · 三种尺寸" />
+            <Input size="small" placeholder="small 36" :style="{ width: 180 }" />
+            <Input placeholder="regular 52" :style="{ width: 220 }" />
+          </Stack>
+        </Stack>
+
+        <!-- the reference's fields: large (84 pt), a leading icon each, the password's eye -->
+        <Stack :gap="16" :style="{ maxWidth: 560 }">
+          <Caption value="参考稿 REFERENCE · LARGE 84 · 前置图标" />
+          <Input v-model="fullName" size="large" leading-icon="user" placeholder="Full name" @submit="submitted = fullName" />
+          <Input v-model="email" size="large" leading-icon="mail" placeholder="Email address" @submit="submitted = email" />
+          <Input v-model="password" type="password" size="large" leading-icon="lock" placeholder="Password" @submit="submitted = '••••'" />
+          <Text :value="submitted ? `Enter 提交了：${submitted}` : '点按或 Tab 进入编辑；Enter 发出 submit，Esc 退出；拖动选择，双击选词'" size="sm" color="secondaryLabel" />
+        </Stack>
+      </Stack>
     </Box>
   </scroll>
 
   <!-- In the strip right of the column (main.ts: `galleryColumn`): through the playground camera, x = 2.5 keeps the
-       panel in that strip and on screen from 4:3 to ultrawide. 340 × 232 pt at 244 pt per unit: 1.39 × 0.95 units.
+       panel in that strip and on screen from 4:3 to ultrawide. 340 × 300 pt at 244 pt per unit: 1.39 × 1.23 units.
        Seen from the camera it is already ≈ 0.34 rad off-axis there (−0.35 would face the viewer square on), so −0.7
        turns it ≈ 0.37 rad past that, toward the gallery: a visible slant (its near, right edge ≈ 13 % taller) that
        keeps the text legible. -->
-  <Surface :width="340" :height="232" :position="[2.5, 0.9, 0]" :rotation="[0, -0.7, 0]" background="glass" :radius="28">
-    <Stack id="world-panel" justify="between" :style="{ padding: 24, flexGrow: 1 }">
+  <Surface :width="340" :height="300" :position="[2.5, 0.9, 0]" :rotation="[0, -0.7, 0]" background="glass" :radius="28">
+    <Stack id="world-panel" justify="between" :gap="14" :style="{ padding: 24, flexGrow: 1 }">
       <Stack :gap="10">
         <Stack direction="horizontal" :gap="10" align="center">
           <Icon name="star" :size="24" color="accent" />
           <Text value="世界层 World layer" size="lg" :weight="700" />
         </Stack>
-        <Text value="一块世界层 Surface：场景里的玻璃面板，绕 Y 轴转了 −0.7 rad，有自己的悬停与点击。" size="sm" color="secondaryLabel" />
+        <Text value="一块世界层 Surface：场景里的玻璃面板，绕 Y 轴转了 −0.7 rad，有自己的悬停、点击与输入。" size="sm" color="secondaryLabel" />
       </Stack>
+      <!-- typed into on a tilted Surface: the IME proxy (and its candidate window) follows the projected caret -->
+      <Input id="world-input" v-model="note" leading-icon="info" placeholder="在世界层输入…" clearable />
       <Box
         id="world-tap" tw="flex-row items-center gap-2"
         :style="{ alignSelf: 'flex-start', paddingX: 14, paddingY: 8, radius: 'capsule', bg: chip, hover: { bg: chipHover }, pressed: { scale: 0.96 }, transition: { bg: 'smooth', scale: 'snappy' } }"
