@@ -202,7 +202,7 @@ describe('PointerBridge.handle', () => {
     bridge.handle('pointermove', { clientX: 5, clientY: 5, pointerType: 'mouse' })   // off the button, and the canvas's (−5, −15)
     expect(got).toEqual([
       ['pointerenter', 200, 140], ['pointermove', 200, 140], ['pointerdown', 201, 140], ['pointerup', 202, 141], ['click', 202, 141],
-      ['wheel', 203, 142], ['contextmenu', 204, 143], ['pointerleave', -5, -15],
+      ['pointermove', 203, 142], ['wheel', 203, 142], ['contextmenu', 204, 143], ['pointerleave', -5, -15],   // a wheel hovers where it is first
     ])
   })
   it('pointer events carry the DOM\'s buttons and shiftKey when it had them (spatial spec §12.5); a right drag is moves with buttons & 2', () => {
@@ -223,7 +223,7 @@ describe('PointerBridge.handle', () => {
     bridge.handle('pointermove', { clientX: 5, clientY: 5, pointerType: 'mouse', buttons: 2, shiftKey: true })   // off the button
     expect(got).toEqual([
       ['pointerenter', 0, false], ['pointermove', 0, false], ['pointerdown', 1, true], ['pointermove', 1, true],
-      ['pointerup', 0, false], ['click', 0, false], ['wheel', 0, true], ['contextmenu', 2, false],
+      ['pointerup', 0, false], ['click', 0, false], ['pointermove', 0, true], ['wheel', 0, true], ['contextmenu', 2, false],
       ['pointermove', 2, false], ['pointermove', '-', '-'], ['pointerleave', 2, true],
     ])
   })
@@ -265,6 +265,33 @@ describe('PointerBridge.handle', () => {
     bridge.handle('wheel', { clientX: 50, clientY: 350, deltaY: 10000 })
     expect(list.props.scrollY).toBe(400)
     expect(applyWheel(tall, 0, -10000)).toBe(true); expect(list.props.scrollY).toBe(0)
+  })
+  it('a wheel at a new point (no move before it: the Surface moved under a still pointer) re-hovers there first, as a move would, and goes to the node under it', () => {
+    const { s, btn, bridge } = scene()
+    const other = new Node('box', 'other'); other.setStyle({ position: 'absolute', left: 400, top: 300, width: 200, height: 100, bg: 'fill' }); s.root.appendChild(other); s.tick(0)
+    const wheels: string[] = [], hovers: string[] = []
+    for (const n of [btn, other]) {
+      s.events.on(n, 'wheel', e => { if (e.currentTarget === n) wheels.push(n.id!) })
+      s.events.on(n, 'pointerenter', () => hovers.push(`enter ${n.id}`)); s.events.on(n, 'pointerleave', () => hovers.push(`leave ${n.id}`))
+    }
+    bridge.handle('pointermove', { clientX: 200, clientY: 140 })                   // on btn
+    expect(btn.state.hover).toBe(true)
+    bridge.handle('wheel', { clientX: 450, clientY: 350, deltaY: 30 })              // on `other`, with no move in between
+    expect(wheels).toEqual(['other'])
+    expect(other.state.hover).toBe(true); expect(btn.state.hover).toBe(false)
+    expect(hovers).toEqual(['enter btn', 'leave btn', 'enter other'])
+    bridge.handle('wheel', { clientX: 455, clientY: 352, deltaY: 30 })              // still on it: no new enter
+    expect(wheels).toEqual(['other', 'other']); expect(hovers).toHaveLength(3)
+    // off every Surface: nothing hovered, no wheel dispatched
+    bridge.handle('wheel', { clientX: -50, clientY: -50, deltaY: 30 })
+    expect(wheels).toHaveLength(2); expect(other.state.hover).toBe(false); expect(bridge.hovered).toBeNull()
+  })
+  it('a wheel during a press (the pointer captured) goes to the pressed Surface, as before', () => {
+    const { s, btn, bridge } = scene()
+    const seen = vi.fn(); s.events.on(btn, 'wheel', seen)
+    bridge.handle('pointerdown', { clientX: 200, clientY: 140, pointerId: 1, button: 0 })
+    bridge.handle('wheel', { clientX: 2000, clientY: 2000, deltaY: 30 })            // off the canvas: still the captured Surface's
+    expect(seen).toHaveBeenCalledTimes(1); expect(btn.state.pressed).toBe(true)
   })
   it('the wheel event carries the pointer position and deltas; nothing scrolled → no preventDefault', () => {
     const { s, btn, bridge } = scene()

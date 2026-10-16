@@ -164,6 +164,9 @@ const FAR = -1e6
  * A hit on a 3D object (`SurfaceHit.target`) hands the tracker of the Surface it belongs to its node and object with
  * the move, down or up (the node takes the event while it can take the pointer, and the event carries `object`, the
  * hit `point`, and `instanceId` for an instanced one); a press captured by another Surface gets none.
+ * A wheel goes to the node under the pointer: unless a press holds the capture (then to its Surface's hovered node), it
+ * first hovers there as a move would (enters and leaves, and a `pointermove`), since the Surfaces may have moved under a
+ * still pointer since the last move; over no Surface it clears the hover and goes nowhere.
  * Every pointer event it dispatches (moves, enters and leaves, presses, clicks, `contextmenu`, `wheel`, a cancel)
  * carries the pointer's place on the canvas, CSS px from its top-left, as `screenX` / `screenY`, and the DOM event's
  * `buttons` and `shiftKey` when it had them (spatial spec §12.5: a right drag, which presses nothing, is moves with
@@ -328,7 +331,14 @@ export class PointerBridge {
       }
       case 'wheel': {
         const hit = this.cast(e)
-        const s = this.hovered ?? hit?.surface ?? null
+        // a press holds the capture: its Surface's hover stands. Otherwise the wheel first hovers where it is, as a move
+        // there would: a Surface may have moved under a still pointer (a Block flying in), leaving the hover stale
+        const s = this.pressing ? this.active : hit?.surface ?? null
+        if (!this.pressing) {
+          this.hover(s, ptype, at, keys)
+          const pt = s && this.pointOn(s, hit)
+          if (s && pt) { s.setPointer(pt); s.pointer.move(pt[0], pt[1], ptype, this.targetOn(s, hit), at, keys) }
+        }
         const target = s && (s.pointer.hovered ?? s.root)
         if (!s || !target) break
         const scrolled = applyWheel(target, finite(e.deltaX), finite(e.deltaY))
