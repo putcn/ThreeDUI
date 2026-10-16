@@ -3262,6 +3262,379 @@ git commit -m "feat(vue): Viewport3D (a generic 3D slot) and BarChart3D — bars
 
 ---
 
+### Task 9H: Lights anchored in space — the UI light follows the rig's focus pose
+
+Spatial spec §11.1. Today the UI lights follow the camera, so moving the camera changes nothing in the shading and the result looks like a CSS 3D transform. With this task, parallax and focus changes make the highlights, rims and shadows move across the content.
+
+**Files:**
+- Modify: `packages/render/src/rig.ts` (`lightPose`, `lightResponse`), `packages/render/src/root.ts` (the lights follow the rig's light pose; shadow refit on light motion)
+- Test: `packages/render/test/rig.test.ts`, `packages/render/test/root.test.ts`
+
+**Interfaces:**
+- Consumes: Task 9B's `CameraRig` (`focusPose`, its springs, `target`).
+- Produces:
+  - `CameraRigOptions.lightResponse?: number` (default 1.2 s).
+  - `CameraRig.lightPose: { position: Vector3; quaternion: Quaternion } | null`. It is the focus pose without parallax, followed by critically damped springs with `lightResponse`. Position uses three springs; orientation uses a progress spring slerping from the previous light quaternion, as the camera does.
+    - It is `null` before the first `focus` and after the target goes away.
+    - `immediate` and reduced motion put it on the pose at once.
+  - `root.tick`:
+    - when a live rig has a non-null `lightPose`, `lights.group` copies it instead of the camera;
+    - otherwise the lights follow the camera, as today;
+    - a change of the lights' pose counts as `changed` for `fitShadows`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`rig.test.ts` (the file's `rig()`, `surface()`, `run()`, `listeners` and `camera`):
+
+```ts
+it('the light pose ignores parallax and lags the camera on a focus change', () => {
+  const r = rig(), a = surface(); void r.focus(a, { immediate: true }); r.update(1 / 60)
+  const p0 = r.lightPose!.position.clone()
+  listeners.get('pointermove')!({ clientX: 800, clientY: 300, pointerType: 'mouse' }); run(r, 3)
+  expect(camera.position.distanceTo(p0)).toBeGreaterThan(0.05)                 // the camera orbits…
+  expect(r.lightPose!.position.distanceTo(p0)).toBeLessThan(1e-6)              // …the light stays
+  listeners.get('pointerleave')!({}); run(r, 3)
+  const b = surface([4, 0, 0]); void r.focus(b); run(r, 0.3)
+  const goal = { position: new Vector3(), quaternion: new Quaternion() }; focusPose(b, 50, aspect, 0.08, goal)
+  expect(r.lightPose!.position.distanceTo(goal.position)).toBeGreaterThan(camera.position.distanceTo(goal.position))
+  run(r, 6); expect(r.lightPose!.position.distanceTo(goal.position)).toBeLessThan(1e-3)
+})
+it('immediate puts the light on the pose; no target, no light pose', () => {
+  const r = rig(); expect(r.lightPose).toBeNull()
+  const s = surface([2, 0, 0]); void r.focus(s, { immediate: true }); r.update(1 / 60)
+  const goal = { position: new Vector3(), quaternion: new Quaternion() }; focusPose(s, 50, aspect, 0.08, goal)
+  expect(r.lightPose!.position.distanceTo(goal.position)).toBeLessThan(1e-9)
+  s.dispose(); r.update(1 / 60); expect(r.lightPose).toBeNull()
+})
+```
+
+`root.test.ts` (in `describe('the root API for the Vue layer')`):
+
+```ts
+it('with a focused rig the lights follow its light pose, without one the camera', async () => {
+  const { root, camera } = await createRoot()
+  root.tick(1 / 60); expect(root.lights.group.position.distanceTo(camera.getWorldPosition(new Vector3()))).toBeLessThan(1e-9)
+  const rig = root.createCameraRig(), s = root.createSurface({ layer: 'world', width: 244, height: 244 })
+  void rig.focus(s, { immediate: true }); root.tick(1 / 60)
+  expect(root.lights.group.position.distanceTo(rig.lightPose!.position)).toBeLessThan(1e-9)
+  expect(root.lights.group.quaternion.angleTo(rig.lightPose!.quaternion)).toBeLessThan(1e-9)
+})
+it('a moving light refits the shadow map', async () => {
+  const { root } = await createRoot()
+  const rig = root.createCameraRig(), a = root.createSurface({ layer: 'world', width: 244, height: 244 }), b = root.createSurface({ layer: 'world', width: 244, height: 244 })
+  b.position.set(3, 0, 0); void rig.focus(a, { immediate: true }); root.tick(1 / 60); root.tick(1 / 60)
+  root.lights.key.shadow.needsUpdate = false
+  void rig.focus(b); root.tick(1 / 60); expect(root.lights.key.shadow.needsUpdate).toBe(true)
+})
+```
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/render/test/rig.test.ts packages/render/test/root.test.ts` (FAIL). Implement it as specified, then run again (PASS).
+
+- [ ] **Step 3: Typecheck, commit**
+
+Run: `pnpm vitest run packages/render && pnpm typecheck`. Expected: PASS / exit 0. The visual baselines are unaffected: no existing scene has a rig.
+
+```bash
+git add packages/render
+git commit -m "feat(render): the UI lights follow the rig's focus pose (no parallax, slower spring), so highlights and shadows move across the content"
+```
+
+---
+
+### Task 9I: Depth — unfocused Blocks recede; Cards float, tilt toward the pointer, rise in
+
+Spatial spec §11.2, §11.3.
+
+**Files:**
+- Modify:
+  - `packages/vue/src/spatial/context.ts`: `RECEDE`, plus a Block context for Cards.
+  - `packages/vue/src/components/Block.ts`: the rest pose depends on focus; it provides the Block context.
+  - `packages/vue/src/components/Card.ts`: elevation, hover lift and tilt, rise-in.
+  - `packages/vue/src/components/Block.ts` and `Card.ts` manifest texts: the deferred 9F minors. Block must stop saying Card is concentric (Block.ts:29, :59), and the Card mistake that contradicts a one-Card Block goes.
+- Test: `packages/vue/test/spatial.test.ts`
+
+**Interfaces:**
+- Consumes: Task 9F (Space, Block, Card, `SpaceContext.focused`, Block's rest pose and `animateTo`), core `Node.elevation`/`Node.tilt` with `transition: { elevation, tilt }`, `useMotion`, `root.anim.reducedMotion`.
+- Produces:
+  - `RECEDE = { position: [0, 0, -0.4], scale: 0.96 } as const`.
+    - An unfocused Block's rest pose is its slot (or its explicit pose) ⊕ `RECEDE`, composed the way `enterFrom` is: the position offset is rotated into the Block's frame and the scale multiplies.
+    - A change of focus animates each Block to its new rest pose; `frozen` makes it `immediate`.
+    - A Block that enters unfocused enters toward its receded pose.
+  - `CARD_DEPTH = { rest: 24, hover: 40, tilt: 4 * Math.PI / 180, stagger: 0.06 } as const`.
+  - `BLOCK: InjectionKey<{ focused: Readonly<Ref<boolean>>; nextCard(): number }>`, provided by Block. `nextCard()` returns 0, 1, 2… in Card setup order.
+  - Card:
+    - Its host `box` node gets `transition: { elevation: 'smooth', tilt: 'snappy' }` merged into its style, as defaults the user's style can override.
+    - Through a template ref to its node, Card sets:
+      - **rise-in:** `node.elevation = 0` on mount, then `CARD_DEPTH.rest` after `nextCard() × stagger` seconds (a timer). With `motion: 'frozen'` it is `rest` at once.
+      - **hover:** with `onPointermove` it reads `e.localX / width` and `e.localY / height` (the node's laid-out size). It sets `node.tilt = { x: −(ly − 0.5)·2·tilt, y: (lx − 0.5)·2·tilt }` and `node.elevation = hover`. `onPointerleave` sets the tilt back to `{ x: 0, y: 0 }` and the elevation to `rest`. Hover applies only while `BLOCK.focused` is true; under `root.anim.reducedMotion` the tilt stays 0 and only the lift applies.
+    - The timer is cleared on unmount.
+    - Card's own `onPointermove`/`onPointerleave` merge with a user's listeners: both run.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('unfocused Blocks recede; focus brings one forward', async () => {
+  const root = createFakeRoot(), focus = ref('a')
+  mountGlass(() => h(Space, { focus: focus.value }, () => blocks(['a', 'b'])), { root }); await flush()
+  const [a, b] = root.surfacesMade, slotB = arcSlots([2, 2], 7, 0.5)[1]!
+  expect(a!.animations.at(-1)!.target).toMatchObject({ position: [0, 0, 0], scale: [1, 1, 1] })
+  const tb = b!.animations.at(-1)!.target as { position: number[]; scale: number[] }
+  expect(tb.scale).toEqual([0.96, 0.96, 0.96])
+  const ry = slotB.rotation[1], back = [-0.4 * Math.sin(ry), 0, -0.4 * Math.cos(ry)]          // (0, 0, −0.4) rotated about y
+  expect(tb.position[0]).toBeCloseTo(slotB.position[0] + back[0]!); expect(tb.position[2]).toBeCloseTo(slotB.position[2] + back[2]!)
+  focus.value = 'b'; await nextTick(); await flush()
+  expect(b!.animations.at(-1)!.target).toMatchObject({ scale: [1, 1, 1] }); expect((a!.animations.at(-1)!.target as { scale: number[] }).scale).toEqual([0.96, 0.96, 0.96])
+})
+it('Cards rise in, staggered; frozen stands them at once', async () => {
+  vi.useFakeTimers()
+  try {
+    const root = createFakeRoot()
+    mountGlass(() => h(Space, null, () => [h(Block, { name: 'a', width: 600, height: 400 }, () => [h(Card, { id: 'c0' }), h(Card, { id: 'c1' })])]), { root }); await flush()
+    const s = root.surfacesMade[0]!, c0 = byId(s.root, 'c0')!, c1 = byId(s.root, 'c1')!
+    expect(c0.elevation).toBe(0); vi.advanceTimersByTime(10); expect(c0.elevation).toBe(24); expect(c1.elevation).toBe(0)
+    vi.advanceTimersByTime(60); expect(c1.elevation).toBe(24)
+  } finally { vi.useRealTimers() }
+  const r2 = createFakeRoot()
+  mountGlass(() => h(Space, null, () => [h(Block, { name: 'a', width: 600, height: 400 }, () => [h(Card, { id: 'c0' })])]), { root: r2, motion: 'frozen' }); await flush()
+  expect(byId(r2.surfacesMade[0]!.root, 'c0')!.elevation).toBe(24)
+})
+it('a Card on the focused Block lifts and tilts toward the pointer, and settles on leave', async () => {
+  const root = createFakeRoot()
+  mountGlass(() => h(Space, null, () => [h(Block, { name: 'a', width: 600, height: 400 }, () => [h(Card, { id: 'c', style: { width: 200, height: 100 } })])]), { root, motion: 'frozen' })
+  await flush(); root.tick()
+  const s = root.surfacesMade[0]!, c = byId(s.root, 'c')!, r = absoluteRect(c)
+  s.pointer.move(r.x + r.width - 1, r.y + r.height / 2)                           // right edge, middle
+  expect(c.elevation).toBe(40); expect(c.tilt.y).toBeGreaterThan(0.06); expect(Math.abs(c.tilt.x)).toBeLessThan(0.01)
+  s.pointer.move(-50, -50); expect(c.elevation).toBe(24); expect(c.tilt).toEqual({ x: 0, y: 0 })
+})
+it('reduced motion lifts without tilting; a Card on an unfocused Block takes no hover', async () => {
+  const root = createFakeRoot(); root.anim.reducedMotion = true
+  const card = (id: string) => h(Card, { id, style: { width: 200, height: 100 } })
+  mountGlass(() => h(Space, { focus: 'a' }, () => [
+    h(Block, { name: 'a', width: 600, height: 400 }, () => [card('ca')]),
+    h(Block, { name: 'b', width: 600, height: 400 }, () => [card('cb')]),
+  ]), { root, motion: 'frozen' })
+  await flush(); root.tick()
+  const [a, b] = root.surfacesMade, ca = byId(a!.root, 'ca')!, cb = byId(b!.root, 'cb')!
+  const ra = absoluteRect(ca); a!.pointer.move(ra.x + ra.width - 1, ra.y + 10)
+  expect(ca.elevation).toBe(40); expect(ca.tilt).toEqual({ x: 0, y: 0 })
+  const rb = absoluteRect(cb); b!.pointer.move(rb.x + rb.width - 1, rb.y + 10)
+  expect(cb.elevation).toBe(24)                                                  // unfocused: its content takes no pointer
+})
+```
+
+If `three` is not resolvable from vue tests, compute `back` by hand. The rotation is about y only: `back = [−0.4·sin(ry), 0, −0.4·cos(ry)]`. `absoluteRect` comes from `@glassui/core`.
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/vue/test/spatial.test.ts` (FAIL). Implement it, then run again (PASS).
+
+- [ ] **Step 3: Typecheck, build, commit**
+
+Run: `pnpm vitest run packages/vue && pnpm typecheck && pnpm playground:build`. Expected: PASS / exit 0.
+
+```bash
+git add packages/vue
+git commit -m "feat(vue): depth — unfocused Blocks recede, Cards float with real shadows, lift and tilt toward the pointer, rise in staggered"
+```
+
+---
+
+### Task 9J: `<LineChart>` — a 2D line chart
+
+Spatial spec §11.5. Dashboards need a 2D trend chart next to the 3D ones.
+
+**Files:**
+- Create: `packages/vue/src/components/LineChart.ts`, `packages/vue/src/linechart-draw.ts`
+- Modify: `packages/vue/src/chart.ts` (`niceTicks`), `packages/vue/src/index.ts`
+- Test: `packages/vue/test/linechart.test.ts`
+
+**Interfaces:**
+- Consumes: `useCanvasFactory`, `useScheme`, `useRoot`, `colorOf` (tokens.ts), `defineGlassComponent`, Task 9G's `formatValue`.
+- Produces:
+  - `niceTicks(min: number, max: number, target = 4): number[]`: steps of 1, 2 or 5 × 10ⁿ, from ≤ min to ≥ max, with 3–6 ticks.
+  - `drawLineChart(ctx: CanvasRenderingContext2D, o)`, where `o` is:
+    ```ts
+    {
+      width: number; height: number; scale: number                   // pt; the canvas is width·scale × height·scale
+      labels: readonly string[]; series: readonly { color: RGBA; data: readonly number[] }[]
+      ticks: readonly number[]; grid: RGBA; text: RGBA; font: string
+      format: (v: number) => string; hover: number | null
+    }
+    ```
+    It draws:
+    - a left gutter of 44 pt for the y labels and a bottom gutter of 22 pt for the x labels;
+    - horizontal grid lines at the ticks;
+    - at most 6 x labels, evenly picked;
+    - each series as a smooth curve (monotone cubic), 2.5 pt wide;
+    - under each curve, an area gradient from the series colour at alpha 0.22 down to 0;
+    - with `hover`, a vertical guide at that index and a 4 pt dot on each series.
+
+    Pure, so tests can run it on an `@napi-rs/canvas` context.
+  - `LineChart`:
+    - props: `labels` (`z.array(z.string()).min(2)`), `series` (`z.array(z.object({ name, data: z.array(z.number().finite()), color: z.string().optional() }).strict())`; an empty array is allowed), `height?` (default 200), `format?` (a function), `yMin?` (default 0);
+    - default series colours: `accent`, `success`, `danger`, `secondaryLabel`, then cycling;
+    - event: `hover`, with payload `{ index: number; label: string; values: number[] } | null`.
+  - Render:
+    - A column: a legend row (a 8 pt dot plus the name per series), then a chart box `height` pt tall.
+    - The chart box holds an `image` node (`width: '100%'`, `height`) whose `src` is a canvas from `useCanvasFactory()`.
+    - When there is a hover, an absolutely positioned flat `fill` panel (radius 10, padding 8, 1 pt `separator` border) sits beside the guide. It lists `label` and each series' `name: format(v)`.
+  - Redraw happens when any of these change: the chart box's laid-out width (read after `root.afterTick()`), the data, the scheme, or the hover.
+  - The canvas is `ceil(width·2) × ceil(height·2)`, drawn with `scale: 2`.
+  - Hover index: `round((localX − 44) / (width − 44) × (n − 1))`, clamped; `null` on leave.
+  - Errors:
+    - a series whose length ≠ `labels.length` reports `[LineChart.series] 第 i 条系列 "name" 有 m 个点，labels 有 n 个`;
+    - an empty `series` shows "暂无数据" and draws nothing.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+it('niceTicks covers the range in 1/2/5 steps', () => {
+  expect(niceTicks(0, 97)).toEqual([0, 20, 40, 60, 80, 100])
+  expect(niceTicks(0, 1)[0]).toBe(0); expect(niceTicks(0, 1).at(-1)).toBeGreaterThanOrEqual(1)
+  const t = niceTicks(3, 4.2); expect(t[0]).toBeLessThanOrEqual(3); expect(t.at(-1)).toBeGreaterThanOrEqual(4.2); expect(t.length).toBeGreaterThanOrEqual(3); expect(t.length).toBeLessThanOrEqual(6)
+})
+it('drawLineChart puts a series where its value says', () => {
+  const c = createCanvas(400, 200), ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
+  drawLineChart(ctx, { width: 200, height: 100, scale: 2, labels: ['a', 'b'], series: [{ color: [1, 0, 0, 1], data: [50, 50] }], ticks: [0, 50, 100], grid: [0, 0, 0, 0.1], text: [0, 0, 0, 1], font: 'sans-serif', format: String, hover: null })
+  // y = 50 of 0..100 sits halfway down the plot (top 0 … bottom 100 − 22 = 78 pt): 39 pt → 78 px; x mid-plot
+  const px = ctx.getImageData(Math.round((44 + (200 - 44) / 2) * 2), Math.round(39 * 2), 1, 1).data
+  expect(px[0]).toBeGreaterThan(200); expect(px[1]).toBeLessThan(80)
+})
+it('LineChart draws into an image twice its laid-out size; legend; mismatch errors; empty says so', async () => {
+  const root = createFakeRoot()
+  const { c } = mountGlass(() => h(Box, { style: { width: 400 } }, () => [h(LineChart, { labels: ['一', '二', '三'], series: [{ name: '入库', data: [1, 3, 2] }, { name: '出库', data: [2, 1, 4] }] })]), { root })
+  root.tick(); await flush(); root.tick(); await flush()
+  const img = first(c, 'image'), src = img.props.src as { width: number; height: number }
+  expect(src.width).toBe(800); expect(src.height).toBe(400)
+  expect(JSON.stringify(tree(c))).toContain('入库'); expect(JSON.stringify(tree(c))).toContain('出库')
+  expect(mountGlass(() => h(LineChart, { labels: ['a', 'b'], series: [{ name: 'x', data: [1] }] })).errors[0]).toMatch(/\[LineChart\.series\].*"x".*1 个点.*2 个/)
+  expect(JSON.stringify(tree(mountGlass(() => h(LineChart, { labels: ['a', 'b'], series: [] })).c))).toContain('暂无数据')
+})
+it('hover picks the nearest index, emits it and shows the values panel', async () => {
+  const root = createFakeRoot(), seen: unknown[] = []
+  const { c } = mountGlass(() => h(Box, { style: { width: 400 } }, () => [h(LineChart, { id: 'lc', labels: ['一', '二', '三'], series: [{ name: '入库', data: [1, 3, 2] }], format: (v: number) => `${v} 件`, onHover: (e: unknown) => seen.push(e) })]), { root })
+  root.tick(); await flush()
+  const img = first(c, 'image'), r = absoluteRect(img)
+  // the chart box is the image's parent; localX = 44 + (400 − 44) · 0.5 → index 1
+  img.parent!.handlers.get('pointermove')!({ localX: 44 + 178, localY: 50 } as never); await nextTick()
+  expect(seen.at(-1)).toEqual({ index: 1, label: '二', values: [3] }); expect(JSON.stringify(tree(c))).toContain('3 件')
+  img.parent!.handlers.get('pointerleave')!({} as never); await nextTick(); expect(seen.at(-1)).toBeNull()
+})
+```
+
+The hover test calls the element handler directly, as the existing primitive tests do. If handlers are reached differently in this codebase, drive it through a tracker on a fake Surface instead.
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/vue/test/linechart.test.ts` (FAIL). Implement it, then run again (PASS).
+
+- [ ] **Step 3: Typecheck, build, commit**
+
+Run: `pnpm vitest run packages/vue && pnpm typecheck && pnpm playground:build`. Expected: PASS / exit 0.
+
+```bash
+git add packages/vue
+git commit -m "feat(vue): LineChart — a 2D trend chart rasterised at 2×, nice ticks, smooth curves with area fill, hover guide and values"
+```
+
+---
+
+### Task 9K: The WMS dashboard preview and the warehouse twin — visual checkpoint 2d (show the user)
+
+Spatial spec §4 (steps 2–5) and §11.4, §11.6. This is the first look the user gets at the commercial demo: it must read like real software and show what 3D adds.
+
+**Files:**
+- Modify:
+  - `packages/core/src/events/dispatch.ts`: `PointerTarget.instanceId?`, `UIEvent.instanceId?`, copied like `object`.
+  - `packages/render/src/pointer.ts`: `hitSurfaces` puts `instanceId` on `target` when the hit has one.
+  - `packages/vue/src/components/Viewport3D.ts`: nothing to change if events pass through. Add a test that `instanceId` arrives.
+- Create:
+  - `examples/playground/src/wms/data.ts`: seeded mock data.
+  - `examples/playground/src/wms/warehouse.ts`: the twin's three.js model.
+  - `examples/playground/src/wms/Overview.vue`, `Twin.vue`, `Orders.vue`: the Block contents.
+- Modify: `examples/playground/src/scenes/Spatial.vue` (the WMS Space), `examples/playground/src/scenes/spatial-arc.ts`, `examples/playground/src/main.ts` (only if the scene needs it).
+- Test: `packages/core/test/events.test.ts`, `packages/render/test/pointer.test.ts`, `packages/vue/test/viewport.test.ts`, `examples/playground` (typecheck/build only).
+
+**Interfaces:**
+- Consumes: everything from Tasks 9A–9J.
+- Produces:
+  - Core and render: an instanced hit carries `instanceId` on `SurfaceHit.target` and on the event. It is absent otherwise.
+  - `wms/data.ts`: a `mulberry32(seed)` PRNG and fixed exports:
+    - `kpis`: 4 entries of `{ label, value, unit?, delta }`;
+    - `flow30d`: `{ labels: string[]; inbound: number[]; outbound: number[] }` for 30 days ending on a fixed date;
+    - `zones`: A–F `{ label, value }`;
+    - `bins`: 6 rows × 10 bays × 4 levels of `{ id: 'A-03-2' style, sku, qty, cap, occupancy }`;
+    - `orders`: 8 entries of `{ no, customer, items, status: '待拣货' | '拣货中' | '已发货' | '异常', time }`;
+    - `alerts`: 2–3 entries.
+
+    The values look plausible for a mid-size Shanghai warehouse.
+  - `wms/warehouse.ts`: `createWarehouse(data): { group: Group; update(dt, ctx): boolean; hover(id: number | null): void; binAt(id): Bin; rotateBy(dx: number): void; dispose(): void }`. Local units are pt, matching Viewport3D. The model is:
+    - a floor slab (rounded, light grey) with painted aisle lines;
+    - rack frames: thin grey uprights and beams, in one InstancedMesh;
+    - bins: one `InstancedMesh` of rounded boxes, coloured by occupancy. Free < 0.3 is blue `#7aa7ff`; normal is lavender `#a59bff`; busy ≥ 0.75 is amber `#ffb86b`; full ≥ 0.95 is red `#ff7b7b`.
+    - an AGV: a small rounded body with a glowing top, driving a loop along the main aisle in `update`, at 120 pt/s;
+    - the whole model tilted toward the viewer like a tabletop model (rotation x ≈ 0.55 rad about the plate's horizontal axis) and fitted to the viewport box;
+    - `hover(id)`: lightens that bin's colour and raises it 6 pt;
+    - `rotateBy(dx)`: yaws the model about its floor normal, clamped to ±0.8 rad.
+
+    Every geometry and material is disposed by `dispose()`.
+  - `Spatial.vue`:
+    - Blocks `orders` (left), `overview` (centre, focused first) and `twin` (right). The `twin` Block has an explicit `position`/`rotation`, so the info panel can be placed relative to it.
+    - Outside the `Space`, a world-layer glass `<Surface>`: the bin info panel, 300 × 170 pt, about 0.35 units in front of the twin Block and offset up-right. It is shown, using `v-if` with a fly-in through `animateTo` opacity, only while a bin is hovered.
+  - Content (spatial spec §4), composed only of library components (Card, Text, Stack, Icon, Box, BarChart3D, LineChart, Viewport3D) with realistic Chinese copy:
+    - **overview**:
+      - a top bar with the brand mark "云仓 WMS", the "上海一号仓" switch, the date and an avatar circle;
+      - 4 KPI Cards;
+      - "近 30 天出入库" (LineChart, two series);
+      - "各库区库存" (BarChart3D).
+    - **twin**: a title, an overview line and a legend; a Viewport3D (`object` = the warehouse group, `update`) filling the rest. Drag to rotate: on `pointermove` with the button down, call `rotateBy(movementX)`, tracking down and up. Hover uses `object` plus `instanceId`.
+    - **orders**: the orders list (status chips are `Box` with capsule radius and token background tints), plus an alert Card with a `warning` Icon.
+
+- [ ] **Step 1: The instanceId pass-through (TDD)**
+
+The core test asserts the tracker carries `target.instanceId` onto events. The render test hits an `InstancedMesh` attached with `attach3D` and gets `target.instanceId`. The Viewport3D test asserts a re-emitted pointermove carries `instanceId`. Write them, see them fail, implement, see them pass.
+
+- [ ] **Step 2: Data and warehouse model**
+
+Write `data.ts` and `warehouse.ts`. Add `examples/playground/test/wms.test.ts`, or put it next to the render tests if the playground has no test setup. It checks that:
+- the data is deterministic (same seed, same values);
+- every bin's id is unique;
+- `createWarehouse` builds `6 × 10 × 4` bin instances, `hover` changes one instance colour, and `dispose` frees the geometries.
+
+- [ ] **Step 3: The three Blocks and the info panel**
+
+Build `Overview.vue`, `Twin.vue` and `Orders.vue`, plus the Space in `Spatial.vue`. Run `pnpm typecheck && pnpm playground:build && pnpm test`. Expected: exit 0 / PASS.
+
+- [ ] **Step 4: Visual checkpoint 2d (controller, Chrome, outside the sandbox)**
+
+`pnpm playground`, then `?scene=spatial` on WebGPU and `&webgl`. Screenshot:
+- the overview;
+- mid-flight to the twin;
+- the twin with a hovered bin and its info panel;
+- the twin dragged;
+- the orders Block;
+- an angled view of the overview with the mouse at the frame edge, to show the parallax and the light anchoring.
+
+Judge them against "does this look like real commercial software, and does 3D add something CSS could not do":
+- light and shadow moving with parallax;
+- Cards floating with shadows and tilting;
+- bars and racks standing out of the plates;
+- the glass panel refracting the racks behind it.
+
+Fix what falls short through the implementer, then **send the screenshots to the user**.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages examples/playground
+git commit -m "feat(playground): the WMS dashboard preview — overview with KPIs, line and 3D bar charts, a 3D warehouse twin with hover info glass, orders; instanced hits carry instanceId"
+```
+
+---
+
 ### Task 10: `useGlassControl` and `<Button>` — visual checkpoint 3
 
 **Files:**
@@ -4329,7 +4702,7 @@ it('is up to date', () => {
   else expect(m, 'manifest.json is stale: run `pnpm manifest`').toEqual(committed)
 })
 it('documents every component completely', () => {
-  expect(m.components.map(c => c.name).sort()).toEqual(['Surface', 'ScreenLayer', 'WorldLayer', 'Box', 'Text', 'Icon', 'Stack', 'Space', 'Block', 'Card', 'Viewport3D', 'BarChart3D', 'Button', 'Switch', 'Checkbox', 'Input', 'Dialog', 'GlassContainer'].sort())
+  expect(m.components.map(c => c.name).sort()).toEqual(['Surface', 'ScreenLayer', 'WorldLayer', 'Box', 'Text', 'Icon', 'Stack', 'Space', 'Block', 'Card', 'Viewport3D', 'BarChart3D', 'LineChart', 'Button', 'Switch', 'Checkbox', 'Input', 'Dialog', 'GlassContainer'].sort())
   for (const c of m.components) {
     expect(c.description.length, c.name).toBeGreaterThan(40)
     expect(c.examples.length, c.name).toBeGreaterThanOrEqual(2)
@@ -4392,25 +4765,11 @@ git commit -m "feat(vue): generated manifest.json — components, props, events,
   - Positions use Stack layout (not absolute coordinates) wherever the reference allows.
   - `World.vue`: the world-layer card from Plan 2 (`Surface layer="world"` with a Switch and two Buttons) behind the wall.
   - `Perf.vue` (spec §10): a screen Surface with 100 Buttons (5 variants × 20) and 20 `GlassContainer`s of 3 circle buttons each, all visible at 1280 × 900.
-  - `Spatial.vue` (Task 9F's sketch rebuilt with real controls) runs the flow of spatial spec §4.
-    - login Block:
-      - email and password `Input`s (`login-email`, `login-password`);
-      - "记住我" `Switch`;
-      - the primary `Button` "登录" (`login-submit`, `loading` for 0.6 s of fake auth);
-      - "或";
-      - Apple and Google `Button`s.
-    - On success, focus moves to `landing` and the login Block leaves (`v-if`).
-    - landing Block:
-      - an avatar `Icon` and "欢迎回来";
-      - three stat `Card`s;
-      - a `Card title="一周活跃"` with a seven-day `BarChart3D` (`chart`);
-      - the `Button`s "新建项目", "设置" (`landing-settings`) and "退出登录" (`landing-logout`), placed on the Block itself rather than in a Card.
-    - settings Block:
-      - a display-name `Input`;
-      - a notifications `Switch`;
-      - a `Checkbox`;
-      - "保存" and "返回" (`settings-back`).
-    - "退出登录" brings the login Block back and focuses it.
+  - `Spatial.vue` (Task 9K's WMS preview) gains spatial spec §4 steps 1 and 5.
+    - A login Block (`login`, focused first): the user's demo form, i.e. `SignUp.vue`'s content inside a `Block`. Its primary button (`login-submit`) shows `loading` for 0.6 s.
+    - On success the login Block leaves with `leaveTo = { rotation: [-0.5, 0, 0], position: [0, -0.4, -2.5], opacity: 0 }`, and focus moves to `overview`.
+    - The avatar in the overview top bar (`overview-avatar`) focuses a `settings` Block: a display-name `Input`, a notifications `Switch`, a `Checkbox`, and "保存" / "返回" `Button`s (`settings-back`).
+    - "退出登录" in settings (`settings-logout`) brings the login Block back.
   - `Gallery.vue` becomes a `Space`.
     - Each section is a `Block` named after it: `primitives`, `buttons`, `toggles`, `inputs`, `dialog`, `containers`.
     - `&focus=` picks the first focus.
@@ -4468,9 +4827,9 @@ git commit -m "feat(playground): scenes rebuilt in Vue from the component librar
     - `dialog` (the gallery's open-dialog button clicked).
     - `spatial` (spatial spec §6), driven by real clicks with `&motion=frozen`:
       - `spatial-login` (as loaded);
-      - `spatial-landing`: type into `login-email` and `login-password`, click `login-submit`, then `await idle()`;
-      - `spatial-settings`: after clicking `landing-settings`;
-      - `spatial-bar-hover`: on landing, move the pointer to the chart's fourth bar (`rectOf('chart')`, that bar's column centre, 60 % up its height), then wait 500 ms.
+      - `spatial-overview`: fill in the login form, click `login-submit`, then `await idle()`;
+      - `spatial-twin`: after clicking the twin Block, `await idle()`;
+      - `spatial-bin-hover`: on the twin, move the pointer to a fixed bin (a `rectOf('twin-view')` point the harness computes from the model), wait 500 ms; the info glass panel is shown.
   - `ime.spec.ts` (Chromium CDP):
     1. Click the email Input and assert `__glassui.ime()`.
     2. Send `Input.imeSetComposition { text: 'ni', selectionStart: 2, selectionEnd: 2 }` and screenshot the field clipped (the composition underlined).
@@ -4709,7 +5068,11 @@ git push origin main
 | Spatial §2.5 bar chart | 9E |
 | Spatial §2.6, §3, §5 Space, Block, Card | 9F |
 | Spatial §2.6 Viewport3D, BarChart3D | 9G |
-| Spatial §4 demo, §6 visual cases and frame time | 19, 20, 21 |
+| Spatial §11.1 lights anchored to the rig | 9H |
+| Spatial §11.2, §11.3 receding Blocks, floating Cards | 9I |
+| Spatial §11.5 LineChart | 9J |
+| Spatial §4 steps 2–5 (WMS preview), §11.4, §11.6 | 9K |
+| Spatial §4 step 1 (login) and settings, §6 visual cases and frame time | 19, 20, 21 |
 | Spatial §8 manifest and acceptance; §9 amendment of core §8.3 | 18, 23; Global Constraints |
 
 Plan 2's "Plan 3 first task" list:

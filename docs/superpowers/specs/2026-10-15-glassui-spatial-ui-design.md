@@ -164,13 +164,24 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 - 每个玻璃背板的 Block 每帧一次整帧拷贝。靠 §2.1 的两条跳过规则（不透明度 0、完全出视野），演示中同时付这笔开销的 Block 不超过 3 个。
 - 目标 60 fps（参考机：本机 Mac，WebGPU，high 档，1280 × 900）。§6 的测试在切换过程中采样帧间隔，p95 超过 33 ms 判失败（门槛放宽以免测试不稳）。
 
-## 4. 演示流程（playground `?scene=spatial`）
+## 4. 演示流程（playground `?scene=spatial`）：云仓 WMS
 
-1. **登录**：镜头正对登录 Block：邮箱、密码 `Input`，"记住我" `Switch`，主按钮"登录"（`glassProminent`），"或"分隔，Apple / Google 按钮。背景是 signup 演示同款的粉彩墙（主光 1.8，棚拍环境 0.45），随指针视差。
-2. **点"登录"**：按钮进入约 0.6 秒的 `loading`（假认证）；然后登录 Block 向后飞并淡出、移除；焦点切到 landing，镜头弹到 landing 前方，landing 同时飞入。
-3. **landing**：头像与"欢迎回来"；三张统计 Card（本周活跃、完成任务、存储用量）；一张 Card 装 `BarChart3D`（一周七天活跃度，进场时柱子长出来，悬停显示数值）；按钮"新建项目""设置""退出登录"（直接放在 Block 上，不在 Card 里）。
-4. **点"设置"**：镜头移到右侧斜放的设置 Block（landing 留在原地，余光可见）。表单：显示名称 `Input`、通知 `Switch`、一个 `Checkbox`，"保存"与"返回"按钮。"返回"让镜头回到 landing。点击露在一旁的 landing 也能回去（§3.3）。
-5. **点"退出登录"**：landing 与设置 Block 飞走，登录 Block 飞回，镜头回到它前面。
+用户要求（2026-10-15）：照实际商业软件的样子做；登录用用户给的演示；登录后是有数据、有 2D 折线图、有 3D 图表、有 3D 仓储数据孪生的仪表盘。演示是一个虚构的仓储运营平台"云仓 WMS"，数据用固定种子生成，看起来真实。
+
+1. **登录**（Task 19，需要 Task 10–13 的控件）：登录 Block 就是用户给的演示表单（`?scene=signup` 的设计与文案，全部用组件重建）。主按钮进入约 0.6 秒的 `loading`，然后登录 Block 绕 x 轴向后翻倒（−0.5 rad）、退入深处并淡出，镜头向前推到总览 Block。
+2. **总览**（Block `overview`，居中，约 1440 × 900 pt）：
+   - 顶栏：品牌标识与"云仓 WMS"、仓库切换（"上海一号仓"）、日期、头像。
+   - 4 张 KPI Card：库存 SKU、今日出库单、准时发货率、库位利用率，各带环比（涨绿跌红）。
+   - "近 30 天出入库" Card：`<LineChart>`，入库与出库两条曲线。
+   - "各库区库存" Card：`<BarChart3D>`，A–F 六个库区。
+3. **仓储孪生**（Block `twin`，在总览右侧）：
+   - 标题、仓库概况与图例（空闲 / 正常 / 繁忙 / 满载）。
+   - `<Viewport3D>` 里是一座 3D 仓库：地面与通道线；6 排货架，每排 10 列、4 层库位，库位按占用率着色；一台 AGV 沿主通道循环行驶。仓库像桌面模型一样向观众倾斜，可以按住拖动、绕竖直轴旋转。
+   - 悬停某个库位：库位高亮、略微抬起；孪生前方浮出一块玻璃信息面板（独立的世界层 Surface，在孪生前方约 0.35 单位），显示库位号、SKU、数量、占用率。面板会折射后方的货架（§11.4）。
+4. **订单与告警**（Block `orders`，在总览左侧）：最近 8 条订单（单号、客户、件数、状态标签、时间），一张异常告警 Card。
+5. **切换**：点击旁边露出的 Block 切换焦点；非焦点 Block 后退（§11.2）。头像进入设置 Block（Task 19）；"退出登录"回到登录 Block。
+
+9K 先做第 2–5 步的预览（从总览开始，没有登录块）；Task 19 补上第 1 步与设置。
 
 ## 5. 错误处理
 
@@ -192,7 +203,7 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 
 - **render 单测**（Node，无 GPU；纯函数与假 Surface）：弹簧变换（通道独立、打断保速、Promise 结果、reducedMotion 跳变、死 Surface）；不透明度传到每个绘制的材质与深度写入开关；出视野跳过；RT 尺寸策略（1.25 倍分配、30 帧静止后才缩）；对焦距离与位姿（横竖两种限制、resize 重算、瞄 `restPose`）；视差映射与触屏关闭；锚点换算（玻璃祖先顶面、pt 单位）；透明队列与 `renderOrder`；材质 opacity 记录与恢复；命中取最近者、悬停的并集语义；叠层 RT 只在有嵌套玻璃时分配、内层与外层各自采样的 RT；柱状图布局、实例数、生长错开、悬停。
 - **vue 单测**（假 root）：Space/Block 注册、弧形槽位与按名记位；`focus` 驱动 rig 与 `setActive`；非焦点 Block 的按下只发 `update:focus`；离场时内容保持到 `animateTo` 结束；`frozen` 下全部 immediate；§5 的每条错误；BarChart3D 的 max 取整、标签列、悬停面板、空数据。
-- **视觉回归**（Plan 3 Task 20）：`?scene=spatial&motion=frozen&hud=0`，靠真实点击走流程，截 4 帧：登录、landing、设置、悬停一根柱子；WebGPU 与 WebGL2 各一套，共 8 张新基线。控制台错误闸门照常。
+- **视觉回归**（Plan 3 Task 20）：`?scene=spatial&motion=frozen&hud=0`，靠真实点击走流程，截 4 帧：登录、总览、孪生、悬停一个库位；WebGPU 与 WebGL2 各一套，共 8 张新基线。控制台错误闸门照常。
 - **帧时间**：`?scene=spatial&motion=live`，点"登录"后 1.2 秒内采样 rAF 间隔，WebGPU 上 p95 ≤ 33 ms。
 
 ## 7. 与现有 Plan 3 的衔接
@@ -212,10 +223,14 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 | 9E | render | 柱状图（§2.5）：`createBarChart`；加进 `GlassRoot` |
 | 9F | vue | `Space`、`Block`、`Card`（§2.6、§3）；spatial 场景雏形；可视检查 |
 | 9G | vue | `Viewport3D`、`BarChart3D`；雏形里加上图表；可视检查 |
+| 9H | render | 灯光锚定在空间里（§11.1） |
+| 9I | vue | 深度：非焦点 Block 后退、Card 浮起、悬停倾斜与上浮、升起入场（§11.2、§11.3） |
+| 9J | vue | `<LineChart>` 2D 折线图（§11.5） |
+| 9K | playground + core/render | WMS 仪表盘预览与仓储孪生（§4 第 2–5 步）；实例化物体命中带 `instanceId`（§11.6）；可视检查后给用户看 |
 
 对已有任务的调整：
 - **Task 18（manifest）**：收录五个新组件，示例里给出一个完整的 Space/Block 写法；`mistakes` 写明"不要同时用 OrbitControls""Block 必须在 Space 里""`width/height` 是数字"。
-- **Task 19（playground）**：新增 `?scene=spatial`（§4 的完整流程）。gallery 改为空间布局：每个分区是 `Space` 里的一个 Block，`?focus=<分区名>` 指定初始焦点（视觉测试用它逐个分区截图）。
+- **Task 19（playground）**：`?scene=spatial` 补上 §4 的登录（用户的演示表单）与设置，接入真实控件。gallery 改为空间布局：每个分区是 `Space` 里的一个 Block，`?focus=<分区名>` 指定初始焦点（视觉测试用它逐个分区截图）。
 - **Task 20（视觉回归）**：加上 §6 的 spatial 用例；gallery 的整页与各状态截图改为"先用 `?focus=` 聚焦对应分区，再按分区区域裁剪"。
 - **Task 21（性能）**：第 5 项（RT 缩小迟滞）已在 9A 完成，这里只测量；perf 测试加上 §6 的帧时间用例。
 - **Task 23（验收）**：让一个全新的 agent 只读 manifest，写一个带 Space、两个 Block、一个 BarChart3D 的应用，能直接跑通。
@@ -232,3 +247,39 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 - 3D 物体在 `scroll` 里的裁剪。
 - Block 高度随内容自动撑开；拖拽、自由漫游。
 - 更多图表类型、坐标轴与图例。
+
+## 11. 第二轮：让 3D 有价值（2026-10-15）
+
+用户反馈："你现在的样式和 css 的 3D transform 之后的结果没什么区别，要能体现出 3D 空间的价值。" 原因：内容全贴在背板上，没有层次；灯光跟着相机走，镜头移动时光影不变；雏形里没有 3D 控件与 3D 内容；转场只有平移与淡出。下面只做 CSS 做不到的事。
+
+### 11.1 灯光锚定在空间里（render，9H）
+
+- 有 CameraRig 且有目标时，UI 灯光不再跟随相机，而跟随 rig 的"灯光位姿"：焦点位姿（不含视差），用临界阻尼弹簧追随，`lightResponse` 默认 1.2 秒（比镜头的 0.8 秒慢）。
+- 效果：视差时相机动、灯不动，玻璃的高光、亮边与卡片的投影相对内容流动；切换焦点时灯光落后于镜头，高光扫过玻璃。
+- 没有 rig（或 rig 没有目标）时，灯光照旧跟随相机。灯光位姿变化时重新拟合阴影。`immediate` 与减少动态效果时灯光直接到位。
+
+### 11.2 非焦点 Block 后退（vue，9I）
+
+- 非焦点 Block 的停放位姿 = 槽位位姿 ⊕ `{ position: [0, 0, -0.4], scale: 0.96 }`（Block 自身坐标系，−z 远离观众）；焦点切换时用弹簧过去。`motion: 'frozen'` 时直接到位。
+
+### 11.3 Card 的深度（vue，9I）
+
+- **浮起**：Card 的 `elevation` 24 pt，在背板上投下真实阴影。
+- **悬停**：上浮到 40 pt，并朝指针倾斜（`tilt`，两个方向各最多 4°），离开时回落；只在焦点 Block 里生效；减少动态效果时只上浮、不倾斜。
+- **升起入场**：Block 进场时，Card 的 `elevation` 从 0 升到 24，同一 Block 里按出现顺序每张延迟 60 ms；`frozen` 时直接 24。
+
+### 11.4 玻璃折射立体内容
+
+- 不需要新代码：一个世界层玻璃 Surface 放在 3D 物体前方，它的背板捕获的是整帧画面（§2.3），会折射后面的立体内容。演示里孪生前方的信息面板就是这样（§4）。
+
+### 11.5 2D 折线图 `<LineChart>`（vue，9J）
+
+- props：`labels: string[]`（至少 2 个），`series: { name: string; data: number[]; color?: string }[]`（每条长度等于 `labels`），`height?: number`（默认 200），`format?: (v: number) => string`，`yMin?: number`（默认 0）。
+- 画法：Canvas2D 按 2 倍像素栅格化成一张图，放在一个 `image` 节点里：横向网格线与 y 轴刻度（3–5 个"好看"的刻度）、x 轴标签（最多 6 个，均匀抽取）、平滑曲线、曲线下的渐变面积、顶部图例。颜色 token 按当前主题与明暗解析，明暗切换时重画；宽度变化时重画。
+- 悬停：最近的 x 处画一条竖直准线，旁边浮出一块平面面板，列出各系列在该点的 `format` 值。
+- 错误：系列长度与 `labels` 不一致、数值不是有限数 → `[LineChart.series] …`；`series` 为空 → 显示"暂无数据"。
+
+### 11.6 实例化物体的命中（core + render，9K）
+
+- 射线命中 `InstancedMesh` 时，`SurfaceHit.target` 与事件对象多带 `instanceId`（命中的实例序号；不是实例化物体时缺省）。孪生的库位用一个 InstancedMesh 画，靠它知道悬停的是哪个库位。
+
