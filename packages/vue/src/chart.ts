@@ -1,3 +1,5 @@
+import { z } from 'zod'
+
 /** Slack in a tick's floor / ceil, in steps: 4.2 / 0.2 is 21.000000000000004, which must not round up to a 22nd step. */
 const EPS = 1e-9
 
@@ -45,3 +47,6 @@ export function niceMax(v: number): number {
 export function formatValue(v: number): string {
   return String(Number(v.toFixed(2)))
 }
+
+/** A chart's `format`-like prop: a function (v: number) => string (its doc is the prop's own `.describe`). */
+export const formatFn = z.custom<(v: number) => string>(v => typeof v === 'function', '需要一个函数 (v: number) => string')

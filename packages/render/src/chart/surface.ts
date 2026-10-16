@@ -1,11 +1,11 @@
-import { BufferAttribute, BufferGeometry, Color, DoubleSide, Group, Line, LineSegments, Matrix4, Mesh, SphereGeometry, SRGBColorSpace, Vector3 } from 'three'
+import { BufferAttribute, BufferGeometry, Color, DoubleSide, Line, LineSegments, Matrix4, Mesh, SphereGeometry, SRGBColorSpace, Vector3 } from 'three'
 import { LineBasicNodeMaterial, MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { GlassUIError, rampColor, Spring, type RGBA } from '@glassui/core'
 import type { CanvasFactory } from '@glassui/text'
 import type { Viewport3DContext } from '../viewport'
 import { disposeTextPlane, textPlaneHeight, type TextPlane } from './labels'
 import {
-  decoration, fitPlate, FRAME, FRAME_ORDER, framePalette, framePlane, makePlate, paintFrame, plateBound, seatFrame, stepSprings, syncPlanes,
+  decoration, fitPlate, FRAME, FRAME_ORDER, FrameChart, framePalette, framePlane, makePlate, paintFrame, plateBound, seatFrame, stepSprings, syncPlanes,
   thinPlanes, tiltedZ, xLabelY, type GridCell, type Plate,
 } from './frame'
 
@@ -102,16 +102,11 @@ const tmp = new Color(), v3 = new Vector3(), m4 = new Matrix4()
  * where the heights are; reduced motion puts them there at once. A new box size lays the chart out again at once.
  * Theme colours follow `ctx` (a scheme change recolours the labels; their textures are made again only for new text).
  */
-export class SurfaceChart extends Group {
-  /** The tilted, seated frame the chart is built in (see the class comment). */
-  readonly inner = new Group()
-  private readonly createCanvas: CanvasFactory
+export class SurfaceChart extends FrameChart {
   private data: { values: number[][]; max: number; ramp: RGBA[] } | null = null
   private texts: { x: string[]; y: string[]; ticks: string[] } = { x: [], y: [], ticks: [] }
   private readonly planes: Record<Kind, TextPlane[]> = { x: [], y: [], ticks: [] }
   private parts: Parts | null = null
-  /** The last `update`'s context: the box, the motion preference and the theme. */
-  private ctx: Viewport3DContext | null = null
   private metrics: Grid | null = null
   /** One per vertex (row-major): its height, of the full height. */
   private springs: Spring[] = []
@@ -123,19 +118,11 @@ export class SurfaceChart extends Group {
   /** The theme's colours as last applied, and their key. */
   private palette: { label: RGBA; fill: RGBA } = { label: [0, 0, 0, 1], fill: [1, 1, 1, 1] }
   private paletteKey = ''
-  /** Something the layout depends on changed since the last one (data, labels). */
-  private dirty = true
   /** The heights or the hover moved: the surface and the hover marks are posed again. */
   private posed = false
 
   /** `createCanvas`: what the labels are drawn on (the root's canvas factory). */
-  constructor(opts: { createCanvas: CanvasFactory }) {
-    super()
-    this.createCanvas = opts.createCanvas
-    this.name = 'surface-chart'; this.inner.name = 'tilt'
-    this.inner.rotation.x = SURFACE.tilt
-    this.add(this.inner)
-  }
+  constructor(opts: { createCanvas: CanvasFactory }) { super('surface-chart', opts) }
 
   /** The heat surface; like the other parts, it exists once the chart is first laid out (data and a box), and throws before. */
   get surface(): Parts['surface'] { return this.built.surface }
@@ -162,15 +149,13 @@ export class SurfaceChart extends Group {
     })
     if (ramp.length < 2 || ramp.length > 6) throw new GlassUIError(scope, `ramp 要 2–6 个颜色（从低到高），收到 ${ramp.length} 个`)
     this.data = { values: values.map(r => [...r]), max, ramp: ramp.map(c => [...c] as RGBA) }
-    this.dirty = true
-    if (this.ctx) this.layout(this.ctx)
+    this.invalidate()
   }
 
   /** New axis labels and value ticks (see `SurfaceChartLabels`); planes are made again only for changed text. */
   labels(l: SurfaceChartLabels): void {
     this.texts = { x: [...l.x], y: [...l.y], ticks: [...l.ticks] }
-    this.dirty = true
-    if (this.ctx) this.layout(this.ctx)
+    this.invalidate()
   }
 
   /** Marks `cell` (the guide, ring and dot on its vertex, following its height); null, or a cell the data lacks: none. */
@@ -215,13 +200,7 @@ export class SurfaceChart extends Group {
    * while a height moves. Nothing to draw (no data, an empty box): false.
    */
   update(dt: number, ctx: Viewport3DContext): boolean {
-    const resized = ctx.width !== this.ctx?.width || ctx.height !== this.ctx?.height
-    this.ctx = ctx
-    if (!this.data) return false
-    this.inner.visible = ctx.width > 0 && ctx.height > 0
-    if (!this.inner.visible) return false
-    this.paint(ctx)
-    if (resized || this.dirty) this.layout(ctx)
+    if (!this.prepare(ctx)) return false
     let moving = false
     const cols = this.metrics?.cols ?? 0
     this.waits.forEach((wait, r) => {
@@ -242,6 +221,8 @@ export class SurfaceChart extends Group {
     this.parts = null; this.data = null; this.metrics = null; this.springs = []; this.waits = []; this.shape = ''; this.paletteKey = ''
     this.dirty = true
   }
+
+  protected hasData(): boolean { return this.data !== null }
 
   private get built(): Parts {
     if (!this.parts) throw new GlassUIError('SurfaceChart', '图表还没有画出来：先 set 数据，再 update 一帧')
@@ -273,7 +254,7 @@ export class SurfaceChart extends Group {
   }
 
   /** The theme's colours from `ctx`: applied to the parts and labels when they changed (the textures stay). */
-  private paint(ctx: Viewport3DContext): void {
+  protected paint(ctx: Viewport3DContext): void {
     const palette = framePalette(ctx), { label, fill } = palette, last = this.data?.ramp.at(-1)
     const key = [label, fill, last ?? ''].join('|')
     const p = this.parts
@@ -292,7 +273,7 @@ export class SurfaceChart extends Group {
    * the springs' targets, the labels (made for new text), the grid lines, the plate around the grid and the lying
    * labels, then the tilt's seat. Nothing before data and a box with an area.
    */
-  private layout(ctx: Viewport3DContext): void {
+  protected layout(ctx: Viewport3DContext): void {
     const d = this.data, W = ctx.width, H = ctx.height
     if (!d || !(W > 0 && H > 0)) return
     const p = this.build()

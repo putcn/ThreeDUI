@@ -156,6 +156,22 @@ it('BarMatrix3D: with colorValues a legend under the readout: the ramp as a grad
   expect(col.children.length).toBe(2); expect(JSON.stringify(tree(col))).not.toContain('周转天数')
   expect(JSON.stringify(tree(col))).not.toContain('"image"')
 })
+it('BarMatrix3D legend: a long colorLabel gives way, cut to one line between the min and max, which stay whole inside the legend', async () => {
+  /** The legend's label row (under the strip), and its min, label and max. */
+  const labels = async (colorLabel: string) => {
+    const s = await mounted(createFakeRoot(), { rows: ROWS, cols: COLS, values: V, colorValues: D, colorFormat: days, colorLabel })
+    const row = s.attached[0]!.node.parent!.children[2]!.children[1]!, [lo, label, hi] = row.children.filter(n => n.type !== 'anchor')
+    return { row, lo: lo!, label: label!, hi: hi! }
+  }
+  const short = await labels('周转'), long = await labels('近三十天按出库量加权计算的平均周转天数')
+  expect(long.row.layout.width).toBe(short.row.layout.width)
+  for (const n of [long.lo, long.label, long.hi]) { expect(n.layout.x).toBeGreaterThanOrEqual(0); expect(n.layout.x + n.layout.width).toBeLessThanOrEqual(long.row.layout.width + 1e-6) }
+  expect(long.lo.layout.width).toBe(short.lo.layout.width); expect(long.hi.layout.width).toBe(short.hi.layout.width)
+  expect(long.label.layout.height).toBe(short.label.layout.height)                   // one line
+  expect(long.label.layout.width).toBeLessThan(19 * 0.6 * 12)                         // narrower than its text: cut
+  expect(long.label.layout.x).toBeGreaterThan(long.lo.layout.x + long.lo.layout.width); expect(long.hi.layout.x).toBeGreaterThan(long.label.layout.x + long.label.layout.width)
+  expect(long.label.style.maxLines).toBe(1)
+})
 it('BarMatrix3D: a hovered cell the data drops is hovered no more; one it keeps shows its new value', async () => {
   const root = createFakeRoot(), props = ref<Record<string, unknown>>({ rows: ROWS, cols: COLS, values: V }), seen: unknown[] = []
   mountGlass(() => inBlock(() => h(BarMatrix3D, { ...props.value, onHover: (e: unknown) => seen.push(e) })), { root })
@@ -216,7 +232,7 @@ it('BarMatrix3D is registered with complete manifest metadata', () => {
   expect(shape.max!.description).toMatch(/封顶/)
   expect(shape.colorRamp!.description).toContain('#34c759')
   for (const e of c.glass.examples) expect(e).toMatch(/^<Space\b[^]*<BarMatrix3D\b[^]*<\/Space>$/)
-  expect(c.glass.examples.some(e => /color-values/.test(e))).toBe(true)
+  expect(c.glass.examples.some(e => /color-values/.test(e))).toBe(true); expect(c.glass.examples[0]).toContain('color-label="周转"')
   expect(c.glass.mistakes!.length).toBeGreaterThanOrEqual(2)
   expect(c.glass.mistakes!.map(m => m.mistake).join('\n')).toMatch(/values/)
   expect(Object.keys(c.glass.events!)).toEqual(['hover', 'select'])

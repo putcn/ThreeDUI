@@ -67,4 +67,10 @@ describe('theme', () => {
     // a fresh array: the caller may keep or change it
     const got = rampColor(ramp, 0); got[0] = 9; expect(ramp[0]![0]).toBe(0)
   })
+  it('rampColor guards: a NaN t is 0, ±Infinity clamped; an empty ramp throws a GlassUIError; one colour is itself (Task 9O fix)', () => {
+    const ramp: RGBA[] = [[0, 0, 0, 1], [1, 1, 1, 1]]
+    expect(rampColor(ramp, NaN)).toEqual(ramp[0]); expect(rampColor(ramp, Infinity)).toEqual(ramp[1]); expect(rampColor(ramp, -Infinity)).toEqual(ramp[0])
+    expect(() => rampColor([], 0.5)).toThrow(GlassUIError); expect(() => rampColor([], 0.5)).toThrow(/^\[rampColor\] .*色带/)
+    expect(rampColor([[0.2, 0.4, 0.6, 1]], 0.7)).toEqual([0.2, 0.4, 0.6, 1])
+  })
 })

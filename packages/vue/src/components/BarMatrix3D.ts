@@ -1,12 +1,12 @@
-import { computed, h, onScopeDispose, shallowRef, watch, watchEffect, type VNode } from '@vue/runtime-core'
+import { h, type VNode } from '@vue/runtime-core'
 import { z } from 'zod'
-import { rampColor, type Node, type RGBA, type UIEvent } from '@glassui/core'
-import type { GridCell, Viewport3DContext } from '@glassui/render'
+import { rampColor, type ColorScheme, type RGBA, type Theme } from '@glassui/core'
+import type { GridCell } from '@glassui/render'
 import type { CanvasLike } from '@glassui/text'
-import { formatValue, niceMax } from '../chart'
+import { formatFn, formatValue, niceMax } from '../chart'
+import { use3DChart, useGridHover } from '../chart3d'
 import { defineGlassComponent } from '../define'
-import { useCanvasFactory, useRoot, useScheme } from '../inject'
-import { useOwned3D } from '../owned3d'
+import { useCanvasFactory } from '../inject'
 import { READOUT, READOUT_GAP, readoutRow } from '../readout'
 import { Text } from './Text'
 import { colorOf, cssColor } from './tokens'
@@ -18,12 +18,11 @@ const DEFAULT_RAMP = ['#34c759', '#ffb86b', '#ff6b6b'] as const
 const HINT = '指向柱子查看数值'
 /**
  * The legend (pt): the ramp as a `width` × `strip` gradient strip, drawn at `scale` × into a canvas shown as an image
- * (as LineChart's dots), and under it, `gap` below, the colour values' min and max and `colorLabel` (12 pt); `height` in
- * all, `READOUT_GAP` under the readout.
+ * (as LineChart's dots), and under it, `gap` below, the colour values' min and max and `colorLabel` (12 pt, at least
+ * `labelGap` apart); `height` in all, `READOUT_GAP` under the readout.
  */
-const LEGEND = { width: 160, strip: 8, gap: 4, height: 28, scale: 2 } as const
+const LEGEND = { width: 160, strip: 8, gap: 4, height: 28, scale: 2, labelGap: 6 } as const
 
-const fn = z.custom<(v: number) => string>(v => typeof v === 'function', '需要一个函数 (v: number) => string')
 const BarMatrix3DProps = z.object({
   rows: z.array(z.string()).min(1).describe('行标签（纵深，从后往前），一行一个，如库区 "A 区"…"F 区"；第一行在最后面，最后一行离观者最近，平躺在底板左缘'),
   cols: z.array(z.string()).min(1).describe('列标签（横向，从左到右），一列一个，如品类 "日化"、"食品"、"家电"；平躺在底板前缘，放不下时均匀隔几个显示一个'),
@@ -35,8 +34,8 @@ const BarMatrix3DProps = z.object({
     '色带：2–6 个颜色 token 或 #hex，从低到高。默认 ["#34c759", "#ffb86b", "#ff6b6b"]（绿 → 琥珀 → 红：周转天数少为好，所以低值为绿）'),
   colorLabel: z.string().optional().describe('colorValues 的名称，如 "周转天数"：写在图例色带下方，也放在读数里颜色值的前面'),
   max: z.number().positive().finite().optional().describe('满高对应的数值；默认把最大值向上取到好看的刻度顶（4580 → 5000、17 → 20；全为 0 时取 1）。比它大的数值按它封顶（柱子不会更高，读数仍显示原值）'),
-  format: fn.optional().describe('读数里数值的写法 (v: number) => string，如 v => `${v.toLocaleString()} 件`；默认最多两位小数（1.5、2、0.33）'),
-  colorFormat: fn.optional().describe('读数与图例里 colorValues 的写法 (v: number) => string，如 v => `${v} 天`；默认最多两位小数'),
+  format: formatFn.optional().describe('读数里数值的写法 (v: number) => string，如 v => `${v.toLocaleString()} 件`；默认最多两位小数（1.5、2、0.33）'),
+  colorFormat: formatFn.optional().describe('读数与图例里 colorValues 的写法 (v: number) => string，如 v => `${v} 天`；默认最多两位小数'),
   height: z.number().positive().default(280).describe('图表区高度，pt（不含下方 20 pt 的读数行与有 colorValues 时 28 pt 的图例）；宽度撑满'),
 }).superRefine((x, ctx) => {
   const shape = (key: 'values' | 'colorValues', m: number[][], rows: number, why: string): void => {
@@ -71,7 +70,7 @@ export const BarMatrix3D = defineGlassComponent({
     select: { payload: '{ row: number; col: number; value: number; colorValue?: number; rowLabel: string; colLabel: string }', description: '点击了某根柱子：同 hover 的内容' },
   },
   examples: [
-    `<Space><Block name="overview" :width="1100" :height="760"><Card title="库存分布 · 库区 × 品类"><BarMatrix3D :rows="['A 区', 'B 区', 'C 区', 'D 区', 'E 区', 'F 区']" :cols="categories" :values="stock" :color-values="coverDays" color-label="周转天数" :format="v => \`\${v.toLocaleString()} 件\`" :color-format="v => \`\${v} 天\`" @select="e => openZone(e.rowLabel, e.colLabel)" /></Card></Block></Space>`,
+    `<Space><Block name="overview" :width="1100" :height="760"><Card title="库存分布 · 库区 × 品类"><BarMatrix3D :rows="['A 区', 'B 区', 'C 区', 'D 区', 'E 区', 'F 区']" :cols="categories" :values="stock" :color-values="coverDays" color-label="周转" :format="v => \`\${v.toLocaleString()} 件\`" :color-format="v => \`\${v} 天\`" @select="e => openZone(e.rowLabel, e.colLabel)" /></Card></Block></Space>`,
     `<Space><Block name="slots" :width="880" :height="640"><Card title="库位占用（个）"><BarMatrix3D :rows="['1 层', '2 层', '3 层']" :cols="['A 排', 'B 排', 'C 排', 'D 排']" :values="[[42, 38, 50, 12], [30, 44, 47, 20], [18, 25, 33, 9]]" :max="60" :height="240" /></Card></Block></Space>`,
     `<Space><Block name="quality" :width="980" :height="700"><Card title="退货量 × 退货率"><BarMatrix3D :rows="channels" :cols="months" :values="returns" :color-values="returnRates" :color-ramp="['#e8f5e9', 'success', '#ff9f0a', 'danger']" color-label="退货率" :color-format="v => \`\${v}%\`" @hover="e => focused = e" /></Card></Block></Space>`,
   ],
@@ -82,58 +81,26 @@ export const BarMatrix3D = defineGlassComponent({
     { mistake: '<ScreenLayer><Surface …><BarMatrix3D … /></Surface></ScreenLayer>，或放进 scroll', fix: '3D 图表只在世界层：放进 <Space> 里的 <Block>（最好包一张 <Card title="…">），不能放进可滚动的 scroll' },
   ],
 }, (p, { emit }) => {
-  const root = useRoot(), scheme = useScheme(), createCanvas = useCanvasFactory()
-  // the theme too (a `setTheme` with the same scheme swaps the colours the ramp's tokens name)
-  const theme = shallowRef(root.theme)
-  onScopeDispose(root.on('theme', e => { theme.value = e.theme }))
-  const chart = root.createBarMatrix()
-  // made once: a new function each render would re-attach the chart
-  const update = (dt: number, c: Viewport3DContext): boolean => chart.update(dt, c)
-  /** The last valid props (the render reports invalid ones). */
-  const v = computed<Props | null>(prev => { try { return p.value } catch { return prev ?? null } })
-  /** The colour ramp, resolved for the theme and scheme (a bad token is this render's error: `colorOf` throws). */
-  const ramp = (x: Props): RGBA[] => (x.colorRamp ?? DEFAULT_RAMP).map((c, i) => colorOf(`BarMatrix3D.colorRamp.${i}`, c, theme.value, scheme.value))
-  // never an empty set: its first set is the one that grows the bars in. Emptied, the matrix lets its drawing go
-  // (`dispose` keeps it usable): data coming back grows in again, not from stale heights
-  watchEffect(() => {
-    const x = v.value
-    if (!x) return
-    if (x.values.length === 0) { chart.dispose(); return }
-    const r = ramp(x), max = topOf(x), cv = x.colorValues
+  const createCanvas = useCanvasFactory()
+  /** The colour ramp, resolved for `theme` and `scheme` (a bad token is this render's error: `colorOf` throws). */
+  const rampOf = (x: Props, t: Theme, s: ColorScheme): RGBA[] => (x.colorRamp ?? DEFAULT_RAMP).map((c, i) => colorOf(`BarMatrix3D.colorRamp.${i}`, c, t, s))
+  const { chart, props: v, update, box, theme, scheme } = use3DChart(p, root => root.createBarMatrix(), (chart, x, th, s) => {
+    const r = rampOf(x, th, s), max = topOf(x), cv = x.colorValues
     // a fourth value: its place between its own least and greatest (all equal: the ramp's middle); else the height's
     const [lo, hi] = cv ? spanOf(cv) : [0, 0]
     const t = (row: number, col: number): number => (cv ? (hi > lo ? (cv[row]![col]! - lo) / (hi - lo) : 0.5) : Math.min(1, x.values[row]![col]! / max))
     chart.set({ values: x.values, max, colors: x.values.map((row, i) => row.map((_, k) => rampColor(r, t(i, k)))) })
     chart.labels({ rows: x.rows, cols: x.cols })
   })
-
-  /** `c` when the data has that cell, else null. */
-  const inData = (c: GridCell | null): GridCell | null => (c && v.value?.values[c.row]?.[c.col] !== undefined ? c : null)
   const reading = (c: GridCell): Reading | null => {
     const x = v.value, value = x?.values[c.row]?.[c.col]
     if (!x || value === undefined) return null
     const out: Reading = { row: c.row, col: c.col, value, rowLabel: x.rows[c.row]!, colLabel: x.cols[c.col]! }, cv = x.colorValues?.[c.row]?.[c.col]
     return cv === undefined ? out : { ...out, colorValue: cv }
   }
-  const hovered = shallowRef<GridCell | null>(null)
-  const setHover = (c: GridCell | null): void => {
-    const was = hovered.value
-    if (was === c || (was && c && was.row === c.row && was.col === c.col)) return
-    hovered.value = c; chart.hover(c)
-    emit('hover', c && reading(c))
-  }
-  // a hovered cell the data no longer has (or no matrix at all) is hovered no more
-  watch(() => { const x = v.value; return x ? `${x.values.length}×${x.values[0]?.length ?? 0}` : '' }, () => { if (!inData(hovered.value)) setHover(null) })
-  const handlers = {
-    // no hover by touch (core spec §8.3): a finger dragging across the Block would scrub the matrix
-    onPointermove: (e: UIEvent) => { if (e.pointerType !== 'touch') setHover(inData(cellOf(e.object))) },
-    onPointerleave: () => { setHover(null) },
-    onClick: (e: UIEvent) => { const c = inData(cellOf(e.object)), r = c && reading(c); if (r) emit('select', r) },
-  }
-
-  // the matrix is ours to dispose; in a leaving Block it flies out attached, so it goes with the Surface instead
-  const box = shallowRef<Node | null>(null)
-  useOwned3D(chart, box)
+  // the bar the pointer is on
+  const { hovered, handlers } = useGridHover({ chart, props: v, emit, reading })
+  const on = handlers(e => cellOf(e.object))
 
   /** The readout under the matrix: "row · col · value · colorLabel colour value" for the hovered bar, else the hint. */
   const readout = (x: Props): VNode => {
@@ -159,15 +126,18 @@ export const BarMatrix3D = defineGlassComponent({
     strip = { key, canvas }
     return canvas
   }
-  /** The legend under the readout: the strip, then the colour values' min, `colorLabel` and max; type only, no panel. */
+  /**
+   * The legend under the readout: the strip, then the colour values' min, `colorLabel` and max; type only, no panel.
+   * The min and max keep their width; a label too long for what is left between them is cut to one line (…).
+   */
   const legend = (x: Props, cv: number[][]): VNode => {
-    const [lo, hi] = spanOf(cv), fmt = x.colorFormat ?? formatValue, small = { size: 12, wrap: false }
+    const [lo, hi] = spanOf(cv), fmt = x.colorFormat ?? formatValue, small = { size: 12, wrap: false }, whole = { flexShrink: 0 }
     return h('box', { style: { width: LEGEND.width, height: LEGEND.height, gap: LEGEND.gap, alignSelf: 'center' } }, [
-      h('image', { src: stripOf(ramp(x)), style: { width: LEGEND.width, height: LEGEND.strip } }),
-      h('box', { style: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' } }, [
-        h(Text, { value: fmt(lo), color: 'tertiaryLabel', ...small }),
-        x.colorLabel ? h(Text, { value: x.colorLabel, color: 'secondaryLabel', ...small }) : null,
-        h(Text, { value: fmt(hi), color: 'tertiaryLabel', ...small }),
+      h('image', { src: stripOf(rampOf(x, theme.value, scheme.value)), style: { width: LEGEND.width, height: LEGEND.strip } }),
+      h('box', { style: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: LEGEND.labelGap } }, [
+        h(Text, { value: fmt(lo), color: 'tertiaryLabel', ...small, style: whole }),
+        x.colorLabel ? h(Text, { value: x.colorLabel, color: 'secondaryLabel', ...small, maxLines: 1 }) : null,
+        h(Text, { value: fmt(hi), color: 'tertiaryLabel', ...small, style: whole }),
       ]),
     ])
   }
@@ -180,7 +150,7 @@ export const BarMatrix3D = defineGlassComponent({
     // how far the matrix rises off the glass, for the shadow fit: its own number, at any width (its tallest bar is
     // 0.45 × the shorter side, so no box wider than it is high rises further), so a resize never re-attaches it
     return h('box', { ref: box, style: { flexDirection: 'column', gap: READOUT_GAP, alignSelf: 'stretch' } }, [
-      h(Viewport3D, { object: chart, update, depth: chart.riseFor(x.height, x.height), style: { height: x.height }, ...handlers }),
+      h(Viewport3D, { object: chart, update, depth: chart.riseFor(x.height, x.height), style: { height: x.height }, ...on }),
       readout(x),
       ...(cv ? [legend(x, cv)] : []),
     ])

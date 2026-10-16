@@ -1,4 +1,4 @@
-import { Color, Group, Mesh, SRGBColorSpace } from 'three'
+import { Color, Mesh, SRGBColorSpace } from 'three'
 import type { MeshStandardNodeMaterial } from 'three/webgpu'
 import type { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
 import { GlassUIError, Spring, type RGBA } from '@glassui/core'
@@ -6,7 +6,7 @@ import type { CanvasFactory } from '@glassui/text'
 import type { Viewport3DContext } from '../viewport'
 import { barGeometry, barMaterial, MIN_SCALE, MIN_SIZE } from './bar'
 import { disposeTextPlane, type TextPlane } from './labels'
-import { fitPlate, FRAME, framePalette, framePlane, makePlate, paintFrame, plateBound, seatFrame, stepSprings, syncPlanes, thinPlanes, xLabelY, type GridCell, type Plate } from './frame'
+import { fitPlate, FRAME, FrameChart, framePalette, framePlane, makePlate, paintFrame, plateBound, seatFrame, stepSprings, syncPlanes, thinPlanes, xLabelY, type GridCell, type Plate } from './frame'
 
 /**
  * `BarMatrix.set`'s data: `values` rows × cols (each row as long, at least 1 × 1, every value finite and ≥ 0), `max`
@@ -85,17 +85,12 @@ function standingBar(width: number, depth: number, height: number): RoundedBoxGe
  * reduced motion puts them there at once. The hovered bar springs brighter (`MATRIX.hoverBrightness`) and taller
  * (`MATRIX.hoverDepth` of its height). A new box size lays the matrix out again at once. Theme colours follow `ctx`.
  */
-export class BarMatrix extends Group {
-  /** The tilted, seated frame the matrix is built in (see the class comment). */
-  readonly inner = new Group()
-  private readonly createCanvas: CanvasFactory
+export class BarMatrix extends FrameChart {
   private data: { values: number[][]; max: number; colors: RGBA[][] } | null = null
   private texts: { rows: string[]; cols: string[] } = { rows: [], cols: [] }
   private readonly planes: { rows: TextPlane[]; cols: TextPlane[] } = { rows: [], cols: [] }
   private plateMesh: Plate | null = null
   private readonly list: Bar[] = []
-  /** The last `update`'s context: the box, the motion preference and the theme. */
-  private ctx: Viewport3DContext | null = null
   /** The shape the bars were made for, `rows × cols`. */
   private shape = ''
   /** pt: the full height, as last laid out. */
@@ -104,17 +99,9 @@ export class BarMatrix extends Group {
   /** The theme's colours as last applied, and their key. */
   private palette: { label: RGBA; fill: RGBA } = { label: [0, 0, 0, 1], fill: [1, 1, 1, 1] }
   private paletteKey = ''
-  /** Something the layout depends on changed since the last one (data, labels). */
-  private dirty = true
 
   /** `createCanvas`: what the labels are drawn on (the root's canvas factory). */
-  constructor(opts: { createCanvas: CanvasFactory }) {
-    super()
-    this.createCanvas = opts.createCanvas
-    this.name = 'bar-matrix'; this.inner.name = 'tilt'
-    this.inner.rotation.x = FRAME.tilt
-    this.add(this.inner)
-  }
+  constructor(opts: { createCanvas: CanvasFactory }) { super('bar-matrix', opts) }
 
   /** The bars, row-major: `bars[r × cols + c].userData` is `{ row: r, col: c }`. Empty until the first layout. */
   get bars(): readonly Mesh[] { return this.list.map(b => b.mesh) }
@@ -144,15 +131,13 @@ export class BarMatrix extends Group {
     const bad = colors.findIndex(row => row.length !== cols)
     if (bad >= 0) throw new GlassUIError(scope, `colors 要与 values 同形（每格一个颜色）：每行 ${cols} 个，第 ${bad + 1} 行 ${colors[bad]!.length} 个`)
     this.data = { values: values.map(r => [...r]), max, colors: colors.map(r => r.map(c => [...c] as RGBA)) }
-    this.dirty = true
-    if (this.ctx) this.layout(this.ctx)
+    this.invalidate()
   }
 
   /** New row and column labels (see `BarMatrixLabels`); planes are made again only for changed text. */
   labels(l: BarMatrixLabels): void {
     this.texts = { rows: [...l.rows], cols: [...l.cols] }
-    this.dirty = true
-    if (this.ctx) this.layout(this.ctx)
+    this.invalidate()
   }
 
   /** Springs `cell`'s bar brighter and taller (`MATRIX.hoverBrightness`, `MATRIX.hoverDepth`), the others back; null, or a cell the data lacks: none. */
@@ -176,13 +161,7 @@ export class BarMatrix extends Group {
    * moves. Nothing to draw (no data, an empty box): false.
    */
   update(dt: number, ctx: Viewport3DContext): boolean {
-    const resized = ctx.width !== this.ctx?.width || ctx.height !== this.ctx?.height
-    this.ctx = ctx
-    if (!this.data) return false
-    this.inner.visible = ctx.width > 0 && ctx.height > 0
-    if (!this.inner.visible) return false
-    this.paint(ctx)
-    if (resized || this.dirty) this.layout(ctx)
+    if (!this.prepare(ctx)) return false
     const h = this.hovered, reduced = ctx.reducedMotion
     let moving = false
     for (const b of this.list) {
@@ -207,8 +186,10 @@ export class BarMatrix extends Group {
     this.dirty = true
   }
 
+  protected hasData(): boolean { return this.data !== null }
+
   /** The theme's colours from `ctx`: applied to the plate and labels when they changed (the textures stay). */
-  private paint(ctx: Viewport3DContext): void {
+  protected paint(ctx: Viewport3DContext): void {
     const palette = framePalette(ctx), key = [palette.label, palette.fill].join('|'), p = this.plateMesh
     this.palette = palette
     if (key === this.paletteKey || !p) return
@@ -221,7 +202,7 @@ export class BarMatrix extends Group {
    * or target height), their colours and targets, the labels (made for new text), the plate around the grid and the
    * labels, then the tilt's seat. Nothing before data and a box with an area.
    */
-  private layout(ctx: Viewport3DContext): void {
+  protected layout(ctx: Viewport3DContext): void {
     const d = this.data, W = ctx.width, H = ctx.height
     if (!d || !(W > 0 && H > 0)) return
     if (!this.plateMesh) { this.plateMesh = makePlate(false); this.inner.add(this.plateMesh); this.paletteKey = '' }

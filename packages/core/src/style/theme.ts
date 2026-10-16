@@ -77,14 +77,16 @@ export function resolveColor(token: string, theme: Theme, scheme: ColorScheme): 
 }
 
 /**
- * A chart's colour scale: `ramp` (2 or more colours, low → high, as evenly spaced stops) at `t` (clamped to 0..1),
- * mixed in sRGB between its two nearest stops (alpha too); exactly a stop's colour on it. The 3D charts colour their
- * cells with it (spatial spec §12) and draw their legends from it. A new array each call.
+ * A chart's colour scale: `ramp` (low → high, as evenly spaced stops) at `t` (clamped to 0..1; NaN as 0), mixed in
+ * sRGB between its two nearest stops (alpha too); exactly a stop's colour on it, and a one-colour ramp's colour
+ * anywhere. An empty ramp throws a `GlassUIError`. The 3D charts colour their cells with it (spatial spec §12) and draw
+ * their legends from it. A new array each call.
  */
 export function rampColor(ramp: readonly RGBA[], t: number): RGBA {
   const n = ramp.length - 1
-  if (n < 1) return [...ramp[0]!]
-  const x = Math.min(1, Math.max(0, t)) * n, k = Math.min(n - 1, Math.floor(x)), u = x - k
+  if (n < 0) throw new GlassUIError('rampColor', '色带至少要 1 个颜色，收到空数组')
+  if (n === 0) return [...ramp[0]!]
+  const x = (t > 0 ? Math.min(1, t) : 0) * n, k = Math.min(n - 1, Math.floor(x)), u = x - k   // NaN fails t > 0: 0
   const a = ramp[k]!, b = ramp[k + 1]!
   // a·(1 − u) + b·u, not a + (b − a)·u: exact at both ends of a segment
   return [a[0] * (1 - u) + b[0] * u, a[1] * (1 - u) + b[1] * u, a[2] * (1 - u) + b[2] * u, a[3] * (1 - u) + b[3] * u]

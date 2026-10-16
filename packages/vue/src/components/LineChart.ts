@@ -2,7 +2,7 @@ import { computed, h, onScopeDispose, shallowRef, watch, type VNode } from '@vue
 import { z } from 'zod'
 import type { Node, RGBA, UIEvent } from '@glassui/core'
 import type { CanvasLike } from '@glassui/text'
-import { formatValue, niceTicks } from '../chart'
+import { formatFn, formatValue, niceTicks } from '../chart'
 import { defineGlassComponent } from '../define'
 import { useCanvasFactory, useRoot, useScheme } from '../inject'
 import { useLaidOutWidth } from '../layout-width'
@@ -27,7 +27,7 @@ const LineChartProps = z.object({
     color: z.string().optional().describe('线与面积的颜色：颜色 token 或 #hex（默认依次 accent、success、danger、secondaryLabel，再循环）'),
   }).strict()).describe('系列，每项 { name, data, color? }，一项一条曲线；空数组时只显示"暂无数据"'),
   height: z.number().positive().default(200).describe('图表区高度，pt（不含上方图例；横轴标签占其中底部 22 pt）'),
-  format: z.custom<(v: number) => string>(v => typeof v === 'function', '需要一个函数 (v: number) => string').optional().describe(
+  format: formatFn.optional().describe(
     '纵轴刻度与悬停面板里数值的写法 (v: number) => string，如 v => `${v} 件`；默认最多两位小数（1.5、2、0.33）。刻度标签放在左侧 36 pt 内，过长时整列缩小字号'),
   yMin: z.number().default(0).describe('纵轴下端（默认 0）：从它或它下面最近的刻度起；有数据比它小时纵轴向下延伸到能放下'),
 }).superRefine((x, ctx) => {

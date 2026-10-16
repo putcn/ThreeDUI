@@ -1,11 +1,9 @@
-import { computed, h, onScopeDispose, shallowRef, watch, watchEffect, type VNode } from '@vue/runtime-core'
+import { h, type VNode } from '@vue/runtime-core'
 import { z } from 'zod'
-import type { Node, UIEvent } from '@glassui/core'
-import type { SurfaceCell, Viewport3DContext } from '@glassui/render'
-import { formatValue, niceMax, niceTicks } from '../chart'
+import type { SurfaceCell } from '@glassui/render'
+import { formatFn, formatValue, niceMax, niceTicks } from '../chart'
+import { use3DChart, useGridHover } from '../chart3d'
 import { defineGlassComponent } from '../define'
-import { useRoot, useScheme } from '../inject'
-import { useOwned3D } from '../owned3d'
 import { READOUT, READOUT_GAP, readoutRow } from '../readout'
 import { Text } from './Text'
 import { colorOf } from './tokens'
@@ -16,7 +14,6 @@ const DEFAULT_RAMP = ['#cfd8ff', '#a59bff', 'accent', '#c2185b'] as const
 /** The readout's line when no cell is hovered. */
 const HINT = '指向曲面查看数值'
 
-const fn = z.custom<(v: number) => string>(v => typeof v === 'function', '需要一个函数 (v: number) => string')
 const SurfaceChart3DProps = z.object({
   xLabels: z.array(z.string()).min(2).describe('列标签（横轴，从左到右），一列一个，如 24 个时段 "00"…"23"；至少 2 个。放不下时均匀隔几个显示一个'),
   yLabels: z.array(z.string()).min(2).describe('行标签（纵深，从后往前），一行一个，如近 14 天的日期 "10-03"…"10-16"；至少 2 个。第一行在最后面，最后一行离观者最近'),
@@ -25,7 +22,7 @@ const SurfaceChart3DProps = z.object({
   max: z.number().positive().finite().optional().describe('满高对应的数值；默认把最大值向上取到好看的刻度顶（236 → 250、17 → 20；全为 0 时取 1）。刻度标签从 0 均匀排到它；比它大的数值按它封顶（曲面不会高过最高刻度，读数仍显示原值）'),
   ramp: z.array(z.string()).min(2).max(6).optional().describe(
     '色带：2–6 个颜色 token 或 #hex，从低到高；曲面每个点按 数值 / max 在色带上取色。默认 ["#cfd8ff", "#a59bff", "accent", "#c2185b"]（淡蓝紫 → 主题色 → 深品红）'),
-  format: fn.optional().describe('刻度与读数里数值的写法 (v: number) => string，如 v => `${v} 单`；默认最多两位小数（1.5、2、0.33）'),
+  format: formatFn.optional().describe('刻度与读数里数值的写法 (v: number) => string，如 v => `${v} 单`；默认最多两位小数（1.5、2、0.33）'),
   height: z.number().positive().default(280).describe('图表区高度，pt（不含下方 20 pt 的读数行）；宽度撑满'),
 }).superRefine((x, ctx) => {
   if (x.values.length === 0) return
@@ -64,52 +61,19 @@ export const SurfaceChart3D = defineGlassComponent({
     { mistake: '<ScreenLayer><Surface …><SurfaceChart3D … /></Surface></ScreenLayer>，或放进 scroll', fix: '3D 图表只在世界层：放进 <Space> 里的 <Block>（最好包一张 <Card title="…">），不能放进可滚动的 scroll' },
   ],
 }, (p, { emit }) => {
-  const root = useRoot(), scheme = useScheme()
-  // the theme too (a `setTheme` with the same scheme swaps the colours the ramp's tokens name)
-  const theme = shallowRef(root.theme)
-  onScopeDispose(root.on('theme', e => { theme.value = e.theme }))
-  const chart = root.createSurfaceChart()
-  // made once: a new function each render would re-attach the chart
-  const update = (dt: number, c: Viewport3DContext): boolean => chart.update(dt, c)
-  /** The last valid props (the render reports invalid ones). */
-  const v = computed<Props | null>(prev => { try { return p.value } catch { return prev ?? null } })
-  // never an empty set: the chart needs 2 × 2, and its first set is the one that grows the surface in. Emptied, the
-  // chart lets its drawing go (`dispose` keeps it usable): data coming back grows in again, not from stale heights
-  watchEffect(() => {
-    const x = v.value
-    if (!x) return
-    if (x.values.length === 0) { chart.dispose(); return }
-    const t = theme.value, s = scheme.value, fmt = x.format ?? formatValue, max = topOf(x)
+  // never a set without data: the chart needs 2 × 2, and its first set is the one that grows the surface in
+  const { chart, props: v, update, box } = use3DChart(p, root => root.createSurfaceChart(), (chart, x, t, s) => {
+    const fmt = x.format ?? formatValue, max = topOf(x)
     chart.set({ values: x.values, max, ramp: (x.ramp ?? DEFAULT_RAMP).map((c, i) => colorOf(`SurfaceChart3D.ramp.${i}`, c, t, s)) })
     chart.labels({ x: x.xLabels, y: x.yLabels, ticks: ticksOf(max).map(n => fmt(n)) })
   })
-
-  /** `c` when the data has that cell, else null. */
-  const inData = (c: SurfaceCell | null): SurfaceCell | null => (c && v.value?.values[c.row]?.[c.col] !== undefined ? c : null)
   const reading = (c: SurfaceCell): Reading | null => {
     const x = v.value, value = x?.values[c.row]?.[c.col]
     return x && value !== undefined ? { row: c.row, col: c.col, value, x: x.xLabels[c.col]!, y: x.yLabels[c.row]! } : null
   }
-  const hovered = shallowRef<SurfaceCell | null>(null)
-  const setHover = (c: SurfaceCell | null): void => {
-    const was = hovered.value
-    if (was === c || (was && c && was.row === c.row && was.col === c.col)) return
-    hovered.value = c; chart.hover(c)
-    emit('hover', c && reading(c))
-  }
-  // a hovered cell the data no longer has (or no chart at all) is hovered no more
-  watch(() => { const x = v.value; return x ? `${x.values.length}×${x.values[0]?.length ?? 0}` : '' }, () => { if (!inData(hovered.value)) setHover(null) })
-  const cellOf = (e: UIEvent): SurfaceCell | null => (e.point ? inData(chart.cellAt(e.point)) : null)
-  const handlers = {
-    // no hover by touch (core spec §8.3): a finger dragging across the Block would scrub the chart
-    onPointermove: (e: UIEvent) => { if (e.pointerType !== 'touch') setHover(cellOf(e)) },
-    onPointerleave: () => { setHover(null) },
-    onClick: (e: UIEvent) => { const c = cellOf(e), r = c && reading(c); if (r) emit('select', r) },
-  }
-
-  // the chart is ours to dispose; in a leaving Block it flies out attached, so it goes with the Surface instead
-  const box = shallowRef<Node | null>(null)
-  useOwned3D(chart, box)
+  // the vertex nearest the pointer's point on the surface (or the plate)
+  const { hovered, handlers } = useGridHover({ chart, props: v, emit, reading })
+  const on = handlers(e => (e.point ? chart.cellAt(e.point) : null))
 
   /** The readout under the chart: "y · x · value" for the hovered cell, else the hint. */
   const readout = (x: Props): VNode => {
@@ -124,7 +88,7 @@ export const SurfaceChart3D = defineGlassComponent({
     // how far the chart rises off the glass, for the shadow fit: its own number, at any width (its tallest data is
     // 0.45 × the shorter side, so no box wider than it is high rises further), so a resize never re-attaches it
     return h('box', { ref: box, style: { flexDirection: 'column', gap: READOUT_GAP, alignSelf: 'stretch' } }, [
-      h(Viewport3D, { object: chart, update, depth: chart.riseFor(x.height, x.height), style: { height: x.height }, ...handlers }),
+      h(Viewport3D, { object: chart, update, depth: chart.riseFor(x.height, x.height), style: { height: x.height }, ...on }),
       readout(x),
     ])
   }

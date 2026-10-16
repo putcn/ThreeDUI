@@ -1,7 +1,8 @@
-import { Line, Mesh, SRGBColorSpace, type Group } from 'three'
+import { Group, Line, Mesh, SRGBColorSpace } from 'three'
 import { MeshStandardNodeMaterial } from 'three/webgpu'
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
 import { resolveColor, type RGBA, type Spring } from '@glassui/core'
+import type { CanvasFactory } from '@glassui/text'
 import type { Viewport3DContext } from '../viewport'
 import { disposeTextPlane, recolorTextPlane, textPlane, textPlaneHeight, type TextPlane, type TextPlaneOptions } from './labels'
 
@@ -173,4 +174,58 @@ export function stepSprings(springs: readonly Spring[], wait: number, dt: number
     if (!s.done) moving = true
   }
   return { wait, changed, moving: moving || wait > 0 }
+}
+
+/**
+ * A chart built in the frame (`SurfaceChart`, `BarMatrix`): a Group to attach with `Surface.attach3D` (its origin the
+ * box centre on the glass, 1 unit = 1 pt) holding `inner`, the frame tilted `FRAME.tilt` that its parts are built in
+ * and seated by its layout. It keeps the last `update`'s context and whether its layout is stale; `prepare` is the
+ * start of every `update`, `invalidate` what a new `set` or `labels` calls.
+ */
+export abstract class FrameChart extends Group {
+  /** The tilted, seated frame the chart is built in. */
+  readonly inner = new Group()
+  /** What the labels are drawn on (the root's canvas factory). */
+  protected readonly createCanvas: CanvasFactory
+  /** The last `update`'s context: the box, the motion preference and the theme. */
+  protected ctx: Viewport3DContext | null = null
+  /** Something the layout depends on changed since the last one (data, labels). */
+  protected dirty = true
+
+  constructor(name: string, opts: { createCanvas: CanvasFactory }) {
+    super()
+    this.createCanvas = opts.createCanvas
+    this.name = name; this.inner.name = 'tilt'
+    this.inner.rotation.x = FRAME.tilt
+    this.add(this.inner)
+  }
+
+  /** Whether there is data to draw (set, and not disposed since). */
+  protected abstract hasData(): boolean
+  /** Follows the theme's colours in `ctx`. */
+  protected abstract paint(ctx: Viewport3DContext): void
+  /** Lays the chart out in `ctx`'s box (nothing before data and a box with an area); clears `dirty`. */
+  protected abstract layout(ctx: Viewport3DContext): void
+
+  /** The layout is stale (new data or labels): laid out now when an `update` has told the box, else at the next one. */
+  protected invalidate(): void {
+    this.dirty = true
+    if (this.ctx) this.layout(this.ctx)
+  }
+
+  /**
+   * The start of every `update` in `ctx`'s box: keeps `ctx`, hides `inner` in a box with no area, follows the theme's
+   * colours and lays out again when the box, the data or the labels changed. False when there is nothing to draw (no
+   * data, an empty box): `update` then returns false.
+   */
+  protected prepare(ctx: Viewport3DContext): boolean {
+    const resized = ctx.width !== this.ctx?.width || ctx.height !== this.ctx?.height
+    this.ctx = ctx
+    if (!this.hasData()) return false
+    this.inner.visible = ctx.width > 0 && ctx.height > 0
+    if (!this.inner.visible) return false
+    this.paint(ctx)
+    if (resized || this.dirty) this.layout(ctx)
+    return true
+  }
 }
