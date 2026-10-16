@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Phase 3 of the spec: a Vue 3 custom renderer (`@glassui/vue`) over the core node tree, the eleven first-phase components (Surface, Box, Text, Icon, Stack, Button, Input, Switch, Checkbox, Dialog, GlassContainer), a Chinese-capable IME bridge, a generated `manifest.json` an AI agent can write UIs from, a Vue playground, visual and performance baselines — plus the render carry-overs Plan 2's final review assigned to Plan 3's first task.
+**Goal:** Phase 3 of the spec: a Vue 3 custom renderer (`@glassui/vue`) over the core node tree, the eleven first-phase components (Surface, Box, Text, Icon, Stack, Button, Input, Switch, Checkbox, Dialog, GlassContainer), a Chinese-capable IME bridge, a generated `manifest.json` an AI agent can write UIs from, a Vue playground, visual and performance baselines — plus the render carry-overs Plan 2's final review assigned to Plan 3's first task — and the spatial UI (Tasks 9A–9G): Surface motion, a camera rig, 3D viewports, nested glass and a bar chart in render; `Space`, `Block`, `Card`, `Viewport3D` and `BarChart3D` in Vue.
 
 **Architecture:** `@glassui/vue` builds a `createRenderer<Node, Node>` whose `nodeOps` create and patch core `Node`s; `createGlassApp(App, { root })` binds it to a `UIRoot` from `@glassui/render`. Components are `defineGlassComponent` wrappers: a zod props schema (validated into `GlassUIError`s, exported to the manifest) around a setup that renders only the host primitives (`box`, `text`, `image`, `glass`, `scroll`, `portal`). `<Surface>` and `<Dialog>` create render Surfaces through the root and `Teleport` their slots into the Surface's root node. Text editing goes through `root.ime`, a proxy-`<textarea>` bridge positioned at the projected caret. GlassContainer fuses nearby glass shapes into one CPU-extruded slab drawn through the existing glass material on a plain-mesh vertex path.
 
 **Tech Stack:** TypeScript 5.9 (strict), Vue 3.5.44 (`@vue/runtime-core` in the library, `vue` + `@vitejs/plugin-vue` 6.0.10 in the playground), zod 4 (`z.toJSONSchema` for the manifest), three.js r186 WebGPURenderer + TSL (render package only), yoga-layout 3, Vitest 5, Playwright 1.64.
 
-**Spec:** `docs/superpowers/specs/2026-10-07-glassui-core-design.md` (§3, §4, §7, §8, §9, §10, §11 Phase 3, §12 "Plan 3 第一项任务"). Plan 2 (as built): `docs/superpowers/plans/2026-10-08-glassui-plan-2-render.md`.
+**Spec:** `docs/superpowers/specs/2026-10-07-glassui-core-design.md` (§3, §4, §7, §8, §9, §10, §11 Phase 3, §12 "Plan 3 第一项任务") and, for Tasks 9A–9G and the spatial parts of Tasks 18–21 and 23, `docs/superpowers/specs/2026-10-15-glassui-spatial-ui-design.md` (which amends the core spec's §8.3). Plan 2 (as built): `docs/superpowers/plans/2026-10-08-glassui-plan-2-render.md`.
 
 ## Global Constraints
 
@@ -17,8 +17,8 @@
 - Spec §5.7 / Plan 2: all materials in TSL; no WGSL/GLSL literals, no MRT, no compute; TSL `If` only inside `Fn` (prefer JS-time branches and `select`); no `pow` with a zero base; varyings ≤ 11 per glass variant; every visual change must look the same on WebGPU and `forceWebGL`.
 - Spec §8.1: `nodeOps.createElement(tag)` creates `box/text/image/glass/scroll/portal`; `createText/createComment` → `text`/`anchor`; `patchProp(el, key, prev, next)`: `on*` → events, `style`/`tw`/`class` merge into the style, everything else `setProp`; `querySelector` by id or portal name only; Vue `<Teleport>` maps onto `portal` nodes; `<Transition>` uses the §4.4 animation runtime.
 - Spec §8.2 metrics (80 pt reference control): control padding 26, leading/trailing icon 28, icon–text gap 14, centred icon+text group gap 12, checkbox 44 × 44 radius 12, switch 136 × 62 with knob 48 at margin 7 (knob centre = half width − margin − knob radius); `theme.metrics` already holds these.
-- Spec §8.2: every component = `defineComponent` + zod props schema → exported to `manifest.json` (name, description, props with type/default/doc, events with payload, slots, 2–3 example snippets, common mistakes). Components render only the primitives and Style; the render package is reached only through the `UIRoot` API (`root.createSurface`, `root.text`, `root.ime`, `root.anim`).
-- Spec §8.3: glass only on controls (buttons, inputs, switches, dialog panels, toolbars), never on content areas; button = glow layer + clear glass shell + decoration layer; primary button glow ≈ 1.1; secondary = clear glass without glow; checkbox = 44 pt square clear glass + check; switch glow split softly at the knob; default shape capsule, panels fixed radius, nested children `radius: 'concentric'`; press `scale 0.96` with `snappy`; hover = glint up + tilt ≤ 3° (pointer devices only); appear/disappear modulates refraction and blur with scale 0.9 → 1; `prefers-reduced-transparency` → minimal; `prefers-reduced-motion` → no springs, no tilt; `prefers-contrast` → black/white solid + border.
+- Spec §8.2: every component = `defineComponent` + zod props schema → exported to `manifest.json` (name, description, props with type/default/doc, events with payload, slots, 2–3 example snippets, common mistakes). Components render only the primitives and Style; the render package is reached only through the `UIRoot` API (`root.createSurface`, `root.text`, `root.ime`, `root.anim`, and from Tasks 9B/9E `root.createCameraRig`, `root.createBarChart`) and the Surface's own methods (`animateTo`, `attach3D`, from Tasks 9A/9C).
+- Spec §8.3 (as amended 2026-10-15, spatial spec §9): glass on containers — Block backplates, Card, dialog panels — and on controls (buttons, inputs, switches, toolbars); a plain `Box` is layout only, and text and list items ride on their container's glass, never glass of their own; glass inside glass follows the spatial spec §2.4; button = glow layer + clear glass shell + decoration layer; primary button glow ≈ 1.1; secondary = clear glass without glow; checkbox = 44 pt square clear glass + check; switch glow split softly at the knob; default shape capsule, panels fixed radius, nested children `radius: 'concentric'`; press `scale 0.96` with `snappy`; hover = glint up + tilt ≤ 3° (pointer devices only); appear/disappear modulates refraction and blur with scale 0.9 → 1; `prefers-reduced-transparency` → minimal; `prefers-reduced-motion` → no springs, no tilt; `prefers-contrast` → black/white solid + border.
 - Spec §9: validation failures throw `GlassUIError` synchronously, message `[<Component>.<prop>] <原因>。允许值：… 你可能想要：…` (the core class already formats `allowed`/`got`); dev builds also draw an error marker in the canvas.
 - Spec §7.3: IME through a transparent proxy `<textarea>` (`caret-color: transparent`, `opacity: 0.01`, `position: fixed`) placed at the projected caret rect (world layer projected too); `beforeinput/input/compositionstart/update/end/keydown/select` synced back; composition text drawn underlined in the canvas; clipboard, undo and system shortcuts come from the proxy.
 - Plan 1/2 conventions: TS strict + `exactOptionalPropertyTypes` + `noUncheckedIndexedAccess`; errors are `GlassUIError(scope, reason, { allowed?, got? })` (scope without brackets; the class adds them) with Chinese reasons; optional fields stay absent, never `undefined`; every package has `tsconfig.json` (src) and `tsconfig.test.json` (src + test) and is listed in the root `typecheck` script; tests live in `packages/<pkg>/test/*.test.ts` (Vitest, `environment: 'node'`).
@@ -32,6 +32,25 @@
 3. **Composition at the edge.** Composing CJK text while the Input's value overflows and the caret is at the right edge, and on a world-layer Surface tilted 30°: the field scrolls to keep the composition visible and the proxy textarea sits on the projected caret (Task 13 test "composition scrolls into view"; Task 12 test "world caret projects through the tilt").
 4. **Rapid toggling.** Opening and closing a Dialog within one frame, or toggling `v-if` during an enter transition: the leave cancels the enter, `done()` runs exactly once, no Surface or node is orphaned (Task 7 test "leave cancels enter"; Task 14 test "open/close in one frame leaves no surfaces").
 5. **Agent mistakes.** Unknown variant, wrong prop type, unknown prop, unknown icon name, bad `tw` class, `v-model` on the wrong prop name: a `GlassUIError` with `[Comp.prop]`, the allowed values and a suggestion, raised synchronously from render (console + canvas marker), never a silent default (Task 7 tests "unknown prop suggests", "enum value suggests"; Task 8 test "unknown icon suggests").
+
+Spatial UI (Tasks 9A–9G, spatial spec), the five most likely to bite:
+
+6. **Rapid focus changes.** Clicking one Block, then another before the camera arrives; or a `focus` change during a Block's fly-in. Expected:
+   - the rig retargets from where it is, with no cut and no overshoot;
+   - the earlier `focus` promise resolves false;
+   - the camera aims at the new Block's rest pose.
+   Tests: Task 9B "a second focus resolves the first false and does not jump", "aims at the rest pose of a Surface still flying in".
+7. **A Block toggled mid-flight.** `v-if` off and on again before the leave ends, or the whole `Space` unmounted mid-flight. Expected:
+   - exactly one Surface per Block survives;
+   - leaving content stays visible until its flight ends;
+   - no Surface is orphaned.
+   Tests: Task 9F "toggling off and on within one flight…", "unmounting the Space mid-flight…".
+8. **Resize while focused.** The window's aspect changes while a Block is focused: the camera refits the Block with its margin. Test: Task 9B "refits when the aspect changes".
+9. **3D hover edges.** The pointer moves from a bar onto the blank chart box or onto another Surface, or rests on a bar of an unfocused Block. Expected:
+   - hover stays on the chart node over its box and leaves cleanly;
+   - an unfocused Block's bars take no hover or press.
+   Tests: Task 9C "the node hovers over its object and its box alike…", "a node that cannot take the pointer is skipped…".
+10. **Agent mistakes in spatial markup.** A Block outside a Space, duplicate names, a misspelt `focus`, a non-Block in a Space, a negative chart value, a Viewport3D inside a scroll: each raises a readable `GlassUIError`, with a suggestion where one exists. Tests: Task 9F "reports the mistakes an agent makes"; Task 9G.
 
 ## File Structure
 
@@ -54,6 +73,11 @@ packages/
     glass/material.ts    + `vertex: 'slab9' | 'mesh'`
     ime.ts               NEW: ImeBridge (proxy textarea)
     index.ts / internal.ts   public API vs internals (`@glassui/render/internal`)
+    surface/motion.ts    NEW (9A): SurfaceMotion — animateTo springs
+    rig.ts               NEW (9B): CameraRig, fitDistance, focusPose
+    viewport.ts          NEW (9C): Viewport3DAttachment — Surface.attach3D
+    surface/stack.ts     NEW (9D): StackPass — nested glass
+    chart/bar.ts         NEW (9E): BarChart, barLayout
   vue/                   NEW package @glassui/vue
     src/renderer.ts      nodeOps + createGlassRenderer
     src/app.ts           createGlassApp, mount, parent sharing, error marker
@@ -62,7 +86,11 @@ packages/
     src/transition.ts    GlassTransition (BaseTransition + AnimationRuntime)
     src/control.ts       useGlassControl (hover/tilt/press/keyboard/focus)
     src/icons.ts         built-in icon set (canvas paths)
-    src/components/*.ts  Box, Text, Icon, Stack, Surface, Button, Switch, Checkbox, Input, Dialog, GlassContainer
+    src/components/*.ts  Box, Text, Icon, Stack, Surface, Button, Switch, Checkbox, Input, Dialog, GlassContainer,
+                         and (9F, 9G) Space, Block, Card, Viewport3D, BarChart3D
+    src/surface-host.ts  (9F) useRenderSurface, shared by Surface and Block
+    src/spatial/         (9F) arc.ts (arcSlots), context.ts (SPACE)
+    src/chart.ts         (9G) niceMax, formatValue
     src/manifest.ts      generateManifest()
     manifest.json        generated, committed
 examples/
@@ -1781,6 +1809,1459 @@ git commit -m "feat(vue): <Surface> with screen/world layers, teleporting its sl
 ```
 
 ---
+### Task 9A: Surface motion — `animateTo`, whole-Surface opacity, view culling, content RT sizing
+
+Spatial spec §2.1. This task is the base for Blocks flying in and out (9F) and for the camera rig aiming at a Block's rest pose (9B).
+
+**Files:**
+- Create: `packages/render/src/surface/motion.ts`
+- Modify: `packages/render/src/surface/surface.ts`, `packages/render/src/flat.ts`, `packages/render/src/surface/content.ts`, `packages/render/src/root.ts`
+- Modify (alpha × `su.opacity`): `packages/render/src/glass/material.ts`, `packages/render/src/decoration/material.ts` (rim only), `packages/render/src/text/material.ts`, `packages/render/src/image/images.ts`
+- Test: `packages/render/test/motion.test.ts` (new), `packages/render/test/surface.test.ts`, `packages/render/test/content.test.ts`, `packages/render/test/root.test.ts`, plus one case each in `decoration.test.ts`, `text.test.ts`, `images.test.ts`, `glass-material.test.ts`
+
+**Interfaces:**
+- Consumes: core `Spring`, `springFromResponse`, `SpringConfig`, `GlassUIError`, `Theme`; three `Quaternion`, `Vector3`, `Euler`, `Frustum`, `Matrix4`, `Box3`.
+- Produces:
+  - `motion.ts`:
+    ```ts
+    export interface SurfacePose { position?: [number, number, number]; rotation?: [number, number, number]; scale?: number | [number, number, number]; opacity?: number }
+    export interface ResolvedPose { position: Vector3; quaternion: Quaternion; scale: Vector3; opacity: number }
+    export type PoseSpring = 'snappy' | 'smooth' | 'bouncy' | { response: number; dampingFraction: number } | SpringConfig
+    export const POSE_SPRING = { response: 0.55, dampingFraction: 0.86 } as const
+    export class SurfaceMotion {
+      constructor(theme: Theme)
+      /** Starts or retargets the channels `target` names. A channel not already moving starts from `from`. */
+      to(target: SurfacePose, from: ResolvedPose, opts?: { spring?: PoseSpring; immediate?: boolean }): Promise<boolean>
+      /** Advances the moving channels and writes them into `out`; the idle ones are left as `out` has them. True while any channel moves. */
+      step(dt: number, out: ResolvedPose): boolean
+      /** Where `current` ends up: the moving channels' targets, the idle ones from `current`. */
+      rest(current: ResolvedPose, into: ResolvedPose): ResolvedPose
+      get active(): boolean
+      /** Every channel idle; every pending promise resolves false. */
+      stop(): void
+    }
+    ```
+  - `Surface`:
+    - `animateTo(target: SurfacePose, opts?: { spring?: PoseSpring; immediate?: boolean }): Promise<boolean>`.
+    - `opacity: number`: a getter and a setter. The setter jumps.
+    - `restPose: { position: [x, y, z]; rotation: [x, y, z]; scale: [x, y, z]; opacity: number }`: a getter that returns fresh arrays. The rotation is the XYZ Euler of the target quaternion.
+    - `stepMotion(dt: number): boolean`: the root calls it every tick.
+    - `culled: boolean`: the root sets it.
+    - `prepare(renderer, projectedPx, dpr, camera?, moving = false)`.
+  - `SurfaceUniforms.opacity?: UniformNode<'float', number>`:
+    - The Surface's plane draws (content quad, slab and element glass, rims, foreground glyphs and images) get `su` with it.
+    - The content-pass draws get a second `suContent = { size: su.size, ptPerUnit: su.ptPerUnit }` without it, so they never fade twice.
+    - Each factory multiplies its alpha by `su.opacity ?? float(1)`.
+  - `createContentMaterial(content: Texture, su?: SurfaceUniforms)`. The content RT is premultiplied, so the factor multiplies both `colorNode` and `opacityNode`.
+  - `content.ts`: `rtTarget(have, need, opts: { settled: boolean; fresh: boolean; step?: number; cap?: number }): { width: number; height: number }` and `RT_SETTLE_FRAMES = 30`. `ContentPass` gains `width`/`height` getters.
+
+Rules (spatial spec §2.1):
+
+**Channels**
+- Position, scale and opacity each run on their own springs (per component).
+- Rotation is a progress spring 0 → 1 that slerps from the quaternion at the call to the target quaternion; three's `slerp` takes the short arc.
+- A retarget keeps the velocity of the position, scale and opacity springs. Rotation restarts its slerp from the current quaternion with zero progress velocity (documented).
+
+**Promises**
+- Each call owns the channels it names. A newer call that names one of them resolves the older call's promise `false` at once.
+- A call resolves `true` when all of its channels settle.
+- `immediate` (or `ctx.anim.reducedMotion` at the call) writes the end values at the next `step` and resolves `true` then.
+- On a failed or disposed Surface, `animateTo` resolves `false` at once.
+- `dispose` and `markFailed` call `motion.stop()`.
+
+**Layers**
+- A screen Surface may animate `opacity` only. A position, rotation or scale throws `GlassUIError('Surface.animateTo', '屏幕层 Surface 只能动画 opacity：位置与缩放由屏幕层摆放')`.
+
+**Validation**
+- `opacity` must lie in [0, 1], every number must be finite, and a scale must be > 0. A spring preset must be one of the three names. Anything else throws `GlassUIError('Surface.animateTo', …)` with the allowed values.
+
+**Opacity**
+- Setting `opacity` writes `su.opacity.value`.
+- The content quad's `depthWrite` is on only at opacity 1.
+- `layer.visible = opacity > 0 && !culled`.
+
+**Root tick**
+1. `stepMotion(dt)` runs on every Surface first, before `screen.update` and before the world matrices are read.
+2. After the matrices are updated, each world Surface's `culled` is set: its `glassBounds` (Surface-local) transformed by `matrixWorld` does not intersect the camera frustum (`Frustum.setFromProjectionMatrix(projection × matrixWorldInverse)`, `intersectsBox`).
+3. `each(s => s.prepare(...))` skips Surfaces whose `layer.visible` is false. Their `contentDirty` stays set, so they redraw when they come back.
+4. `fitShadows` counts only `s.visible && s.layer.visible`.
+5. `moving` for `prepare` is true when the camera's matrix changed this tick, the Surface's `matrixWorld` changed since the last tick (a `WeakMap<Surface, Matrix4>`), or `stepMotion` returned true.
+
+**RT sizing**
+- `prepare` keeps a count of still frames and passes it to `rtTarget`. Per axis:
+  - a `fresh` RT (the first `prepare`) gets exactly `need`;
+  - `need > have` gets `min(cap, ceil(need × 1.25 / step) × step)`;
+  - `need < have` shrinks to `need` only when `settled` (30 still frames);
+  - otherwise `have` is kept.
+- This replaces Task 21's optimisation 5.
+
+- [ ] **Step 1: Write the failing tests**
+
+`packages/render/test/motion.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest'
+import { Euler, Quaternion, Vector3 } from 'three'
+import { defaultTheme } from '@glassui/core'
+import { SurfaceMotion, type ResolvedPose } from '../src/surface/motion'
+
+const pose = (): ResolvedPose => ({ position: new Vector3(), quaternion: new Quaternion(), scale: new Vector3(1, 1, 1), opacity: 1 })
+const run = (m: SurfaceMotion, out: ResolvedPose, s: number) => { for (let t = 0; t < s; t += 1 / 60) m.step(1 / 60, out) }
+
+describe('SurfaceMotion', () => {
+  it('springs each named channel to its target and resolves true; unnamed channels stay', async () => {
+    const m = new SurfaceMotion(defaultTheme), p = pose()
+    const done = m.to({ position: [2, 0, 0], opacity: 0 }, p)
+    m.step(1 / 60, p); expect(p.position.x).toBeGreaterThan(0); expect(p.position.x).toBeLessThan(2)
+    p.scale.set(3, 3, 3); m.step(1 / 60, p); expect(p.scale.x).toBe(3)        // idle: untouched
+    run(m, p, 3); expect(p.position.x).toBe(2); expect(p.opacity).toBe(0)
+    await expect(done).resolves.toBe(true); expect(m.active).toBe(false)
+  })
+  it('a retarget keeps the velocity of the channels it names and ends the older promise false', async () => {
+    const m = new SurfaceMotion(defaultTheme), p = pose()
+    const first = m.to({ position: [2, 0, 0] }, p)
+    for (let i = 0; i < 6; i++) m.step(1 / 60, p)
+    const x0 = p.position.x; m.step(1 / 60, p); const stepBefore = p.position.x - x0
+    const second = m.to({ position: [4, 0, 0] }, p)
+    const x1 = p.position.x; m.step(1 / 60, p)
+    expect(p.position.x - x1).toBeGreaterThan(stepBefore * 0.9)               // no restart from rest
+    await expect(first).resolves.toBe(false)
+    run(m, p, 3); await expect(second).resolves.toBe(true)
+  })
+  it('calls naming different channels run side by side', async () => {
+    const m = new SurfaceMotion(defaultTheme), p = pose()
+    const a = m.to({ position: [1, 0, 0] }, p), b = m.to({ opacity: 0.5 }, p)
+    run(m, p, 3); await expect(a).resolves.toBe(true); await expect(b).resolves.toBe(true)
+  })
+  it('rotation takes the short arc', () => {
+    const m = new SurfaceMotion(defaultTheme), p = pose()
+    const from = new Quaternion().setFromEuler(new Euler(0, 3, 0)), to = new Quaternion().setFromEuler(new Euler(0, -3, 0))
+    p.quaternion.copy(from)
+    void m.to({ rotation: [0, -3, 0] }, p)                                    // 6 rad apart as Euler, 0.28 rad the short way
+    for (let i = 0; i < 30; i++) {
+      m.step(1 / 60, p)
+      expect(p.quaternion.angleTo(from) + p.quaternion.angleTo(to)).toBeCloseTo(from.angleTo(to), 4)   // on the short great arc
+    }
+  })
+  it('immediate writes the end values at the next step and resolves true', async () => {
+    const m = new SurfaceMotion(defaultTheme), p = pose()
+    const done = m.to({ position: [5, 0, 0], scale: 2 }, p, { immediate: true })
+    m.step(0, p); expect(p.position.x).toBe(5); expect(p.scale.toArray()).toEqual([2, 2, 2])
+    await expect(done).resolves.toBe(true)
+  })
+  it('rest() is the target for moving channels and the current value for idle ones', () => {
+    const m = new SurfaceMotion(defaultTheme), p = pose(); p.opacity = 0.7
+    void m.to({ position: [1, 2, 3] }, p)
+    const r = m.rest(p, pose()); expect(r.position.toArray()).toEqual([1, 2, 3]); expect(r.opacity).toBe(0.7)
+  })
+  it('stop() ends every pending promise false', async () => {
+    const m = new SurfaceMotion(defaultTheme), p = pose(), done = m.to({ opacity: 0 }, p)
+    m.stop(); await expect(done).resolves.toBe(false); expect(m.active).toBe(false)
+  })
+  it('rejects bad input readably', () => {
+    const m = new SurfaceMotion(defaultTheme), p = pose()
+    expect(() => m.to({ opacity: 2 }, p)).toThrow(/\[Surface\.animateTo\].*opacity/)
+    expect(() => m.to({ position: [0, Number.NaN, 0] }, p)).toThrow(/\[Surface\.animateTo\]/)
+    expect(() => m.to({ scale: 0 }, p)).toThrow(/\[Surface\.animateTo\].*scale/)
+    expect(() => m.to({ opacity: 0 }, p, { spring: 'snapy' as never })).toThrow(/你可能想要：snappy/)
+  })
+})
+```
+
+`packages/render/test/surface.test.ts` (with the file's `ctx` and `stubRenderer`; `MeshStandardNodeMaterial` from `three/webgpu`, `evalNode` from `./fixtures/tsl-eval`):
+
+```ts
+describe('Surface motion', () => {
+  const world = () => new Surface({ id: 'w', width: 400, height: 300, ptPerUnit: 100, placement: 'world' }, ctx)
+  const quadAlpha = (s: Surface) => evalNode((s.contentMesh.material as MeshStandardNodeMaterial).opacityNode, { uv: [0.5, 0.5] }, undefined, undefined, () => [1, 1, 1, 1])[0]!
+  it('animateTo moves a world Surface and fades its plane draws; restPose is the target', async () => {
+    const s = world(), done = s.animateTo({ position: [1, 0, 0], opacity: 0.5 })
+    expect(s.restPose.position).toEqual([1, 0, 0]); expect(s.restPose.opacity).toBe(0.5)
+    s.stepMotion(1 / 60); expect(s.position.x).toBeGreaterThan(0)
+    for (let i = 0; i < 180; i++) s.stepMotion(1 / 60)
+    expect(s.position.x).toBe(1); expect(s.opacity).toBe(0.5); expect(quadAlpha(s)).toBeCloseTo(0.5)
+    await expect(done).resolves.toBe(true)
+  })
+  it('below opacity 1 the content quad stops writing depth; at 0 the layer hides', () => {
+    const s = world(), m = s.contentMesh.material as MeshStandardNodeMaterial
+    s.opacity = 0.5; expect(m.depthWrite).toBe(false); expect(s.layer.visible).toBe(true)
+    s.opacity = 1; expect(m.depthWrite).toBe(true)
+    s.opacity = 0; expect(s.layer.visible).toBe(false)
+    s.opacity = 0.2; s.culled = true; expect(s.layer.visible).toBe(false)
+    s.culled = false; expect(s.layer.visible).toBe(true)
+  })
+  it('reduced motion jumps; a failed or disposed Surface resolves false at once; dispose ends a running one false', async () => {
+    const s = world(); ctx.anim.reducedMotion = true
+    try { const p = s.animateTo({ position: [3, 0, 0] }); s.stepMotion(1 / 60); expect(s.position.x).toBe(3); await expect(p).resolves.toBe(true) }
+    finally { ctx.anim.reducedMotion = false }
+    const d = world(); d.dispose(); await expect(d.animateTo({ opacity: 0 })).resolves.toBe(false)
+    const f = world(); f.markFailed(new Error('x')); await expect(f.animateTo({ opacity: 0 })).resolves.toBe(false)
+    const g = world(), running = g.animateTo({ opacity: 0 }); g.dispose(); await expect(running).resolves.toBe(false)
+  })
+  it('a screen Surface animates opacity only', () => {
+    const s = new Surface({ width: 10, height: 10, ptPerUnit: 1, placement: 'screen' }, ctx)
+    expect(() => s.animateTo({ position: [1, 0, 0] })).toThrow(/\[Surface\.animateTo\].*屏幕层/)
+    expect(() => s.animateTo({ opacity: 0.5 })).not.toThrow()
+  })
+  it('a direct write between animations is where the next one starts', () => {
+    const s = world(); s.position.set(5, 0, 0)
+    void s.animateTo({ position: [6, 0, 0] }); s.stepMotion(1 / 60)
+    expect(s.position.x).toBeGreaterThan(5); expect(s.position.x).toBeLessThan(6)
+  })
+})
+```
+
+`packages/render/test/content.test.ts`:
+
+```ts
+describe('rtTarget', () => {
+  const sz = (width: number, height: number) => ({ width, height })
+  const moving = { settled: false, fresh: false }
+  it('a fresh RT takes exactly what is needed', () => expect(rtTarget(sz(1, 1), sz(640, 384), { settled: false, fresh: true })).toEqual(sz(640, 384)))
+  it('grows with 25 % headroom on the 64 step, per axis', () => {
+    expect(rtTarget(sz(640, 384), sz(704, 384), moving)).toEqual(sz(896, 384))   // ceil(704 × 1.25 / 64) × 64
+    expect(rtTarget(sz(896, 384), sz(832, 384), moving)).toEqual(sz(896, 384))   // within the headroom: kept
+  })
+  it('shrinks only once settled', () => {
+    expect(rtTarget(sz(896, 384), sz(640, 320), moving)).toEqual(sz(896, 384))
+    expect(rtTarget(sz(896, 384), sz(640, 320), { settled: true, fresh: false })).toEqual(sz(640, 320))
+  })
+  it('never passes the cap', () => expect(rtTarget(sz(3840, 64), sz(4000, 64), moving).width).toBe(4096))
+})
+```
+
+`packages/render/test/root.test.ts`, inside `describe('the root API for the Vue layer')` (its `createRoot`):
+
+```ts
+it('steps Surface motion in tick and tells prepare when a Surface or the camera moves', async () => {
+  const { root, camera } = await createRoot()
+  camera.position.set(0, 0, 5)
+  const s = root.createSurface({ layer: 'world', width: 100, height: 100 })
+  const prep = vi.spyOn(s, 'prepare'), moving = () => prep.mock.calls.at(-1)![4]
+  root.tick(1 / 60); root.tick(1 / 60); expect(moving()).toBe(false)
+  camera.position.z = 4; root.tick(1 / 60); expect(moving()).toBe(true)
+  root.tick(1 / 60); expect(moving()).toBe(false)
+  void s.animateTo({ position: [0.5, 0, 0] }); root.tick(1 / 60)
+  expect(moving()).toBe(true); expect(s.position.x).toBeGreaterThan(0)
+})
+it('a world Surface out of view is neither drawn nor prepared, and redraws when it comes back', async () => {
+  const { root, camera } = await createRoot()
+  camera.position.set(0, 0, 5); camera.lookAt(0, 0, 0)
+  const s = root.createSurface({ layer: 'world', width: 100, height: 100 }); root.tick(1 / 60)
+  expect(s.culled).toBe(false); expect(s.contentDirty).toBe(false)
+  s.contentDirty = true; camera.lookAt(0, 0, 10); root.tick(1 / 60)
+  expect(s.culled).toBe(true); expect(s.layer.visible).toBe(false); expect(s.contentDirty).toBe(true)
+  camera.lookAt(0, 0, 0); root.tick(1 / 60)
+  expect(s.layer.visible).toBe(true); expect(s.contentDirty).toBe(false)
+})
+```
+
+Also, in each of `decoration.test.ts` (the rim material), `text.test.ts` (glyph), `images.test.ts` (image) and `glass-material.test.ts` (element glass, front side), add one case:
+- evaluate the material's `opacityNode` at one fragment with that file's existing inputs, once with the file's `su` and once with `{ ...su, opacity: uniform(0.5) }`;
+- the second result is half the first.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `pnpm vitest run packages/render`
+Expected: FAIL on the new cases (no `SurfaceMotion`, `animateTo`, `rtTarget`, `culled`).
+
+- [ ] **Step 3: Implement**
+
+`motion.ts`, skeleton (fill in the per-channel bookkeeping as the rules above say):
+
+```ts
+type Channel = 'position' | 'rotation' | 'scale' | 'opacity'
+interface Call { channels: Set<Channel>; resolve: (ok: boolean) => void }
+
+export class SurfaceMotion {
+  private readonly pos = [0, 1, 2].map(() => null as Spring | null)
+  private readonly scl = [0, 1, 2].map(() => null as Spring | null)
+  private op: Spring | null = null
+  private rot: { from: Quaternion; to: Quaternion; p: Spring } | null = null
+  private readonly owner = new Map<Channel, Call>()
+  private jump: SurfacePose | null = null
+  constructor(private readonly theme: Theme) {}
+
+  to(target: SurfacePose, from: ResolvedPose, opts: { spring?: PoseSpring; immediate?: boolean } = {}): Promise<boolean> {
+    check(target, opts.spring)                                  // GlassUIError('Surface.animateTo', …)
+    const cfg = springOf(opts.spring ?? POSE_SPRING, this.theme)
+    const channels = new Set(CHANNELS.filter(c => target[c] !== undefined))
+    return new Promise<boolean>(resolve => {
+      const call: Call = { channels, resolve }
+      for (const c of channels) { const prev = this.owner.get(c); if (prev && prev !== call) this.supersede(prev); this.owner.set(c, call) }
+      if (opts.immediate) { this.jump = { ...this.jump, ...target }; return }
+      // per channel: an existing spring keeps value and velocity and takes the new target (and config); a new one starts at `from`
+      …
+    })
+  }
+  …
+}
+```
+
+`springOf`: preset names map to `theme.springs[name]`; `{ response, dampingFraction }` goes through `springFromResponse`; a `SpringConfig` passes through.
+
+`Surface`:
+
+```ts
+private readonly motion: SurfaceMotion
+private readonly suContent: SurfaceUniforms                       // { size: su.size, ptPerUnit: su.ptPerUnit }: content-pass draws
+private fade = 1
+private hidden = false                                          // `culled`
+private stillFrames = 0
+private sized = false
+
+get opacity(): number { return this.fade }
+set opacity(v: number) { this.fade = v; this.applyFade() }
+get culled(): boolean { return this.hidden }
+set culled(v: boolean) { this.hidden = v; this.applyFade() }
+private applyFade(): void {
+  this.su.opacity!.value = this.fade
+  ;(this.contentMesh.material as Material).depthWrite = this.fade >= 1
+  this.layer.visible = this.fade > 0 && !this.hidden
+}
+
+animateTo(target: SurfacePose, opts: { spring?: PoseSpring; immediate?: boolean } = {}): Promise<boolean> {
+  if (this.error || this.isDisposed) return Promise.resolve(false)
+  if (this.model.placement === 'screen' && (target.position || target.rotation || target.scale !== undefined))
+    throw new GlassUIError('Surface.animateTo', '屏幕层 Surface 只能动画 opacity：位置与缩放由屏幕层摆放')
+  return this.motion.to(target, this.pose(), { ...opts, immediate: opts.immediate === true || this.ctx.anim.reducedMotion })
+}
+stepMotion(dt: number): boolean {
+  if (this.error || this.isDisposed || !this.motion.active) return false
+  const p = this.pose(), more = this.motion.step(dt, p)
+  this.position.copy(p.position); this.quaternion.copy(p.quaternion); this.scale.copy(p.scale)
+  if (p.opacity !== this.fade) this.opacity = p.opacity
+  return more
+}
+```
+
+- Every plane draw's factory gets `this.su`:
+  - `createContentMaterial(tex, this.su)`, slab and element glass, rims, `foregroundImages`;
+  - the foreground glyph meshes: `syncGlyphMeshes` takes the `su` to use.
+- Every content-pass draw gets `this.suContent`: panels, pools, `contentImages`, content glyphs.
+- In each factory, multiply the existing alpha by `su.opacity ?? float(1)`. The content material multiplies `sample.rgb` too (premultiplied).
+
+`root.ts` `tick`, in order:
+
+```ts
+const animating = new Set<Surface>()
+for (const s of surfaces) if (s.stepMotion(dt)) animating.add(s)
+renderer.getSize(size)
+screen.update(camera, …)                                        // as today
+… billboards, updateWorldMatrix (as today) …
+frustum.setFromProjectionMatrix(m4.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse))
+for (const s of surfaces) if (s.model.placement === 'world') s.culled = !frustum.intersectsBox(s.glassBounds.applyMatrix4(s.matrixWorld))
+…
+each(s => {
+  if (!s.layer.visible) return
+  const last = lastSeen.get(s), moved = !last || !last.equals(s.matrixWorld)
+  if (last) last.copy(s.matrixWorld); else lastSeen.set(s, s.matrixWorld.clone())
+  s.prepare(renderer, projectedPx(s), dpr, camera, cameraMoved || moved || animating.has(s))
+})
+```
+
+`cameraMoved` is the existing `!lastCamera.equals(camera.matrixWorld)`, taken before `lastCamera` is updated. `forgetSurface` also deletes the Surface from `lastSeen`.
+
+- [ ] **Step 4: Run, typecheck, commit**
+
+Run: `pnpm vitest run packages/render && pnpm typecheck && pnpm playground:build`
+Expected: PASS / exit 0. The visual baselines must not move: nothing animates in the existing scenes.
+
+```bash
+git add packages/render
+git commit -m "feat(render): Surface.animateTo with per-channel springs, whole-Surface opacity, view culling, content RT headroom and settle-to-shrink"
+```
+
+---
+
+### Task 9B: `CameraRig` — focus a Surface, pointer parallax
+
+Spatial spec §2.2.
+
+**Files:**
+- Create: `packages/render/src/rig.ts`
+- Modify: `packages/render/src/root.ts` (`createCameraRig`; the rig updates in `tick`; `dispose` disposes it), `packages/render/src/index.ts` (type-only exports `CameraRig`, `CameraRigOptions`)
+- Modify: `packages/vue/src/root.ts` (`GlassRoot` adds `'createCameraRig'`), `packages/vue/test/fixtures/fake-root.ts` (a fake rig)
+- Test: `packages/render/test/rig.test.ts` (new), `packages/render/test/root.test.ts`
+
+**Interfaces:**
+- Consumes: Task 9A's `Surface.restPose`; `CanvasLike` (pointer.ts); `Spring`, `springFromResponse`.
+- Produces:
+  ```ts
+  export interface CameraRigOptions { response?: number /* 0.8 */; margin?: number /* 0.08 */; parallax?: number /* degrees, 2.5 */; parallaxResponse?: number /* 0.4 */ }
+  export interface RigEnvironment { camera: PerspectiveCamera; canvas: CanvasLike; aspect: () => number; reducedMotion: () => boolean }
+  export class CameraRig {
+    constructor(env: RigEnvironment, opts?: CameraRigOptions)
+    parallax: boolean                       // default true
+    get target(): Surface | null
+    get disposed(): boolean
+    focus(target: Surface, opts?: { immediate?: boolean }): Promise<boolean>
+    update(dt: number): void                // the root calls it every tick
+    dispose(): void                         // stops writing the camera; removes its canvas listeners
+  }
+  export function fitDistance(width: number, height: number, fovDeg: number, aspect: number, margin: number): number
+  export function focusPose(target: Surface, fovDeg: number, aspect: number, margin: number, out: { position: Vector3; quaternion: Quaternion }): void
+  ```
+  - `UIRoot.createCameraRig(opts?: CameraRigOptions): CameraRig`:
+    - throws `GlassUIError('UIRoot.createCameraRig', '这个 root 已经有一个 CameraRig：先 dispose 旧的')` while one is live;
+    - throws `'CameraRig 只支持 PerspectiveCamera'` for another camera type;
+    - throws after `dispose`.
+  - The fake root's `createCameraRig()` returns `{ focus: vi.fn(async () => true), dispose: vi.fn(), parallax: true, disposed: false }`, pushed to a new `rigs: FakeRig[]` on `FakeRoot`.
+
+Rules (spatial spec §2.2):
+
+**Focus pose (`focusPose`)**
+- It uses the target's `restPose` composed under `target.parent.matrixWorld` (identity without a parent). That world rest matrix gives a centre (the content-plane centre, `(0, 0, contentPlaneZ)` in it), a world quaternion `Q` and a world size (`width / ptPerUnit × scale.x`, `height / ptPerUnit × scale.y`).
+- The camera quaternion is `Q`. The camera position is the centre plus `normal × d`, where `normal` is `(0, 0, 1)` rotated by `Q`.
+- `d = fitDistance(w, h, camera.fov, aspect, margin) = max(h(1 + 2m) / 2 / tan(fov/2), w(1 + 2m) / 2 / (tan(fov/2) · aspect))`.
+
+**`update(dt)`**, each tick while there is a target:
+1. Recompute the goal from the current aspect and `restPose`.
+2. Rotate the goal about the target centre by the smoothed parallax angles: yaw = `px × parallax` about the target's up axis; pitch = `−py × parallax` about its right axis. `px` and `py` are the pointer's position in [−1, 1], with y up.
+3. Move the camera there:
+   - position: three critically damped springs (`springFromResponse(response, 1)`);
+   - orientation: a progress spring that slerps from the quaternion at the last `focus` to the goal's.
+4. Call `camera.updateMatrixWorld()`.
+
+**Pointer and parallax**
+- The rig listens for `pointermove` and `pointerleave` on the canvas.
+- Only `pointerType` `mouse` or `pen` sets the pointer target. `pointerleave` and any touch move set it to (0, 0).
+- The smoothed pointer follows its target with critically damped springs of `parallaxResponse`.
+- `parallax === false` or `reducedMotion()` keep the target at (0, 0) and jump the smoothed value to 0.
+
+**Immediate and settling**
+- `immediate` or `reducedMotion()` puts the camera on the goal at the next `update`, and the promise resolves `true` then.
+- Otherwise the promise resolves `true` when the position and orientation springs settle.
+- A new `focus` resolves the previous promise `false`. The position springs keep their velocity; the slerp restarts from the current quaternion.
+
+**Losing the target**
+- A target that is disposed or failed resolves `false`. The rig drops it and stops writing the camera.
+
+**Root**
+- In `tick`, after `stepMotion` and before `screen.update`: `if (rig && !rig.disposed) rig.update(dt)`.
+- `aspect` is `size.x / size.y` from `renderer.getSize`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`packages/render/test/rig.test.ts` builds `ctx` as `surface.test.ts` does (its `beforeAll`), and a fake canvas that keeps its listeners:
+
+```ts
+const listeners = new Map<string, (e: unknown) => void>()
+const canvas = {
+  getBoundingClientRect: () => ({ left: 0, top: 0, width: 800, height: 600 }),
+  addEventListener: (t: string, fn: (e: unknown) => void) => { listeners.set(t, fn) },
+  removeEventListener: vi.fn((t: string) => { listeners.delete(t) }),
+}
+let aspect = 4 / 3, reduced = false
+const camera = new PerspectiveCamera(50, aspect, 0.1, 100)
+const rig = () => new CameraRig({ camera, canvas, aspect: () => aspect, reducedMotion: () => reduced })
+const surface = (pos = [0, 0, 0], rotY = 0) => { const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, placement: 'world' }, ctx); s.position.set(pos[0]!, pos[1]!, pos[2]!); s.rotation.y = rotY; s.updateMatrixWorld(true); return s }
+const run = (r: CameraRig, s: number) => { for (let t = 0; t < s; t += 1 / 60) r.update(1 / 60) }
+const forward = () => new Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
+
+it('fitDistance fits the taller or the wider side with the margin', () => {
+  expect(fitDistance(2, 4, 90, 1, 0)).toBeCloseTo(2)
+  expect(fitDistance(8, 2, 90, 2, 0)).toBeCloseTo(2)
+  expect(fitDistance(2, 4, 90, 1, 0.25)).toBeCloseTo(3)
+})
+it('focusPose faces the Surface square-on along its normal', () => {
+  const out = { position: new Vector3(), quaternion: new Quaternion() }
+  focusPose(surface([1, 2, 0]), 50, 4 / 3, 0.08, out)
+  expect(out.position.x).toBeCloseTo(1); expect(out.position.y).toBeCloseTo(2)
+  expect(out.position.z).toBeCloseTo(fitDistance(4, 3, 50, 4 / 3, 0.08))   // no glass background: contentPlaneZ is 0
+  const s = surface([0, 0, 0], -0.6); focusPose(s, 50, 4 / 3, 0.08, out)
+  const n = new Vector3(Math.sin(-0.6), 0, Math.cos(-0.6))
+  expect(out.position.clone().normalize().dot(n)).toBeCloseTo(1)
+  expect(new Vector3(0, 0, -1).applyQuaternion(out.quaternion).dot(n)).toBeCloseTo(-1)
+})
+it('aims at the rest pose of a Surface still flying in', () => {
+  const s = surface(); void s.animateTo({ position: [3, 0, 0] })
+  const out = { position: new Vector3(), quaternion: new Quaternion() }
+  focusPose(s, 50, 4 / 3, 0.08, out); expect(out.position.x).toBeCloseTo(3)
+})
+it('springs to the focus pose without overshoot and resolves true', async () => {
+  camera.position.set(-5, 0, 5); camera.quaternion.identity()
+  const r = rig(), s = surface(), done = r.focus(s)
+  const goal = { position: new Vector3(), quaternion: new Quaternion() }; focusPose(s, 50, aspect, 0.08, goal)
+  let last = Infinity
+  for (let i = 0; i < 240; i++) { r.update(1 / 60); const d = camera.position.distanceTo(goal.position); expect(d).toBeLessThanOrEqual(last + 1e-9); last = d }
+  expect(last).toBeLessThan(1e-3); await expect(done).resolves.toBe(true)
+})
+it('a second focus resolves the first false and does not jump', async () => {
+  camera.position.set(0, 0, 8); const r = rig(), a = surface([0, 0, 0]), b = surface([4, 0, 0])
+  const first = r.focus(a); run(r, 0.1)
+  const p0 = camera.position.clone(); const second = r.focus(b); r.update(1 / 60)
+  expect(camera.position.distanceTo(p0)).toBeLessThan(0.5)                  // one frame's travel, not a cut to b
+  await expect(first).resolves.toBe(false); run(r, 4); await expect(second).resolves.toBe(true)
+})
+it('immediate and reduced motion jump to the pose', async () => {
+  const r = rig(), s = surface([2, 0, 0]), goal = { position: new Vector3(), quaternion: new Quaternion() }
+  focusPose(s, 50, aspect, 0.08, goal)
+  const p = r.focus(s, { immediate: true }); r.update(1 / 60)
+  expect(camera.position.distanceTo(goal.position)).toBeLessThan(1e-9); await expect(p).resolves.toBe(true)
+  reduced = true
+  try { const s2 = surface([-2, 0, 0]); void r.focus(s2); r.update(1 / 60); focusPose(s2, 50, aspect, 0.08, goal); expect(camera.position.distanceTo(goal.position)).toBeLessThan(1e-9) }
+  finally { reduced = false }
+})
+it('refits when the aspect changes', () => {
+  const r = rig(), s = surface(); void r.focus(s, { immediate: true }); r.update(1 / 60)
+  aspect = 0.5; run(r, 4)
+  expect(camera.position.z).toBeCloseTo(fitDistance(4, 3, 50, 0.5, 0.08), 3); aspect = 4 / 3
+})
+it('parallax orbits the centre with a mouse, not with touch, and returns on leave', () => {
+  const r = rig(), s = surface(); void r.focus(s, { immediate: true }); r.update(1 / 60)
+  listeners.get('pointermove')!({ clientX: 800, clientY: 300, pointerType: 'mouse' }); run(r, 3)
+  expect(camera.position.x).toBeGreaterThan(0.05)
+  expect(forward().dot(new Vector3().sub(camera.position).normalize())).toBeCloseTo(1, 5)   // still looking at the centre
+  listeners.get('pointerleave')!({}); run(r, 3); expect(Math.abs(camera.position.x)).toBeLessThan(1e-3)
+  listeners.get('pointermove')!({ clientX: 800, clientY: 300, pointerType: 'touch' }); run(r, 3); expect(Math.abs(camera.position.x)).toBeLessThan(1e-3)
+  r.parallax = false; listeners.get('pointermove')!({ clientX: 800, clientY: 300, pointerType: 'mouse' }); run(r, 3); expect(Math.abs(camera.position.x)).toBeLessThan(1e-3)
+})
+it('a target that goes away resolves false and the camera stays', async () => {
+  const r = rig(), s = surface([3, 0, 0]), done = r.focus(s); run(r, 0.1)
+  s.dispose(); r.update(1 / 60); const p = camera.position.clone(); run(r, 1)
+  await expect(done).resolves.toBe(false); expect(camera.position.equals(p)).toBe(true)
+})
+it('dispose stops writing the camera and removes its listeners', () => {
+  const r = rig(), s = surface(); void r.focus(s); r.dispose()
+  const p = camera.position.clone(); r.update(1 / 60)
+  expect(camera.position.equals(p)).toBe(true); expect(r.disposed).toBe(true); expect(listeners.size).toBe(0)
+})
+```
+
+`root.test.ts` (in `describe('the root API for the Vue layer')`):
+
+```ts
+it('createCameraRig: one live rig per root, perspective only, driven by tick', async () => {
+  const { root, camera } = await createRoot()
+  const rig = root.createCameraRig()
+  expect(() => root.createCameraRig()).toThrow(/\[UIRoot\.createCameraRig\].*已经有/)
+  const s = root.createSurface({ layer: 'world', width: 244, height: 244 }); s.position.set(2, 0, 0)
+  void rig.focus(s, { immediate: true }); root.tick(1 / 60)
+  expect(camera.position.x).toBeCloseTo(2)
+  rig.dispose(); expect(() => root.createCameraRig()).not.toThrow()
+  const o = base(); const ortho = await createUIRoot({ ...o, camera: new OrthographicCamera() })
+  expect(() => ortho.createCameraRig()).toThrow(/PerspectiveCamera/)
+})
+```
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/render/test/rig.test.ts packages/render/test/root.test.ts` (FAIL). Implement `rig.ts` and the root wiring as specified. Run again (PASS).
+
+- [ ] **Step 3: Typecheck, commit**
+
+Run: `pnpm vitest run packages/render packages/vue && pnpm typecheck`
+Expected: PASS / exit 0.
+
+```bash
+git add packages/render packages/vue/src/root.ts packages/vue/test/fixtures/fake-root.ts
+git commit -m "feat(render): CameraRig — spring the camera square-on to a Surface's rest pose, fit with margin, pointer parallax, reduced motion"
+```
+
+---
+
+### Task 9C: 3D viewport — `Surface.attach3D`, hits on 3D objects
+
+Spatial spec §2.3.
+
+**Files:**
+- Create: `packages/render/src/viewport.ts`
+- Modify: `packages/render/src/surface/surface.ts` (`attach3D`, `viewports`, placement in `tick`, fade, `glassBounds`, `dispose`, `SURFACE_ORDER.viewport = 3.25`)
+- Modify: `packages/render/src/pointer.ts` (`hitSurfaces` tests attachments; `SurfaceHit.target`; the bridge hands the target to the tracker)
+- Modify: `packages/core/src/events/dispatch.ts` (`UIEvent.object`; `PointerTarget`; the tracker's target override), `packages/core/src/events/hit.ts` (`pointerReachable`), `packages/core/src/index.ts`
+- Test: `packages/render/test/viewport.test.ts` (new), `packages/render/test/pointer.test.ts`, `packages/render/test/surface.test.ts` (the `SURFACE_ORDER` `toEqual` gains `viewport: 3.25`), `packages/core/test/events.test.ts`
+
+**Interfaces:**
+- Consumes: core `absoluteRect`, `effectiveStyle`, `hitTest`; Task 9A's `Surface.opacity`.
+- Produces:
+  - core:
+    ```ts
+    interface UIEvent { …; object?: unknown }   // the hit 3D object; absent unless the pointer is on one
+    export interface PointerTarget { node: Node; object: unknown }
+    // PointerTracker: move/down/up(x, y, pointerType?, target?: PointerTarget)
+    export function pointerReachable(n: Node, root: Node): boolean
+    ```
+    - `pointerReachable` is false when `n` is not under `root`, or when `n` or an ancestor has an effective `pointerEvents: 'none'` or `display: 'none'` (`'box-none'` does not block).
+    - The tracker's `locate` uses `target.node` when `target` is given and reachable, and puts `object` on `this.last` (so every event it dispatches carries it). Otherwise it uses `hitTest` as today and drops `object`.
+    - `EventDispatcher.dispatch` copies `init.object` when it is defined.
+  - render:
+    ```ts
+    export interface Viewport3DContext { width: number; height: number; reducedMotion: boolean; theme: Theme; scheme: ColorScheme }
+    export interface Attach3DOptions { depth?: number; update?: (dt: number, ctx: Viewport3DContext) => boolean }
+    export class Viewport3DAttachment { readonly node: Node; readonly object: Object3D; readonly anchor: Group; readonly depth: number; … }
+    Surface.attach3D(node: Node, object: Object3D, opts?: Attach3DOptions): () => void
+    Surface.viewports: ReadonlyMap<Node, Viewport3DAttachment>
+    interface SurfaceHit { surface: Surface; x: number; y: number; distance: number; target?: PointerTarget }
+    ```
+
+Rules (spatial spec §2.3):
+
+**Errors** — each throws `GlassUIError('Surface.attach3D', …)`:
+- a screen Surface: `'只能挂在世界层 Surface 上'`;
+- a node not under `this.root`: `'节点不在这个 Surface 里'`;
+- a node attached twice: `'这个节点已经挂了一个 3D 物体：先卸下'`;
+- an `object` without `isObject3D`: `'object 必须是 three.js 的 Object3D'`.
+
+**Anchor**
+- The anchor is a `Group` child of `this.plane`, holding `object`. It has a non-enumerable `userData.viewport` pointing back to the attachment.
+- Each `tick`, after the render list:
+  - `rect = absoluteRect(node)`;
+  - anchor position = `((rect.x + rect.width/2 − W/2) / ppu, (H/2 − rect.y − rect.height/2) / ppu, zTop / ppu)`, where `zTop` is `elevation + params.thickness` of the nearest glass ancestor in `list.glass` (excluding the node itself), or 0 without one;
+  - anchor scale is `1 / ppu`.
+- A node no longer under `this.root`, or with an effective `display: 'none'`, hides the anchor.
+
+**Adopting the object** (every tick, so meshes added later are adopted too)
+- Each mesh's material gets `transparent = true`, keeping `depthWrite`/`depthTest`. Its original `opacity` and `transparent` are recorded once per material.
+- Each mesh gets `renderOrder = SURFACE_ORDER.viewport` and `castShadow = true`. The originals are recorded once per mesh.
+- `material.opacity` is set to original × `surface.opacity` whenever either changes.
+- The detach function, and `Surface.dispose`, restore every recorded value and remove the anchor from the plane. The object leaves the anchor; the user's geometry and materials are never disposed.
+
+**`update`**
+- Called once per tick with `{ width: rect.width, height: rect.height, reducedMotion: ctx.anim.reducedMotion, theme: ctx.theme, scheme: ctx.scheme }`.
+- `true` sets `needsFrame`.
+- A throw fails the Surface (`markFailed`), like any frame error (core spec §9).
+
+**`glassBounds`**
+- The top also covers each shown attachment: `contentPlaneZ + (zTop + depth) / ppu`. `depth` defaults to the node's width.
+
+**Hits (`hitSurfaces`)**
+- Besides the content quads, it intersects the shown anchors of every eligible Surface (`interactive`, no `error`, shown), recursively.
+- The nearest 3D hit wins over the first accepted quad hit when it is nearer. It returns:
+  - `{ surface, x, y, distance, target: { node, object: hit.object } }`;
+  - `(x, y)` is the hit point taken into `contentMesh` local space, then `pointFromUV(lx + 0.5, ly + 0.5)`.
+- The bridge passes `hit.target` to `move`/`down`/`up` when the Surface it calls is `hit.surface`.
+
+- [ ] **Step 1: Write the failing tests**
+
+`packages/render/test/viewport.test.ts` builds `ctx` as `surface.test.ts` does:
+
+```ts
+const make = () => {
+  const s = new Surface({ id: 'v', width: 400, height: 300, ptPerUnit: 100, placement: 'world' }, ctx)
+  const card = new Node('box'); card.setStyle({ position: 'absolute', left: 40, top: 40, width: 200, height: 150, bg: 'glass', glass: { thickness: 12 } })
+  const vp = new Node('box'); vp.setStyle({ position: 'absolute', left: 20, top: 20, width: 100, height: 80 })
+  card.appendChild(vp); s.root.appendChild(card)
+  const mat = new MeshStandardMaterial({ opacity: 0.8 })
+  const mesh = new Mesh(new BoxGeometry(100, 80, 50), mat)
+  return { s, card, vp, mesh, mat }
+}
+it('anchors the object at the node centre on top of its glass, 1 unit = 1 pt', () => {
+  const { s, vp, mesh } = make(); s.attach3D(vp, mesh); s.tick(1 / 60)
+  const a = s.viewports.get(vp)!
+  expect(a.anchor.parent).toBe(s.plane); expect(mesh.parent).toBe(a.anchor)
+  expect(a.anchor.position.toArray().map(v => +v.toFixed(6))).toEqual([-0.9, 0.5, 0.12])   // centre (110, 100) pt; card glass 12 pt thick
+  expect(a.anchor.scale.x).toBeCloseTo(0.01)
+})
+it('adopts the materials into the transparent queue and fades them with the Surface; detach restores', () => {
+  const { s, vp, mesh, mat } = make(); const detach = s.attach3D(vp, mesh); s.tick(1 / 60)
+  expect(mat.transparent).toBe(true); expect(mesh.renderOrder).toBe(SURFACE_ORDER.viewport); expect(mesh.castShadow).toBe(true)
+  s.opacity = 0.5; s.tick(1 / 60); expect(mat.opacity).toBeCloseTo(0.4)
+  detach()
+  expect(mat.transparent).toBe(false); expect(mat.opacity).toBe(0.8); expect(mesh.renderOrder).toBe(0); expect(mesh.castShadow).toBe(false)
+  expect(s.viewports.size).toBe(0); expect(mesh.parent).toBe(null)
+})
+it('calls update with the box size; true asks for a frame; a throw fails the Surface', () => {
+  const { s, vp, mesh } = make(), update = vi.fn(() => true)
+  s.attach3D(vp, mesh, { update }); s.tick(1 / 60)
+  expect(update).toHaveBeenCalledWith(1 / 60, expect.objectContaining({ width: 100, height: 80, reducedMotion: false, scheme: 'light' }))
+  expect(s.needsFrame).toBe(true)
+  update.mockImplementation(() => { throw new Error('boom') }); s.tick(1 / 60); expect(s.error?.message).toBe('boom')
+})
+it('hides the anchor while the node is out of the tree; glassBounds covers depth', () => {
+  const { s, card, vp, mesh } = make(); s.attach3D(vp, mesh, { depth: 50 }); s.tick(1 / 60)
+  expect(s.glassBounds.max.z).toBeGreaterThanOrEqual(s.contentPlaneZ + 0.62 - 1e-6)
+  card.removeChild(vp); s.tick(1 / 60); expect(s.viewports.get(vp)!.anchor.visible).toBe(false)
+  card.appendChild(vp); s.tick(1 / 60); expect(s.viewports.get(vp)!.anchor.visible).toBe(true)
+})
+it('refuses what it cannot place', () => {
+  const { s, vp, mesh } = make()
+  const screen = new Surface({ width: 10, height: 10, ptPerUnit: 1, placement: 'screen' }, ctx)
+  const n = new Node('box'); screen.root.appendChild(n)
+  expect(() => screen.attach3D(n, mesh)).toThrow(/\[Surface\.attach3D\].*世界层/)
+  expect(() => s.attach3D(new Node('box'), mesh)).toThrow(/不在这个 Surface/)
+  s.attach3D(vp, mesh); expect(() => s.attach3D(vp, new Mesh())).toThrow(/已经挂了/)
+  const other = new Node('box'); s.root.appendChild(other)
+  expect(() => s.attach3D(other, {} as never)).toThrow(/Object3D/)
+})
+it('dispose restores the materials', () => {
+  const { s, vp, mesh, mat } = make(); s.attach3D(vp, mesh); s.tick(1 / 60); s.dispose()
+  expect(mat.transparent).toBe(false); expect(mesh.parent).toBe(null)
+})
+```
+
+`packages/render/test/pointer.test.ts`:
+
+```ts
+describe('3D viewport hits', () => {
+  const world = () => {
+    const camera = new PerspectiveCamera(50, 800 / 600, 0.1, 100); camera.position.set(0, 0, 5); camera.updateMatrixWorld(true)
+    const s = new Surface({ id: 'w', width: 400, height: 300, ptPerUnit: 100, placement: 'world' }, ctx); s.updateMatrixWorld(true)
+    const vp = new Node('box'); vp.setStyle({ position: 'absolute', left: 150, top: 110, width: 100, height: 80 })
+    const host = new Node('box'); host.setStyle({ width: 400, height: 300, bg: 'fill' }); host.appendChild(vp); s.root.appendChild(host)
+    const mesh = new Mesh(new BoxGeometry(40, 40, 60), new MeshBasicMaterial()); mesh.position.z = 30   // stands 60 pt proud
+    s.attach3D(vp, mesh); s.tick(0); s.updateMatrixWorld(true)
+    const bridge = new PointerBridge({ canvas: fakeCanvas(), camera, surfaces: () => [s] })
+    return { camera, s, vp, host, mesh, bridge }
+  }
+  it('a 3D object nearer than the quad wins and names its node and object', () => {
+    const { camera, s, vp, mesh } = world()
+    const h = hitSurfaces(rayAt(camera, 400, 300), [s])!
+    expect(h.target).toEqual({ node: vp, object: mesh }); expect(h.x).toBeCloseTo(200, 0); expect(h.y).toBeCloseTo(150, 0)
+    const blank = hitSurfaces(rayAt(camera, 400 - 60, 300), [s])!      // on the box, beside the mesh
+    expect(blank.target).toBeUndefined()
+  })
+  it('the node hovers over its object and its box alike; moves carry the object only over the object', () => {
+    const { vp, mesh, bridge } = world(), seen: unknown[] = []
+    vp.setHandler('pointermove', e => seen.push(e.object))
+    bridge.handle('pointermove', { clientX: 400, clientY: 300, pointerType: 'mouse' })
+    expect(vp.state.hover).toBe(true); expect(seen.at(-1)).toBe(mesh)
+    bridge.handle('pointermove', { clientX: 340, clientY: 300, pointerType: 'mouse' })
+    expect(vp.state.hover).toBe(true); expect(seen.at(-1)).toBeUndefined()
+    bridge.handle('pointermove', { clientX: 20, clientY: 20, pointerType: 'mouse' })
+    expect(vp.state.hover).toBe(false)
+  })
+  it('a node that cannot take the pointer is skipped: the press goes where hitTest says', () => {
+    const { host, vp, bridge } = world(); host.setStyle({ pointerEvents: 'none' })
+    const down = vi.fn(); vp.setHandler('pointerdown', down)
+    const rootDown = vi.fn(); host.parent!.setHandler('pointerdown', rootDown)
+    bridge.handle('pointerdown', { clientX: 400, clientY: 300, pointerType: 'mouse', pointerId: 1, button: 0 })
+    expect(down).not.toHaveBeenCalled(); expect(rootDown).toHaveBeenCalledWith(expect.not.objectContaining({ object: expect.anything() }))
+  })
+})
+```
+
+`packages/core/test/events.test.ts`:
+
+```ts
+it('pointerReachable: none or display none on the path blocks; box-none does not; outside the root is unreachable', () => {
+  const root = new Node('box'), a = new Node('box'), b = new Node('box'); root.appendChild(a); a.appendChild(b)
+  expect(pointerReachable(b, root)).toBe(true)
+  a.setStyle({ pointerEvents: 'box-none' }); expect(pointerReachable(b, root)).toBe(true)
+  a.setStyle({ pointerEvents: 'none' }); expect(pointerReachable(b, root)).toBe(false)
+  a.setStyle({ pointerEvents: 'auto', display: 'none' }); expect(pointerReachable(b, root)).toBe(false)
+  expect(pointerReachable(new Node('box'), root)).toBe(false)
+})
+it('the tracker honours a reachable target and carries its object on every event', () => {
+  const { root, tracker, d } = scene(), target = root.children[0]!, obj = { isObject3D: true }, got: unknown[] = []
+  d.on(target, 'pointerenter', e => got.push(['enter', e.object])); d.on(target, 'pointermove', e => got.push(['move', e.object]))
+  tracker.move(-1000, -1000, 'mouse', { node: target, object: obj })     // far outside its rect: the target wins
+  expect(tracker.hovered).toBe(target); expect(got).toEqual([['enter', obj], ['move', obj]])
+})
+```
+
+(`scene()` is the file's existing helper. If it does not return `d`, keep the dispatcher it creates in a variable and return it too.)
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/core/test/events.test.ts packages/render/test/viewport.test.ts packages/render/test/pointer.test.ts packages/render/test/surface.test.ts` (FAIL). Implement as specified. Run again (PASS).
+
+- [ ] **Step 3: Typecheck, commit**
+
+Run: `pnpm vitest run packages/core packages/render && pnpm typecheck`
+Expected: PASS / exit 0.
+
+```bash
+git add packages/core packages/render
+git commit -m "feat(render,core): Surface.attach3D — 3D objects anchored to a node, faded with the Surface, hit-tested with the UI"
+```
+
+---
+
+### Task 9D: Nested glass — inner glass sees outer glass through a stacked RT
+
+Spatial spec §2.4.
+
+**Files:**
+- Create: `packages/render/src/surface/stack.ts`
+- Modify: `packages/render/src/surface/partition.ts` (`splitNested`), `packages/render/src/surface/surface.ts` (two element-glass batches, the stack pass, `SURFACE_ORDER.innerGlassBack = 2.25` and `innerGlassFront = 2.5`), `packages/render/src/glass/batch.ts` (`update(…, { luma?: boolean })`)
+- Test: `packages/render/test/partition.test.ts`, `packages/render/test/stack.test.ts` (new), `packages/render/test/surface.test.ts`
+
+**Interfaces:**
+- Consumes: `ContentPass`, `PanelBatch` + `createPanelMaterial`, `GlyphBatch`, `ImageSet`, `createGlassMaterial`, `fillColors`, core `resolveColor`.
+- Produces:
+  - `splitNested(glass: readonly GlassInstance[]): { outer: GlassInstance[]; inner: GlassInstance[] }`: an instance is inner when one of its node's ancestors is another instance's node.
+  - `STACK_FILL_ALPHA = 0.35`.
+  - `class StackPass`:
+    ```ts
+    constructor(content: Texture, su: SurfaceUniforms, opts: { type?: 'byte' | 'half' })
+    readonly pass: ContentPass                // its RT has mips (ContentPass's): the inner glass samples them
+    readonly panels: PanelBatch; readonly text: GlyphBatch; readonly images: ImageSet
+    get texture(): Texture
+    update(outer: readonly GlassInstance[], text: readonly TextInstance[], images: readonly ImageInstance[], s: SurfaceDims, theme: Theme, scheme: ColorScheme): void
+    resize(width: number, height: number): boolean
+    setType(type: 'byte' | 'half'): void
+    render(renderer: RendererLike): void
+    dispose(): void
+    ```
+  - `Surface.innerGlass: GlassBatch` and `Surface.stack: StackPass | null` (read-only getter).
+  - `GlassBatch.update(instances, s, touch?, opts?: { luma?: boolean })`: with `luma: false` every instance's luma index is −1, so it never darkens.
+
+Rules (spatial spec §2.4):
+
+**Batches**
+- `fill` splits `list.glass` with `splitNested`:
+  - `this.glass` holds the outer instances;
+  - `this.innerGlass` holds the inner ones, with `{ luma: false }`.
+- Adaptive darkening on inner glass is deferred. Its luma index would collide with the outer batch's.
+- The press glow (`updateTouch`) updates whichever batch holds the pressed glass.
+
+**When the stack pass exists**
+- A `StackPass` exists while `innerGlass` has instances and `quality.glassMode !== 'fill'`. It is made or dropped as `syncBehind` does.
+- On appearing or going away, the glass is rebuilt (`buildGlass`).
+
+**Glass materials**
+- `buildGlass` makes the inner glass materials like the element glass:
+  - `geometry: this.innerGlass.geometry`;
+  - `content: stack.texture`, with no `pyramid` (the mip path);
+  - the same `behind`, optics and fills;
+  - `renderOrder` `innerGlassBack` / `innerGlassFront`.
+- Without a stack pass (minimal), the inner glass samples the content RT, as today.
+
+**What the stack pass draws** (in the content pass's own space; `setView` as the content pass)
+1. A full-Surface quad sampling the content RT. It is premultiplied: `MeshBasicNodeMaterial`, `colorNode = sample.rgb`, `opacityNode = sample.a`, blending One / OneMinusSrcAlpha.
+2. Each outer glass as a panel:
+   - its `rect`, `radius`, transform, opacity and clip;
+   - colour: the colour the `'fill'` glass mode gives it — `glow.color`, else `tint`, else the theme `fill` mixed 4 % toward `label` in sRGB, as `fillColors` documents — with alpha × `STACK_FILL_ALPHA`;
+   - border: 1 pt of `tertiaryLabel` with alpha × `STACK_FILL_ALPHA`.
+3. The foreground text and images that ride on an outer glass (`partition.glassOf` maps them to an instance in `outer`), lifted by nothing (flat).
+
+**Prepare**
+- The stack pass resizes with the content RT.
+- It renders right after the content pass whenever the content was redrawn.
+- `setQuality` passes the texel type on.
+
+**Order and dispose**
+- `SURFACE_ORDER` gains `innerGlassBack: 2.25, innerGlassFront: 2.5`; update the `toEqual` in `surface.test.ts` along with Task 9C's `viewport: 3.25`.
+- `dispose` frees the stack pass.
+
+- [ ] **Step 1: Write the failing tests**
+
+`packages/render/test/partition.test.ts`:
+
+```ts
+it('splitNested: glass under glass is inner, at any depth', () => {
+  const a = new Node('box'), b = new Node('box'), c = new Node('box'), d = new Node('box')
+  a.appendChild(b); b.appendChild(c)
+  const g = (node: Node) => ({ node } as GlassInstance)
+  const { outer, inner } = splitNested([g(a), g(b), g(c), g(d)])
+  expect(outer.map(i => i.node)).toEqual([a, d]); expect(inner.map(i => i.node)).toEqual([b, c])
+})
+```
+
+`packages/render/test/surface.test.ts` (the file's `ctx`, `stubRenderer`, `materialGraph`):
+
+```ts
+describe('nested glass', () => {
+  const nested = (c: SurfaceContext = ctx) => {
+    const s = new Surface({ id: 'n', width: 400, height: 300, ptPerUnit: 100 }, c)
+    const card = new Node('box'); card.setStyle({ width: 300, height: 200, padding: 20, gap: 10, bg: 'glass' })
+    const title = new Node('text'); title.setProp('value', 'Hi')
+    const btn = new Node('box'); btn.setStyle({ width: 120, height: 44, bg: 'glass' })
+    const label = new Node('text'); label.setProp('value', 'Go')
+    btn.appendChild(label); card.appendChild(title); card.appendChild(btn); s.root.appendChild(card)
+    s.tick(1 / 60)
+    return { s, card, btn }
+  }
+  it('splits the glass into outer and inner batches and samples a stacked RT for the inner', () => {
+    const { s } = nested()
+    expect(s.glass.buffer.count).toBe(1); expect(s.innerGlass.buffer.count).toBe(1)
+    expect(s.stack).not.toBeNull()
+    const inner = meshes(s.plane).filter(m => m.renderOrder === SURFACE_ORDER.innerGlassBack || m.renderOrder === SURFACE_ORDER.innerGlassFront)
+    expect(inner.length).toBe(2)
+    for (const m of inner) { expect(materialGraph(m.material)).toContain(s.stack!.texture); expect(materialGraph(m.material)).not.toContain(s.contentPass.texture) }
+    expect(s.innerGlass.buffer.get(0, 'iMisc')[1]).toBe(-1)
+  })
+  it('the stack holds the outer glass as a translucent panel and only the text riding on it', () => {
+    const { s } = nested()
+    expect(s.stack!.panels.buffer.count).toBe(1)
+    let glyphs = 0; for (const pb of s.stack!.text.perPage.values()) glyphs += pb.count
+    expect(glyphs).toBe(2)                                          // "Hi", not "Go"
+  })
+  it('renders the stack right after the content pass', () => {
+    const { s } = nested(), r = stubRenderer()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    const scenes = r.render.mock.calls.map(c => c[0])
+    expect(scenes.indexOf(s.stack!.pass.scene)).toBe(scenes.indexOf(s.contentPass.scene) + 1)
+  })
+  it('drops the stack when the nesting goes away, and never makes one on the fill tier', () => {
+    const { s, card, btn } = nested(); card.removeChild(btn); s.root.appendChild(btn); s.tick(1 / 60)
+    expect(s.stack).toBeNull(); expect(s.innerGlass.buffer.count).toBe(0)
+    const fill = nested({ ...ctx, quality: { ...ctx.quality, glassMode: 'fill' } }).s
+    expect(fill.stack).toBeNull()
+  })
+})
+```
+
+(`materialGraph(m)` is the file's helper. If it returns nodes rather than textures, compare against the texture nodes it collects. `PanelBatch.buffer.count`, `GlyphBatch.perPage` and its per-page `count` are the names those classes use today; adapt only the accessor names if they differ.)
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/render/test/partition.test.ts packages/render/test/surface.test.ts` (FAIL). Implement as specified. Run again (PASS).
+
+- [ ] **Step 3: Visual check (controller)**
+
+Add a temporary nested case to the gallery: a glass Box containing a glass Box. Look at it in Chrome on WebGPU and WebGL2, at high and minimal:
+- The inner glass must show the outer glass's tint under it, not a clear hole.
+- Its edges must read as glass.
+
+Remove the temporary case once the check is done; Task 9F's Card exercises nesting from then on.
+
+- [ ] **Step 4: Typecheck, commit**
+
+Run: `pnpm vitest run packages/render && pnpm typecheck && pnpm playground:build`
+Expected: PASS / exit 0. `pnpm test:visual` unchanged (no scene nests glass yet).
+
+```bash
+git add packages/render
+git commit -m "feat(render): nested glass — inner glass samples a stacked RT holding the outer glass as a translucent fill"
+```
+
+---
+
+### Task 9E: The bar chart object
+
+Spatial spec §2.5.
+
+**Files:**
+- Create: `packages/render/src/chart/bar.ts`
+- Modify: `packages/render/src/root.ts` (`createBarChart()`), `packages/render/src/index.ts` (type-only `BarChart`, `BarChartData`), `packages/vue/src/root.ts` (`GlassRoot` adds `'createBarChart'`), `packages/vue/test/fixtures/fake-root.ts` (a fake chart)
+- Test: `packages/render/test/chart.test.ts` (new), `packages/render/test/root.test.ts`
+
+**Interfaces:**
+- Consumes: `Viewport3DContext` (9C); `Spring`; core `RGBA`, `GlassUIError`; three `RoundedBoxGeometry` (`three/addons/geometries/RoundedBoxGeometry.js`), `MeshStandardNodeMaterial`.
+- Produces:
+  ```ts
+  export interface BarChartData { values: readonly number[]; colors: readonly RGBA[]; max: number }
+  export const BAR = { widthRatio: 0.6, depthRatio: 0.6, radiusRatio: 0.12, stagger: 0.04, hoverBrightness: 1.2, hoverDepth: 1.15 } as const
+  export function barLayout(n: number, width: number, height: number, values: readonly number[], max: number): { x: number; width: number; height: number }[]
+  export class BarChart extends Group {
+    readonly bars: readonly Mesh[]            // bars[i].userData.index === i
+    set(data: BarChartData): void
+    hover(index: number | null): void
+    update(dt: number, ctx: Viewport3DContext): boolean
+    dispose(): void
+  }
+  UIRoot.createBarChart(): BarChart
+  ```
+  - The fake root's `createBarChart()` returns `{ set: vi.fn(), hover: vi.fn(), update: vi.fn(() => false), dispose: vi.fn(), bars: [] }`, pushed to `charts`.
+
+Rules (spatial spec §2.5):
+
+**Layout and geometry**
+- `barLayout` is the spec's: column i centred at `x = (i + 0.5)·W/n − W/2`, `width = 0.6·W/n`, `height = value/max·H`.
+- Each bar is its own `Mesh`: few bars, and in exchange exact corners and exact raycasts. Its material is a `MeshStandardNodeMaterial` (roughness 0.35, metalness 0) in its colour, read as sRGB with `Color.setRGB(r, g, b, SRGBColorSpace)`; alpha is ignored.
+- The geometry is a `RoundedBoxGeometry(width, h, depth, 3, radius)` with `depth = 0.6 × width` and `radius = min(0.12 × width, h/2, depth/2)`. It is translated so its base is at y = 0 and its back at z = 0, and built at the bar's **target** height.
+- The mesh sits at `(x, −H/2, 0)`.
+- `scale.y = currentHeight / targetHeight` and `scale.z = currentDepth / depth`, floored at 1e-4: a singular matrix breaks raycasts and normals. The corners are exact at rest and stretch only while a bar animates.
+- A new target height rebuilds the geometry at that height and rescales `scale.y` so the bar's on-screen height does not jump. A change of `ctx.width`/`ctx.height` re-lays out every bar at once, with no animation.
+
+**Motion**
+- Heights and depths are springs (`theme.springs.smooth`).
+- On the first `set`, bar i waits `i × 0.04` s, then grows height and depth from 0.
+- A later `set` animates from the current heights; added bars grow from 0.
+- `reducedMotion` (from the `update` ctx) jumps.
+
+**Hover**
+- `hover(i)` springs bar i's brightness to 1.2 (`material.color = base × brightness`) and its depth to × 1.15. The others go back to 1.
+
+**Errors** — each throws `GlassUIError('BarChart.set', …)`:
+- `max` not finite or ≤ 0;
+- a value that is negative or not finite;
+- `colors.length !== values.length`.
+
+**Lifetime**
+- `update` returns true while anything moves.
+- `dispose` disposes every geometry and material and removes the bars.
+
+- [ ] **Step 1: Write the failing tests**
+
+`packages/render/test/chart.test.ts`:
+
+```ts
+const ctx3 = (o: Partial<Viewport3DContext> = {}): Viewport3DContext => ({ width: 400, height: 200, reducedMotion: false, theme: defaultTheme, scheme: 'light', ...o })
+const accent: RGBA = [0.42, 0.39, 0.96, 1]
+const run = (c: BarChart, s: number, o?: Partial<Viewport3DContext>) => { for (let t = 0; t < s; t += 1 / 60) c.update(1 / 60, ctx3(o)) }
+const shown = (m: Mesh) => { m.geometry.computeBoundingBox(); return (m.geometry.boundingBox!.max.y - m.geometry.boundingBox!.min.y) * m.scale.y }
+
+it('barLayout: equal columns, bars 0.6 of a column, heights to scale', () => {
+  expect(barLayout(4, 400, 200, [10, 20, 0, 40], 40)).toEqual([
+    { x: -150, width: 60, height: 50 }, { x: -50, width: 60, height: 100 }, { x: 50, width: 60, height: 0 }, { x: 150, width: 60, height: 200 },
+  ])
+})
+it('bars grow from the plate, staggered, and stand at their heights', () => {
+  const c = new BarChart(); c.set({ values: [10, 20, 40], colors: [accent, accent, accent], max: 40 })
+  c.update(0, ctx3()); expect(c.bars.length).toBe(3); expect(c.bars.map(b => b.userData.index)).toEqual([0, 1, 2])
+  expect(shown(c.bars[0] as Mesh)).toBeLessThan(0.01)
+  run(c, 0.05); expect(shown(c.bars[0] as Mesh)).toBeGreaterThan(shown(c.bars[1] as Mesh))
+  run(c, 3)
+  expect(c.bars.map(b => +shown(b as Mesh).toFixed(3))).toEqual([50, 100, 200])
+  expect(c.bars.map(b => (b as Mesh).scale.y)).toEqual([1, 1, 1]); expect((c.bars[0] as Mesh).position.y).toBe(-100)
+  expect(c.update(1 / 60, ctx3())).toBe(false)
+})
+it('reduced motion stands the bars at once', () => {
+  const c = new BarChart(); c.set({ values: [10], colors: [accent], max: 10 }); c.update(1 / 60, ctx3({ reducedMotion: true }))
+  expect(shown(c.bars[0] as Mesh)).toBeCloseTo(200)
+})
+it('a later set animates from the current heights; an added bar grows from 0', () => {
+  const c = new BarChart(); c.set({ values: [10], colors: [accent], max: 10 }); run(c, 3)
+  c.set({ values: [5, 10], colors: [accent, accent], max: 10 }); c.update(1 / 60, ctx3())
+  expect(shown(c.bars[0] as Mesh)).toBeGreaterThan(100); expect(shown(c.bars[0] as Mesh)).toBeLessThan(200)
+  expect(shown(c.bars[1] as Mesh)).toBeLessThan(20)
+})
+it('hover brightens and thickens one bar, and lets go', () => {
+  const c = new BarChart(); c.set({ values: [1, 1], colors: [accent, accent], max: 1 }); run(c, 3)
+  const base = ((c.bars[1] as Mesh).material as MeshStandardNodeMaterial).color.clone()
+  c.hover(1); run(c, 2)
+  expect(((c.bars[1] as Mesh).material as MeshStandardNodeMaterial).color.r).toBeCloseTo(base.r * 1.2); expect((c.bars[1] as Mesh).scale.z).toBeCloseTo(1.15)
+  c.hover(null); run(c, 2); expect((c.bars[1] as Mesh).scale.z).toBeCloseTo(1)
+})
+it('re-lays out on a new box size and rejects bad data', () => {
+  const c = new BarChart(); c.set({ values: [1, 1], colors: [accent, accent], max: 1 }); run(c, 3)
+  run(c, 1 / 60, { width: 600 }); expect((c.bars[1] as Mesh).position.x).toBeCloseTo(150)
+  expect(() => c.set({ values: [1], colors: [accent], max: 0 })).toThrow(/\[BarChart\.set\].*max/)
+  expect(() => c.set({ values: [-1], colors: [accent], max: 1 })).toThrow(/\[BarChart\.set\]/)
+  expect(() => c.set({ values: [1, 2], colors: [accent], max: 2 })).toThrow(/colors/)
+})
+it('dispose frees every bar', () => {
+  const c = new BarChart(); c.set({ values: [1], colors: [accent], max: 1 }); c.update(1 / 60, ctx3())
+  const g = vi.spyOn((c.bars[0] as Mesh).geometry, 'dispose'); c.dispose()
+  expect(g).toHaveBeenCalled(); expect(c.bars.length).toBe(0)
+})
+```
+
+`root.test.ts`: `expect((await createRoot()).root.createBarChart()).toBeInstanceOf(BarChart)`.
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/render/test/chart.test.ts packages/render/test/root.test.ts` (FAIL). Implement. Run again (PASS).
+
+- [ ] **Step 3: Typecheck, commit**
+
+Run: `pnpm vitest run packages/render packages/vue && pnpm typecheck`
+Expected: PASS / exit 0.
+
+```bash
+git add packages/render packages/vue/src/root.ts packages/vue/test/fixtures/fake-root.ts
+git commit -m "feat(render): BarChart — rounded bars that grow out of the plate, hover highlight, exact raycasts"
+```
+
+---
+
+### Task 9F: `<Space>`, `<Block>`, `<Card>`; a spatial scene sketch — visual checkpoint 2b
+
+Spatial spec §2.6, §3, §5. Core spec §8.3 as amended: containers are glass.
+
+**Files:**
+- Create: `packages/vue/src/spatial/arc.ts`, `packages/vue/src/spatial/context.ts`, `packages/vue/src/surface-host.ts`, `packages/vue/src/components/{Space.ts, Block.ts, Card.ts}`
+- Modify:
+  - `packages/vue/src/components/Surface.ts` (built on `useRenderSurface`, no behaviour change);
+  - `packages/vue/src/renderer.ts` (`holdContent`, `isHeld`; `remove` skips held content);
+  - `packages/vue/src/index.ts`;
+  - `packages/vue/test/fixtures/fake-root.ts` (`FakeSurface.animateTo`, `animations`, `opacity`, `restPose`).
+- Create: `examples/playground/src/scenes/Spatial.vue`. Modify: `examples/playground/src/main.ts` (`?scene=spatial`, `?focus=`), `examples/playground/src/wall.ts` (`createWall({ scale?, z? })`).
+- Test: `packages/vue/test/spatial.test.ts` (new)
+
+**Interfaces:**
+- Consumes: Task 9A (`animateTo`, `opacity`, `restPose`), Task 9B (`createCameraRig`), Task 9 (`<Surface>` internals, `useSurfaceRef`), `defineGlassComponent`, `fallthrough`, `useMotion`, `useRoot`.
+- Produces:
+  - `arc.ts`:
+    ```ts
+    export interface ArcSlot { position: [number, number, number]; rotation: [number, number, number] }
+    /** Spatial spec §3.1: slot i on the arc about C = (0, 0, radius); the first at the origin facing +z, then rightwards. */
+    export function arcSlots(widths: readonly number[], radius: number, gap: number): ArcSlot[] {
+      const out: ArcSlot[] = []; let theta = 0
+      widths.forEach((w, i) => {
+        if (i > 0) theta += (widths[i - 1]! / 2 + gap + w / 2) / radius
+        out.push({ position: [radius * Math.sin(theta), 0, radius - radius * Math.cos(theta)], rotation: [0, -theta, 0] })
+      })
+      return out
+    }
+    ```
+  - `context.ts`:
+    ```ts
+    export interface BlockHandle { surface: Readonly<Ref<Surface | null>>; width: Readonly<Ref<number>> /* world units */ }
+    export interface SpaceContext {
+      register(name: string, block: BlockHandle): () => void   // throws on a duplicate name; the slot stays reserved after unregistering
+      slot(name: string): ArcSlot | null                       // reactive
+      focused: Readonly<Ref<string | null>>
+      requestFocus(name: string): void
+    }
+    export const SPACE: InjectionKey<SpaceContext>
+    ```
+  - `surface-host.ts`, the create/recreate/drop/focus-handover/provide logic moved out of `Surface.ts`:
+    ```ts
+    export function useRenderSurface(spec: () => { key: string; options: CreateSurfaceOptions } | null, opts: {
+      onError: (e: Error) => void
+      onCreate?: (s: Surface) => void                 // before it is provided; Block places it at its enter pose here
+      onUnmount?: (s: Surface) => void                // instead of removing it (Block's leave)
+    }): { surface: Readonly<ShallowRef<Surface | null>>; release(): Surface | null }
+    ```
+    `release()` detaches the current Surface from the component without removing it: it cancels its press, blurs it, stops forwarding its errors and clears `surface`. Task 9's `Surface` tests pass unchanged.
+  - `renderer.ts`:
+    - `holdContent(n: Node): void` and `isHeld(n: Node): boolean` (an ancestor is held);
+    - `nodeOps.remove(c)` returns without removing when `isHeld(c)`. Vue then unmounts the components while their host nodes stay where they are, until the held Surface is disposed with them.
+  - Components (the props of spatial spec §2.6):
+    - `Space`: `focus?`, `radius` (7), `gap` (0.5), `camera` (true), `parallax` (true); event `update:focus`.
+    - `Block`: `name`, `width`, `height`, `position?`, `rotation?`, `scale?`, `radius` (48), `background` (`'glass'`), `ptPerUnit?`, `enterFrom?`, `leaveTo?`.
+    - `Card`: `title?`.
+  - `FakeSurface`:
+    - `animateTo(target, opts)` pushes `{ target, opts, from: { position, scale, opacity } }` onto `animations`, applies the target at once, and returns a promise that resolves at the next `root.tick()` (`true`, or `false` if the Surface was disposed by then);
+    - `opacity` (1);
+    - `restPose` (the current pose).
+
+Rules (spatial spec §2.6, §3, §5):
+
+**Block**
+- Outside a `Space` it throws `GlassUIError('Block', '必须放在 <Space> 里')` in setup.
+- It registers its `name`; a duplicate throws `GlassUIError('Block.name', '重名的 Block "<name>"：Space 里每个 Block 的 name 必须唯一')`.
+- Rest pose: `position`/`rotation` when given, else `space.slot(name)`. `scale` defaults to 1.
+- `onCreate`:
+  1. place the Surface at rest ⊕ `enterFrom`:
+     - position = rest + the rest rotation applied to `enterFrom.position`;
+     - rotation = rest + `enterFrom.rotation`;
+     - scale = rest × `enterFrom.scale`;
+     - opacity = `enterFrom.opacity`.
+  2. `animateTo({ ...rest, opacity: 1 }, { immediate: motion === 'frozen' })`.
+- The defaults are `enterFrom = { position: [0, 0, -1.2], scale: 0.92, opacity: 0 }` and `leaveTo = { position: [0, 0, -1.5], scale: 0.9, opacity: 0 }`.
+- A change of the rest pose animates to it.
+- Render: `h(Teleport, { to: s.root }, [outer])`.
+  - `outer` is `h('box', { style: { width: '100%', height: '100%' }, onPointerdown: () => { if (!focused) space.requestFocus(name) } }, [inner])`.
+  - `inner` is `fallthrough(h('box', { style: { flexGrow: 1, flexDirection: 'column', padding: 40, gap: 24, pointerEvents: focused ? 'auto' : 'none' } }, slots.default?.()), attrs)`. The Block's style, tw and class land on the inner box.
+- `onUnmount` (the leave):
+  1. `holdContent(s.root)`;
+  2. `s.interactive = false; s.pointer.cancel(); s.focus.focus(null)`;
+  3. `void s.animateTo(leavePose, { immediate: frozen }).then(() => root.removeSurface(s))`.
+  The leave pose is rest ⊕ `leaveTo`.
+- Overflow (dev):
+  - after each `root.afterTick()` following a layout change, measure the inner box's content extent: the max child `layout.y + layout.height`, plus the padding;
+  - when it exceeds `height` by more than 0.5 pt, `console.warn` once per Block: `[Block "<name>"] 内容高 <n>pt 超出 block 高 <height>pt：调大 height 或减少内容`.
+
+**Space**
+- `focused`:
+  - `props.focus`, else an internal ref, else the first registered name;
+  - `requestFocus(n)` sets the internal ref and emits `update:focus`.
+- Slots:
+  - `order` (names in first-registration order, never shrinking) and each name's last width give `arcSlots(widths, radius, gap)`;
+  - `slot(name)` is that name's entry.
+- Camera (`camera` true):
+  - on mount, `rig = root.createCameraRig()`, with `rig.parallax = parallax && motion === 'live'`;
+  - a `watch` on `[focused, the focused block's surface]` calls `rig.focus(s, { immediate: first || motion === 'frozen' })`;
+  - unmount calls `rig.dispose()`.
+- Keys, on every focus change:
+  - the new Surface gets `trapFocus = true` and `root.pointer?.setActive(s)`;
+  - the previous one gets `trapFocus = false`.
+- Missing focus:
+  - a `watch(focused, …, { flush: 'post' })` throws `GlassUIError('Space.focus', '没有名为 "<n>" 的 Block', { allowed: registered names, got: n })` when the name is still unregistered;
+  - the rig is not called.
+- Slot contents:
+  - Render returns the slot's vnodes.
+  - Before returning them, it flattens fragments and ignores comments and whitespace text. Anything left that is not a `Block` vnode throws `GlassUIError('Space', '插槽里只能放 <Block>')`.
+
+**Card**
+- `h('box', { style: { bg: 'glass', radius: 'concentric', padding: 24, gap: 12, flexDirection: 'column', glass: { thickness: 12, fillet: 4, filletBottom: 2 } } }, [title ? h(Text, { value: title, size: 17, weight: 600 }) : null, ...slots.default?.() ?? []])`, with the user's style merged over it by the default fallthrough.
+- The spatial spec said "half the theme's default thickness". The theme gives a ratio, and a ratio-based thickness on a 300 pt card would be 60 pt, so Card uses a fixed 12 pt instead. This is recorded as a ruling.
+
+**Manifest meta**
+- Each component's meta has a Chinese description, 2–3 examples and mistakes:
+  - Space: "不要同时开 OrbitControls"; "focus 写不存在的名字".
+  - Block: "Block 放在 Space 外"; `width="400"` → `:width="400"`.
+  - Card: "Card 不需要再包一层玻璃 Box".
+
+**Playground**
+- `?scene=spatial` mounts `createGlassApp(Spatial, { root, motion }, { initialFocus: params.get('focus') ?? undefined }).mount()` (detached: everything teleports into Blocks).
+- OrbitControls stay off for it. The host wall is `createWall({ scale: 2.5, z: -4 })`, so no focus pose shows its edge.
+- `Spatial.vue` (sketch until Task 19): `<Space v-model:focus="focus">` with three Blocks:
+  - `login` (488 × 560): a title, two placeholder Texts;
+  - `landing` (880 × 620): a heading and three stat `Card`s in a horizontal Stack;
+  - `settings` (560 × 520): one `Card` with Texts.
+  Clicking an unfocused Block focuses it.
+
+- [ ] **Step 1: Write the failing tests**
+
+`packages/vue/test/spatial.test.ts`:
+
+```ts
+const blocks = (names: string[], extra: Record<string, unknown> = {}) => names.map(n => h(Block, { key: n, name: n, width: 488, height: 244, ...extra }, () => [h(Text, { value: n })]))
+const snap = (s: FakeSurface) => JSON.stringify(tree(s.root))
+
+it('arcSlots: first at the origin, then rightwards along the arc, facing its centre', () => {
+  const [a, b] = arcSlots([2, 2], 7, 0.5), t = 2.5 / 7
+  expect(a!.position).toEqual([0, 0, 0])
+  expect(b!.position[0]).toBeCloseTo(7 * Math.sin(t)); expect(b!.position[2]).toBeCloseTo(7 - 7 * Math.cos(t)); expect(b!.rotation[1]).toBeCloseTo(-t)
+})
+it('Blocks are world glass Surfaces on the arc, entering from behind', () => {
+  const root = createFakeRoot()
+  mountGlass(() => h(Space, null, () => blocks(['a', 'b'])), { root })
+  const [a, b] = root.surfacesMade
+  expect(a!.created).toMatchObject({ layer: 'world', background: 'glass', cornerRadius: 48, width: 488, height: 244 })
+  const slot = arcSlots([2, 2], 7, 0.5)[1]!
+  expect(b!.position.x).toBeCloseTo(slot.position[0]); expect(b!.rotation.y).toBeCloseTo(slot.rotation[1])
+  expect(a!.animations[0]).toMatchObject({ from: { position: [0, 0, -1.2], scale: [0.92, 0.92, 0.92], opacity: 0 }, target: { position: [0, 0, 0], opacity: 1 }, opts: { immediate: false } })
+})
+it('a leaving Block keeps its content until its flight ends, then goes; slots stay by name', async () => {
+  const root = createFakeRoot(), show = ref(true)
+  mountGlass(() => h(Space, null, () => [show.value ? blocks(['a'])[0] : null, blocks(['b'])[0]]), { root })
+  const [a, b] = root.surfacesMade, bx = b!.position.x
+  show.value = false; await nextTick()
+  expect(a!.disposed).toBe(false); expect(a!.interactive).toBe(false); expect(snap(a!)).toContain('"a"')
+  expect(a!.animations.at(-1)!.target).toMatchObject({ position: [0, 0, -1.5], scale: 0.9, opacity: 0 })
+  root.tick(); await flush(); expect(a!.disposed).toBe(true)
+  show.value = true; await nextTick()
+  const a2 = root.surfacesMade.at(-1)!; expect(a2.position.x).toBeCloseTo(0); expect(b!.position.x).toBe(bx)
+})
+it('toggling off and on within one flight leaves exactly one Surface for the Block', async () => {
+  const root = createFakeRoot(), show = ref(true)
+  mountGlass(() => h(Space, null, () => [show.value ? blocks(['a'])[0] : null]), { root })
+  show.value = false; await nextTick(); show.value = true; await nextTick()
+  root.tick(); await flush(); expect(root.surfaces.length).toBe(1)
+})
+it('focus drives the rig and the keys', async () => {
+  const root = createFakeRoot(), focus = ref('a')
+  mountGlass(() => h(Space, { focus: focus.value }, () => blocks(['a', 'b'])), { root })
+  await flush()
+  const [a, b] = root.surfacesMade, rig = root.rigs[0]!
+  expect(rig.focus).toHaveBeenCalledWith(a, { immediate: true })
+  focus.value = 'b'; await nextTick(); await flush()
+  expect(rig.focus).toHaveBeenLastCalledWith(b, { immediate: false })
+  expect(root.pointer!.setActive).toHaveBeenLastCalledWith(b); expect(b!.trapFocus).toBe(true); expect(a!.trapFocus).toBe(false)
+})
+it('frozen motion: everything immediate, no parallax; camera=false: no rig', async () => {
+  const root = createFakeRoot()
+  mountGlass(() => h(Space, null, () => blocks(['a'])), { root, motion: 'frozen' }); await flush()
+  expect(root.surfacesMade[0]!.animations[0]!.opts).toMatchObject({ immediate: true }); expect(root.rigs[0]!.parallax).toBe(false)
+  const r2 = createFakeRoot(); mountGlass(() => h(Space, { camera: false }, () => blocks(['a'])), { root: r2 }); await flush()
+  expect(r2.rigs.length).toBe(0)
+})
+it('a press on an unfocused Block only asks for focus; its content gets no press and no hover', async () => {
+  const root = createFakeRoot(), asked: string[] = [], pressed = vi.fn()
+  mountGlass(() => h(Space, { focus: 'a', 'onUpdate:focus': (n: string) => asked.push(n) }, () => [
+    blocks(['a'])[0],
+    h(Block, { name: 'b', width: 488, height: 244 }, () => [h(Box, { id: 'btn', style: { width: 100, height: 40, bg: 'accent' }, onPointerdown: pressed })]),
+  ]), { root })
+  root.tick(); const b = root.surfacesMade[1]!
+  b.pointer.move(60, 60); expect(byId(b.root, 'btn')!.state.hover).toBe(false)
+  b.pointer.down(60, 60); expect(pressed).not.toHaveBeenCalled(); expect(asked).toEqual(['b'])
+})
+it('uncontrolled: the first Block is focused, and a press moves focus', async () => {
+  const root = createFakeRoot()
+  mountGlass(() => h(Space, null, () => blocks(['a', 'b'])), { root }); root.tick(); await flush()
+  const [, b] = root.surfacesMade, rig = root.rigs[0]!
+  b!.pointer.down(10, 10); await nextTick(); await flush()
+  expect(rig.focus).toHaveBeenLastCalledWith(b, { immediate: false })
+})
+it('reports the mistakes an agent makes', async () => {
+  expect(mountGlass(() => blocks(['a'])[0]).errors[0]).toMatch(/\[Block\] 必须放在 <Space> 里/)
+  expect(mountGlass(() => h(Space, null, () => blocks(['a', 'a']))).errors.join()).toMatch(/重名的 Block "a"/)
+  const m = mountGlass(() => h(Space, { focus: 'landng' }, () => blocks(['login', 'landing']))); await flush()
+  expect(m.errors.join()).toMatch(/\[Space\.focus\].*"landng".*你可能想要：landing/)
+  expect(mountGlass(() => h(Space, null, () => [h(Box)])).errors[0]).toMatch(/\[Space\] 插槽里只能放 <Block>/)
+  expect(mountGlass(() => h(Space, null, () => blocks(['a'], { enterFrom: { opacity: 2 } }))).errors[0]).toMatch(/\[Block\.enterFrom/)
+})
+it('warns once when the content is taller than the Block', async () => {
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {}), root = createFakeRoot()
+  mountGlass(() => h(Space, null, () => [h(Block, { name: 'a', width: 300, height: 100 }, () => [h(Box, { style: { height: 300 } })])]), { root })
+  root.tick(); await flush(); root.tick(); await flush()
+  expect(warn.mock.calls.filter(c => /\[Block "a"\] 内容高 .*超出 block 高 100pt/.test(String(c[0])))).toHaveLength(1)
+  warn.mockRestore()
+})
+it('Card: a nested glass box, concentric, with a title; style overrides', () => {
+  const { c } = mountGlass(() => h(Card, { title: '本周活跃', style: { padding: 16 } }, () => [h(Text, { value: '12' })]))
+  const card = first(c, 'box')
+  expect(card.style).toMatchObject({ bg: 'glass', radius: 'concentric', gap: 12, padding: 16, glass: { thickness: 12 } })
+  expect(tree(card).children![0]).toMatchObject({ type: 'text', value: '本周活跃' })
+})
+it('unmounting the Space mid-flight disposes the rig and, after the flights, every Surface', async () => {
+  const root = createFakeRoot(), { app } = mountGlass(() => h(Space, null, () => blocks(['a', 'b'])), { root }); await flush()
+  app.unmount(); expect(root.rigs[0]!.dispose).toHaveBeenCalled()
+  root.tick(); await flush(); expect(root.surfaces.length).toBe(0)
+})
+```
+
+(`tree`, `byId`, `first`, `flush`, `createFakeRoot`, `mountGlass` are the existing fixtures. `FakeRoot.rigs` comes from Task 9B. `FakeSurface.pointer` is a real `PointerTracker` over its root, so `move`/`down` take Surface pt.)
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `pnpm vitest run packages/vue`
+Expected: the new file fails. `surface.test.ts` still passes.
+
+- [ ] **Step 3: Implement**
+
+1. Extract `useRenderSurface` from `Surface.ts` and run `surface.test.ts` (unchanged, PASS).
+2. Add `holdContent`/`isHeld` to the renderer. Add a renderer test: a held node's child removed through `nodeOps.remove` stays in the tree.
+3. Write `arc.ts`, `context.ts`, `Space.ts`, `Block.ts`, `Card.ts` as specified, and export `Space`, `Block`, `Card` and `arcSlots` from `index.ts`.
+4. Update `FakeSurface` and `FakeRoot` as specified.
+5. Add the playground scene.
+
+- [ ] **Step 4: Run, typecheck, build**
+
+Run: `pnpm vitest run packages/vue && pnpm typecheck && pnpm playground:build`
+Expected: PASS / exit 0.
+
+- [ ] **Step 5: Visual checkpoint 2b (controller, Chrome, outside the sandbox)**
+
+`pnpm playground`, then `?scene=spatial`, on WebGPU and `&webgl`. Screenshots:
+- login front;
+- landing after clicking it (mid-flight and settled);
+- settings;
+- back.
+
+Check:
+- the backdrop is the bright pastel wall (no grey veil, no wall edge);
+- the camera moves without overshoot;
+- the leaving Block recedes and fades with its content;
+- the stat Cards read as thinner glass inside the Block glass;
+- parallax follows the mouse.
+
+Tune `radius`/`gap` defaults so that, focused on landing, the settings Block shows at least partly (spatial spec §3.1); record the values.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add packages/vue examples/playground
+git commit -m "feat(vue): Space, Block and Card — Blocks on an arc, fly-in/fly-out with held content, camera focus, press-to-focus; a spatial scene"
+```
+
+---
+
+### Task 9G: `<Viewport3D>` and `<BarChart3D>` — visual checkpoint 2c
+
+Spatial spec §2.6 (rows Viewport3D, BarChart3D), §5.
+
+**Files:**
+- Create: `packages/vue/src/components/Viewport3D.ts`, `packages/vue/src/components/BarChart3D.ts`, `packages/vue/src/chart.ts`
+- Modify: `packages/vue/src/index.ts`, `packages/vue/test/fixtures/fake-root.ts` (`FakeSurface.attach3D` records `{ node, object, opts }` into `attached` and returns a detach that removes the record; it throws the render error text for a screen Surface), `examples/playground/src/scenes/Spatial.vue` (a chart Card on landing)
+- Test: `packages/vue/test/viewport.test.ts` (new)
+
+**Interfaces:**
+- Consumes: 9C (`attach3D`, `UIEvent.object`), 9E (`createBarChart`, `BarChart`), 9F (`isHeld`), `useSurfaceRef`, `colorOf`, `useScheme`.
+- Produces:
+  - `chart.ts`: `niceMax(v: number): number` (0 → 1; else the least of 1, 2, 5, 10 × 10ᵏ that is ≥ v) and `formatValue(v: number): string` (at most two decimals, trailing zeros dropped).
+  - `Viewport3D`:
+    - props: `object` (`z.custom<object>` of a non-null object, message `需要一个 three.js 的 Object3D`), `depth?: number` (> 0), `update?: (dt, ctx) => boolean` (`z.custom` of a function);
+    - events `pointerenter`, `pointerleave`, `pointermove`, `click` (payload `UIEvent，object 为命中的 Object3D（不在物体上时缺省）`);
+    - renders `h('box', { ref, style: { alignSelf: 'stretch', height: 200 }, on…: re-emit }, [])`, with the user's style merged over it.
+  - `BarChart3D`:
+    - props: `data: { label: string; value: number (finite, ≥ 0); color?: string }[]`, `max?: number` (> 0), `format?: (v: number) => string`;
+    - event `select` (payload `{ index: number; label: string; value: number }`).
+
+Rules:
+
+**Viewport3D**
+- A `watch([surface, node, object, depth, update], …, { flush: 'post' })` detaches the old attachment, then:
+  - throws `GlassUIError('Viewport3D', '不能放在 scroll 里：本期不支持裁剪 3D 物体')` when a `scroll` node is among the node's ancestors;
+  - otherwise calls `surface.attach3D(node, object, { depth?, update? })`.
+  The render errors (screen layer, not an Object3D) reach the app's error handler through Vue.
+- `onBeforeUnmount`: `if (isHeld(node))` leave the attachment in place: the Surface's `dispose` cleans it up and the object flies out with its Block. Otherwise detach.
+
+**BarChart3D**
+- `chart = root.createBarChart()` once.
+- A `watchEffect` calls `chart.set({ values, colors: data.map(d => colorOf('BarChart3D.data.color', d.color ?? 'accent', root.theme, scheme.value)), max: props.max ?? niceMax(maxValue) })`, so a scheme change recolours.
+- Render, with `data` non-empty:
+  ```ts
+  h('box', { style: { flexDirection: 'column', gap: 8, alignSelf: 'stretch' } }, [
+    h('box', { style: { height: 200, alignSelf: 'stretch' } }, [
+      h(Viewport3D, { object: chart, update: (dt, c) => chart.update(dt, c), depth: 60, style: { position: 'absolute', inset: 0, height: 'auto' },
+        onPointermove: e => setHover(e.object), onPointerleave: () => setHover(undefined), onClick: e => select(e.object) }),
+      hovered !== null ? tag(hovered) : null,
+    ]),
+    h('box', { style: { flexDirection: 'row' } }, data.map(d => h('box', { style: { flexGrow: 1, flexBasis: 0, alignItems: 'center' } }, [h(Text, { value: d.label, size: 13, color: 'secondaryLabel' })]))),
+  ])
+  ```
+- Hover:
+  - `setHover(o)` reads `o?.userData?.index`, sets `hovered`, and calls `chart.hover(index ?? null)`.
+  - `tag(i)` is an absolute box (`bg: 'fill'`, `radius: 10`, `width: 80`, `paddingY: 4`, `alignItems: 'center'`, `border: 1 'separator'`). It sits at `left = colWidth·(i + 0.5) − 40` and `bottom = barHeight(i) + 8`, both from the box's laid-out width and 200 pt height, and holds `Text(format(value))`.
+- `select` emits `{ index, label, value }` for a click on a bar.
+- An empty `data` renders `h('box', { style: { height: 200, alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' } }, [h(Text, { value: '暂无数据', color: 'secondaryLabel' })])` and makes no Viewport3D.
+- `onBeforeUnmount`: if held, dispose the chart on the Surface's `dispose` event; else dispose it now.
+
+- [ ] **Step 1: Write the failing tests**
+
+`packages/vue/test/viewport.test.ts`:
+
+```ts
+const inBlock = (child: () => VNode) => h(Space, { camera: false }, () => [h(Block, { name: 'a', width: 488, height: 488 }, () => [child()])])
+it('niceMax and formatValue', () => {
+  expect([0, 0.3, 5, 17, 101].map(niceMax)).toEqual([1, 0.5, 5, 20, 200]); expect(formatValue(1.5)).toBe('1.5'); expect(formatValue(2)).toBe('2'); expect(formatValue(1 / 3)).toBe('0.33')
+})
+it('Viewport3D attaches its object to its own box, re-attaches on change, detaches on unmount', async () => {
+  const root = createFakeRoot(), obj = ref<object>({ isObject3D: true }), show = ref(true)
+  mountGlass(() => show.value ? inBlock(() => h(Viewport3D, { id: 'vp', object: obj.value, depth: 40 })) : null, { root }); await flush()
+  const s = root.surfacesMade[0]!
+  expect(s.attached).toEqual([{ node: byId(s.root, 'vp'), object: obj.value, opts: { depth: 40 } }])
+  obj.value = { isObject3D: true }; await flush(); expect(s.attached.map(a => a.object)).toEqual([obj.value])
+})
+it('Viewport3D re-emits pointer events with the object', async () => {
+  const root = createFakeRoot(), moves: unknown[] = [], obj = { isObject3D: true }
+  mountGlass(() => inBlock(() => h(Viewport3D, { id: 'vp', object: obj, onPointermove: (e: UIEvent) => moves.push(e.object) })), { root }); await flush(); root.tick()
+  const s = root.surfacesMade[0]!; s.pointer.move(-999, -999, 'mouse', { node: byId(s.root, 'vp')!, object: obj })
+  expect(moves).toEqual([obj])
+})
+it('Viewport3D refuses a scroll ancestor and a non-object', async () => {
+  const a = mountGlass(() => inBlock(() => h('scroll', null, [h(Viewport3D, { object: { isObject3D: true } })]))); await flush()
+  expect(a.errors.join()).toMatch(/\[Viewport3D\] 不能放在 scroll 里/)
+  expect(mountGlass(() => inBlock(() => h(Viewport3D, { object: 3 as never }))).errors[0]).toMatch(/\[Viewport3D\.object\]/)
+})
+it('BarChart3D sets the chart from data with a nice max and theme colours', async () => {
+  const root = createFakeRoot()
+  mountGlass(() => inBlock(() => h(BarChart3D, { data: [{ label: '一', value: 3 }, { label: '二', value: 17, color: 'danger' }] })), { root }); await flush()
+  const chart = root.charts[0]!
+  expect(chart.set).toHaveBeenLastCalledWith({ values: [3, 17], max: 20, colors: [resolveColor('accent', defaultTheme, 'light'), resolveColor('danger', defaultTheme, 'light')] })
+})
+it('BarChart3D: one label column per bar; hover shows the formatted value over its bar; click selects', async () => {
+  const root = createFakeRoot(), picked: unknown[] = []
+  mountGlass(() => inBlock(() => h(BarChart3D, { data: [{ label: 'A', value: 1 }, { label: 'B', value: 2 }], format: (v: number) => `${v} 次`, onSelect: (e: unknown) => picked.push(e) })), { root })
+  await flush(); root.tick()
+  const s = root.surfacesMade[0]!, vp = s.attached[0]!.node, bar = { isObject3D: true, userData: { index: 1 } }
+  s.pointer.move(-999, -999, 'mouse', { node: vp, object: bar }); await nextTick(); root.tick()
+  expect(root.charts[0]!.hover).toHaveBeenLastCalledWith(1)
+  expect(JSON.stringify(tree(s.root))).toContain('2 次')
+  s.pointer.down(-999, -999, 'mouse', { node: vp, object: bar }); s.pointer.up(-999, -999, 'mouse', { node: vp, object: bar })
+  expect(picked).toEqual([{ index: 1, label: 'B', value: 2 }])
+  s.pointer.move(-999, -999, 'mouse'); await nextTick(); expect(root.charts[0]!.hover).toHaveBeenLastCalledWith(null)
+})
+it('BarChart3D with no data says so and attaches nothing; a negative value is an error', async () => {
+  const root = createFakeRoot()
+  mountGlass(() => inBlock(() => h(BarChart3D, { data: [] })), { root }); await flush()
+  expect(JSON.stringify(tree(root.surfacesMade[0]!.root))).toContain('暂无数据'); expect(root.surfacesMade[0]!.attached).toEqual([])
+  expect(mountGlass(() => inBlock(() => h(BarChart3D, { data: [{ label: 'x', value: -1 }] }))).errors[0]).toMatch(/\[BarChart3D\.data/)
+})
+it('a leaving Block keeps its chart attached until its Surface goes', async () => {
+  const root = createFakeRoot(), show = ref(true)
+  mountGlass(() => h(Space, { camera: false }, () => [show.value ? h(Block, { name: 'a', width: 488, height: 488 }, () => [h(BarChart3D, { data: [{ label: 'A', value: 1 }] })]) : null]), { root }); await flush()
+  const s = root.surfacesMade[0]!; show.value = false; await nextTick()
+  expect(s.attached.length).toBe(1); expect(root.charts[0]!.dispose).not.toHaveBeenCalled()
+  root.tick(); await flush(); expect(root.charts[0]!.dispose).toHaveBeenCalled()
+})
+```
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/vue/test/viewport.test.ts` (FAIL). Implement as specified. Run again (PASS).
+
+- [ ] **Step 3: Run, typecheck, build; visual checkpoint 2c (controller)**
+
+Run: `pnpm vitest run packages/vue && pnpm typecheck && pnpm playground:build`
+Expected: PASS / exit 0.
+
+In the playground, add a `Card title="一周活跃"` with a seven-day `BarChart3D` to the `landing` Block of `Spatial.vue`. Then check `?scene=spatial` focused on landing, on both backends:
+- the bars grow out of the Card's glass;
+- they are lit and shadowed by the UI light;
+- hover brightens a bar and shows its value tag;
+- the chart flies out with the Block;
+- a Block in front of the chart refracts it.
+
+Take front and angled screenshots.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add packages/vue examples/playground
+git commit -m "feat(vue): Viewport3D (a generic 3D slot) and BarChart3D — bars on a card, hover value tag, select"
+```
+
+---
+
 ### Task 10: `useGlassControl` and `<Button>` — visual checkpoint 3
 
 **Files:**
@@ -2209,6 +3690,8 @@ git commit -m "feat(render): ImeBridge — a proxy textarea at the projected car
 - Test: `packages/vue/test/{input.test.ts, textedit.test.ts}`
 - Modify: `examples/playground/src/gallery/Gallery.vue`
 
+**Spatial note (spatial spec §7):** a world-layer Input can be focused while the camera rig is still moving (a Block focused by click, then typed into at once). The IME proxy must follow the caret's projected position on every tick while the Input is focused, not only on caret moves. Test it: move the Surface between ticks and assert the proxy's `left`/`top` follow.
+
 **Interfaces:**
 - Consumes: `GlassRoot.ime`, `GlassRoot.text` (`caretRect`, `caretFromPoint`, `selectionRects`), core `resolveTextStyle`, `absoluteRect`, `useGlassControl` (hover/tilt only), `Icon`, `useMotion`, `useSurface`.
 - Produces:
@@ -2383,6 +3866,8 @@ git commit -m "feat(vue): <Input> with caret, selection, scrolling, password and
 - Create: `packages/vue/src/components/Dialog.ts`, `packages/vue/src/spring.ts` (a tiny `useSpring` over core `Spring` driven by `root.afterTick`)
 - Test: `packages/vue/test/dialog.test.ts`
 - Modify: `examples/playground/src/gallery/Gallery.vue` (a button that opens a dialog with an Input and two Buttons)
+
+**Spatial note (spatial spec §7):** in a `Space`, the Surface that held the keys before the Dialog opened is the focused Block. When the Dialog closes, `root.pointer.setActive` returns to that Surface, and its `trapFocus` stays on. Test it: open and close a Dialog from inside a focused Block, then check `setActive`'s last call and the Block's `trapFocus`.
 
 **Interfaces:**
 - Consumes: `GlassRoot.createSurface/removeSurface/afterTick/pointer.setActive`, `Surface.trapFocus`, `Surface.focus`, core `Spring`, `GlassTransition`, `Text`, `Stack`, theme `scrim`.
@@ -2823,10 +4308,11 @@ export interface GlassManifest {
   }[]
   style: { keys: { name: string; type: unknown }[]; states: ['hover', 'pressed', 'focused', 'disabled']; tw: string[] }
   theme: { colors: string[]; fontSize: Record<string, number>; radius: Record<string, number>; spacing: number[]; metrics: Record<string, number> }
-  rules: string[]                          // spec §8.3 rules in one line each (glass only on controls, capsule default, …)
+  rules: string[]                          // spec §8.3 (as amended) in one line each (glass on containers and controls, capsule default, …), plus the spatial rules: Blocks live in a Space; one CameraRig per root; no OrbitControls next to a Space; a Block's size is fixed
 }
 ```
 
+  - `setup` also holds a spatial app (spatial spec §8): a `Space` with a login `Block` and a dashboard `Block` whose `Card` holds a `BarChart3D`, switching focus on login.
   - `pnpm manifest` regenerates `packages/vue/manifest.json`. The test fails, with that command in its message, when the committed file differs from a fresh generation.
   - `packages/vue/README.md` holds a 30-line quickstart (install, `createUIRoot`, `createGlassApp`, a sample `.vue` using Surface, Stack, Text, Input, Button, Switch and Dialog) and points to `manifest.json` as the reference.
 
@@ -2843,7 +4329,7 @@ it('is up to date', () => {
   else expect(m, 'manifest.json is stale: run `pnpm manifest`').toEqual(committed)
 })
 it('documents every component completely', () => {
-  expect(m.components.map(c => c.name)).toEqual(['Surface', 'Box', 'Text', 'Icon', 'Stack', 'Button', 'Switch', 'Checkbox', 'Input', 'Dialog', 'GlassContainer'])
+  expect(m.components.map(c => c.name).sort()).toEqual(['Surface', 'ScreenLayer', 'WorldLayer', 'Box', 'Text', 'Icon', 'Stack', 'Space', 'Block', 'Card', 'Viewport3D', 'BarChart3D', 'Button', 'Switch', 'Checkbox', 'Input', 'Dialog', 'GlassContainer'].sort())
   for (const c of m.components) {
     expect(c.description.length, c.name).toBeGreaterThan(40)
     expect(c.examples.length, c.name).toBeGreaterThanOrEqual(2)
@@ -2884,14 +4370,14 @@ git commit -m "feat(vue): generated manifest.json — components, props, events,
 ### Task 19: The playground in Vue — sign-up, world, gallery, performance scene
 
 **Files:**
-- Create: `examples/playground/src/scenes/{SignUp.vue, World.vue, Both.vue, Perf.vue}`
+- Create: `examples/playground/src/scenes/{SignUp.vue, World.vue, Both.vue, Perf.vue}`; Modify: `examples/playground/src/scenes/Spatial.vue` (Task 9F's sketch → the full flow)
 - Modify: `examples/playground/src/main.ts`, `examples/playground/src/gallery/Gallery.vue`
 - Delete: `examples/playground/src/signup.ts`, `examples/playground/src/world.ts`, `examples/playground/src/icons.ts` (moved to `@glassui/vue` in Task 8); keep `wall.ts` (the host scene)
 
 **Interfaces:**
 - Consumes: every component; `createGlassApp`.
 - Produces:
-  - `?scene=signup|world|both|gallery|perf`, plus `&webgl`, `&quality=…`, `&hud=0`, `&motion=frozen|live`, `&scheme=light|dark`.
+  - `?scene=signup|world|both|gallery|perf|spatial`, plus `&webgl`, `&quality=…`, `&hud=0`, `&motion=frozen|live`, `&scheme=light|dark`, and `&focus=<Block name>` (spatial, gallery).
   - `SignUp.vue` rebuilds the reference form (`docs/images/signup-front.jpg`) from components only:
     - a centred `Surface` (885 × 1045, `background="glass"`, radius 48, scaled to fit as today);
     - title and Chinese subtitle `Text`s;
@@ -2906,10 +4392,34 @@ git commit -m "feat(vue): generated manifest.json — components, props, events,
   - Positions use Stack layout (not absolute coordinates) wherever the reference allows.
   - `World.vue`: the world-layer card from Plan 2 (`Surface layer="world"` with a Switch and two Buttons) behind the wall.
   - `Perf.vue` (spec §10): a screen Surface with 100 Buttons (5 variants × 20) and 20 `GlassContainer`s of 3 circle buttons each, all visible at 1280 × 900.
+  - `Spatial.vue` (Task 9F's sketch rebuilt with real controls) runs the flow of spatial spec §4.
+    - login Block:
+      - email and password `Input`s (`login-email`, `login-password`);
+      - "记住我" `Switch`;
+      - the primary `Button` "登录" (`login-submit`, `loading` for 0.6 s of fake auth);
+      - "或";
+      - Apple and Google `Button`s.
+    - On success, focus moves to `landing` and the login Block leaves (`v-if`).
+    - landing Block:
+      - an avatar `Icon` and "欢迎回来";
+      - three stat `Card`s;
+      - a `Card title="一周活跃"` with a seven-day `BarChart3D` (`chart`);
+      - the `Button`s "新建项目", "设置" (`landing-settings`) and "退出登录" (`landing-logout`), placed on the Block itself rather than in a Card.
+    - settings Block:
+      - a display-name `Input`;
+      - a notifications `Switch`;
+      - a `Checkbox`;
+      - "保存" and "返回" (`settings-back`).
+    - "退出登录" brings the login Block back and focuses it.
+  - `Gallery.vue` becomes a `Space`.
+    - Each section is a `Block` named after it: `primitives`, `buttons`, `toggles`, `inputs`, `dialog`, `containers`.
+    - `&focus=` picks the first focus.
+    - Task 9's world panel goes: the Space is the 3D now.
   - `window.__glassui` keeps `{ renderer, ready, root, surfaces }` and adds:
     - `rectOf(id): { x, y, width, height } | null`, in CSS px;
     - `stats(): { frameMs: number; draws: number }`, where `frameMs` is the mean rAF interval over the last 60 frames and `draws` is `renderer.info.render.drawCalls` of the last frame;
-    - `ime(): boolean` (whether the IME proxy is focused), for the harness.
+    - `ime(): boolean` (whether the IME proxy is focused), for the harness;
+    - `focus(): string | null` (the focused Block of the scene's Space) and `idle(): Promise<void>` (resolves on the first tick with no Surface animating and the rig settled), for the spatial cases.
 
 - [ ] **Step 1: Implement the scenes and the entry; keep the old URLs working**
 
@@ -2920,7 +4430,7 @@ The sign-up scene must keep the ids the harness reads (`name`, `email`, `passwor
 Run: `pnpm typecheck && pnpm playground:build`
 Expected: exit 0.
 
-**Controller check:** `?scene=signup` side by side with Plan 2's baseline (`examples/visual/tests/visual.spec.ts-snapshots/signup-webgpu.png`). The Vue form must read as the same design. List the differences in the report: the Inputs are real fields now, and the layout comes from Stack. Then check `?scene=perf` and `?scene=gallery` in the dark scheme.
+**Controller check:** `?scene=signup` side by side with Plan 2's baseline (`examples/visual/tests/visual.spec.ts-snapshots/signup-webgpu.png`). The Vue form must read as the same design. List the differences in the report: the Inputs are real fields now, and the layout comes from Stack. Then check `?scene=perf` and `?scene=gallery` in the dark scheme, and walk `?scene=spatial` through spatial spec §4 on WebGPU and WebGL2. Take front and mid-flight screenshots, and judge them against the published demo's backdrop (bright pastel wall, no grey veil).
 
 - [ ] **Step 3: Commit**
 
@@ -2946,8 +4456,8 @@ git commit -m "feat(playground): scenes rebuilt in Vue from the component librar
   - Cases (all `&hud=0&motion=frozen`, 1280 × 900, DPR 1, each on `webgl2` and `webgpu`):
     - `signup` at `high`, `medium`, `minimal`, and `signup` with `scheme=dark`;
     - `world` (clipped to the card with `toHaveScreenshot({ clip })`, the region from `rectOf('world-card')` plus 24 px: Plan 2's M9);
-    - `gallery` at high, medium, low and minimal (the full page);
-    - `gallery` state shots, each clipped to its section:
+    - `gallery` at high, medium, low and minimal (the full page, `&focus=primitives`);
+    - `gallery` state shots, each loaded with `&focus=<section>` and clipped to that Block (`rectOf(<section>)` plus 24 px):
       - hover on a glass Button (`page.mouse.move` to `rectOf` centre, then wait 500 ms);
       - pressed (`mouse.down` without up);
       - focus-visible (Tab from the start until the Button is focused);
@@ -2956,6 +4466,11 @@ git commit -m "feat(playground): scenes rebuilt in Vue from the component librar
       - Checkbox checked and indeterminate;
       - Input empty, with a value and a selection, and focused;
     - `dialog` (the gallery's open-dialog button clicked).
+    - `spatial` (spatial spec §6), driven by real clicks with `&motion=frozen`:
+      - `spatial-login` (as loaded);
+      - `spatial-landing`: type into `login-email` and `login-password`, click `login-submit`, then `await idle()`;
+      - `spatial-settings`: after clicking `landing-settings`;
+      - `spatial-bar-hover`: on landing, move the pointer to the chart's fourth bar (`rectOf('chart')`, that bar's column centre, 60 % up its height), then wait 500 ms.
   - `ime.spec.ts` (Chromium CDP):
     1. Click the email Input and assert `__glassui.ime()`.
     2. Send `Input.imeSetComposition { text: 'ni', selectionStart: 2, selectionEnd: 2 }` and screenshot the field clipped (the composition underlined).
@@ -2999,14 +4514,18 @@ git commit -m "test(visual): component states, tiers, dark scheme, dialog and IM
   - `perf.spec.ts`:
     - loads `?scene=perf&quality=high&hud=0&motion=frozen` on `webgl2` (spec §10: "CI 上只做回归阈值（Chrome headless，WebGL 路径）") and `webgpu`;
     - waits 2 s, samples `stats()` for 120 frames, and writes `test-results/perf.json` with `{ frameMs, draws }` per backend;
-    - fails when `draws > baseline.draws × 1.05` or `frameMs > baseline.frameMs × 1.5`.
+    - fails when `draws > baseline.draws × 1.05` or `frameMs > baseline.frameMs × 1.5`;
+    - a spatial case (spatial spec §3.5, §6), on `webgpu` only:
+      - load `?scene=spatial&quality=high&hud=0&motion=live` and log in as Task 20 does;
+      - sample rAF intervals for the 1.2 s after the click;
+      - fail when their p95 exceeds 33 ms.
   - `perf-baseline.json`: the controller's first measurement on the reference machine, committed with the date and machine.
   - Optimisations (Plan 2 carry-overs M4, f, the pyramid crop and RT shrink hysteresis), each kept only when it measurably helps the perf scene or the unit-level counters:
     1. `AnimationRuntime.tick` skips subtrees with no transitions without allocating: cache `transitionKeys` per style object (`WeakMap<Style, Set>`), and read `effectiveStyle` only for nodes with keys or state branches that set `display`.
     2. Per-frame allocations in the root's `each`/`filter`/`sort`, `glassBounds`, and luma's screen rects reuse scratch arrays and boxes.
     3. The high tier's backdrop fetches drop from 15 to 6 per fragment (Plan 2 f): each colour channel samples only the two pyramid levels bracketing `k = roughness·levels` (`select` on ⌊k⌋, no TSL `If` outside `Fn`). Prove it with the shader fixture (texture-sample count per channel) and a CPU `tsl-eval` equality test against today's mix.
     4. The Kawase pyramid covers the union of the glass rects plus a 2 × blur-radius margin (spec §5.6 "仅覆盖玻璃矩形并集 + 位移余量"): render each pass with a scissor or viewport over that rect, sample the same uv as today, and leave texels outside it untouched (never sampled).
-    5. Content RT shrink hysteresis: a smaller projected size only shrinks the RT after it has stayed smaller for 30 consecutive frames, or by more than half (no ping-pong reallocations while a camera dollies).
+    5. Content RT shrink hysteresis: done in Task 9A (`rtTarget`, spatial spec §2.1). Nothing to implement here; the report records how many content-RT reallocations one spatial focus switch causes.
     6. A world Surface seen at a grazing angle, wholly in front of the camera, projects to a huge bounding box (Plan 2 residual: up to the 4096 cap). Cap a world Surface's RT at the texels it can actually show: 2 × the viewport's device px on each axis. Pin it with a `projectedPx` test at a grazing angle.
 
 - [ ] **Step 1: The harness and the first baseline**
@@ -3015,13 +4534,13 @@ Write `perf.spec.ts`. The controller runs it outside the sandbox and commits `pe
 
 - [ ] **Step 2: Each optimisation as its own commit, test first**
 
-For each of 1–5:
+For each of 1–4 and 6:
 1. Write a unit test that pins the behaviour: identical output, and the count or allocation it removes.
 2. Implement.
 3. Run `pnpm test`.
 4. The controller re-measures, and the commit message records before → after.
 
-Drop an optimisation that does not move the numbers, and say so in the report.
+Drop an optimisation that does not move the numbers, and say so in the report. Item 5 has no commit here (Task 9A).
 
 - [ ] **Step 3: Update the baseline**
 
@@ -3093,7 +4612,13 @@ git commit -m "fix(render): device-pixel RT floor below DPR 1; mip frost width m
     - §8.2: the component table as built (props that differ from the spec's sketch: Button `size`/`shape`/`loading`, Input `size`/`type`, Dialog `width`/`closeOnEscape`; `Surface.shadow` deferred);
     - §10: the test suites as built;
     - §11: Phase 3 done (Plan 3 path);
-    - §12: remaining deferred items (this plan's Deferred list).
+    - §12: remaining deferred items (this plan's Deferred list);
+    - the spatial spec, as built:
+      - API names as shipped;
+      - the tuned `radius`/`gap`;
+      - the held-content leave;
+      - per-bar meshes;
+      - Card's 12 pt glass.
   - READMEs: status table (Plan 3 done), "Try it" with `pnpm playground` scenes and `pnpm manifest`, and a 15-line Vue example.
 
 - [ ] **Step 1: Docs**
@@ -3104,7 +4629,7 @@ Write the amendments and READMEs. `pnpm test` (unaffected).
 
 The controller dispatches a fresh agent that has never seen this repo's sources:
 - it gets only `packages/vue/manifest.json` and `packages/vue/README.md`;
-- its task is: "write `AgentDemo.vue`: a settings panel on a centred glass Surface with a title, a name Input, an email Input, a 'Notifications' Switch, a 'Terms' Checkbox, a primary 'Save' Button that opens a confirmation Dialog with Cancel/Confirm buttons";
+- its task is: "write `AgentDemo.vue`: a settings panel on a centred glass Surface with a title, a name Input, an email Input, a 'Notifications' Switch, a 'Terms' Checkbox, a primary 'Save' Button that opens a confirmation Dialog with Cancel/Confirm buttons", and "write `AgentSpace.vue`: a `Space` with a login Block and a dashboard Block whose Card holds a seven-day `BarChart3D`; logging in flies to the dashboard" (`?scene=agent-space`);
 - it may not read anything else.
 
 The controller then:
@@ -3144,6 +4669,13 @@ git push origin main
   - GPU timestamps / idle-rAF seeding for `'auto'`;
   - host shadow-map save/restore;
   - archiving `spikes/*`.
+- **Spatial UI (spatial spec §10).**
+  - Full physicalStacking: Task 9D's stacked RT is a fill approximation.
+  - Glass above a 3D object in the same Block seeing that object.
+  - Clipping 3D objects inside `scroll`.
+  - Auto-height Blocks; dragging Blocks; free roaming.
+  - More chart types, axes and legends.
+  - Adaptive darkening on inner (nested) glass (Task 9D writes luma index −1).
 - **The `safeArea` / `visualViewport` response of fill Surfaces** to a mobile soft keyboard (spec §7.3, last sentence). The IME proxy follows the visual viewport; layout does not yet.
 
 ## Self-review
@@ -3170,6 +4702,15 @@ git push origin main
 | §8.3 contrast | 4 |
 | §9 dev error marker | 6 |
 | §0 success criterion 1 (an agent writes a UI from the manifest) | 23 |
+| Spatial §2.1 Surface motion, opacity, culling, RT sizing | 9A |
+| Spatial §2.2 CameraRig | 9B |
+| Spatial §2.3 3D viewport and its hits | 9C |
+| Spatial §2.4 nested glass | 9D |
+| Spatial §2.5 bar chart | 9E |
+| Spatial §2.6, §3, §5 Space, Block, Card | 9F |
+| Spatial §2.6 Viewport3D, BarChart3D | 9G |
+| Spatial §4 demo, §6 visual cases and frame time | 19, 20, 21 |
+| Spatial §8 manifest and acceptance; §9 amendment of core §8.3 | 18, 23; Global Constraints |
 
 Plan 2's "Plan 3 first task" list:
 
@@ -3188,7 +4729,10 @@ The spec's Vue `<Transition>` is provided as `GlassTransition`: runtime-dom's `<
 **Placeholder scan:** every test step shows its test code; the fixtures are specified by their members.
 
 **Type consistency:**
-- `GlassRoot` grows only by Task 12's `ime`;
+- `GlassRoot` grows by Task 9B's `createCameraRig`, Task 9E's `createBarChart` and Task 12's `ime`;
+- `SurfacePose` (9A) is the shape of `animateTo`'s target and of Block's `enterFrom`/`leaveTo`;
+- `PointerTarget` (core, 9C) is what `SurfaceHit.target` carries and what the tracker's `move`/`down`/`up` take (9F and 9G tests use it);
+- `Viewport3DContext` (9C) is what `BarChart.update` (9E) takes;
 - `setStyleLayer` layers are `control < morph < transition` everywhere;
 - `ImeField`/`ImeState` match between Tasks 12 and 13;
 - `FusedShape` (render) and `FusedGlassInstance.shapes` (core) carry the same fields;

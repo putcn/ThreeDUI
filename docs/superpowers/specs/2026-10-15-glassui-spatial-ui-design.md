@@ -89,16 +89,17 @@ interface Viewport3DContext { width: number; height: number; reducedMotion: bool
 - **限制（本期）**：同一 Block 里叠在图表上方的玻璃元素看不到图表（元素玻璃采样的是内容 RT，3D 物体不在其中）。悬停数值标签因此用平面面板，不用玻璃。
 - **淡出**：attach 时记下每个材质原有的 `opacity` 与 `transparent`，每帧以 原值 × `surface.opacity` 写回；detach 时恢复原值。
 - **光照与阴影**：物体在 UI 场景里，受 UI 灯光照射；`castShadow` 打开，投影落在背板与 Card 上。阴影相机的拟合范围把 `depth` 算进去。
-- **命中**：射线同时测试内容 quad 与已挂物体（递归），取最近者。命中挂载物体时，事件派发给挂载的节点，事件对象多一个 `object`（命中的 Object3D；在 core 里类型为 `unknown`）。节点的悬停范围是"盒子区域 ∪ 物体"：射线落在物体上，即使它在内容面上的投影已出了盒子，也仍算在节点内；`pointermove` 每次带上当前的 `object`（落在盒子空白处时为 `null`）。
+- **命中**：射线同时测试内容 quad 与已挂物体（递归），取最近者。命中挂载物体时，事件派发给挂载的节点，事件对象多一个 `object`（命中的 Object3D；在 core 里类型为 `unknown`）。节点的悬停范围是"盒子区域 ∪ 物体"：射线落在物体上，即使它在内容面上的投影已出了盒子，也仍算在节点内；`pointermove` 每次带上当前的 `object`（落在盒子空白处时缺省）。
 - `update` 返回 true 时 root 继续出帧（`needsFrame`）。
 
 ### 2.4 render：嵌套玻璃（Card 里放玻璃控件）
 
 核心 spec §12 后置了 physicalStacking（玻璃看见玻璃）。容器玻璃化之后，Card 里放按钮、输入框会很常见；不处理的话，内层玻璃只采样内容 RT，看不到外层 Card，会像在 Card 上开了透明的洞。本期做一个近似：
 
-- 一个 Surface 的渲染列表里出现"祖先也是玻璃"的玻璃元素时，它在内容 RT 之后再画一张**叠层 RT**：内容 RT，加上外层玻璃以 `'fill'` 模式（无折射、半透明，`fillAlpha` 0.35，沿用其 tint 与边框规则）画出的形状，再加上外层玻璃上的前景文字与图标。
+- 一个 Surface 的渲染列表里出现"祖先也是玻璃"的玻璃元素时，它在内容 RT 之后再画一张**叠层 RT**：内容 RT；外层玻璃画成半透明面板，颜色按 `'fill'` 模式的取色规则（有发光色取发光色，否则 tint，否则主题 `fill`），不透明度 0.35，带 1 pt `tertiaryLabel` 边框（同样乘 0.35）；再加上外层玻璃上的前景文字与图标。（用面板而不用 fill 模式的玻璃材质：后者的受光外壳在没有灯光的离屏场景里会发黑。）
 - 内层玻璃改为采样叠层 RT（及其模糊层）；外层玻璃仍采样内容 RT。叠层 RT 只在内容 RT 重绘时重画，没有嵌套玻璃的 Surface 不分配它。
 - 只区分两层：第三层及更深的玻璃与第二层一样采样叠层 RT，彼此看不见。
+- 内层玻璃本期不做自适应变暗（luma），它的索引会与外层冲突；后置。
 - minimal 档本来就不采样背景（全部 `'fill'`），不需要叠层 RT。
 
 ### 2.5 render：柱状图
@@ -111,7 +112,7 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 ```
 
 - **布局**（Vue 侧标签行用同一规则）：盒宽 W、高 H、n 根柱子；n 等分列，第 i 根中心 x = (i + 0.5)·W/n − W/2，柱宽 = 0.6·W/n，高 = value/max·H，底边在 y = −H/2，从 z = 0 向外伸出 0.6·柱宽的厚度。
-- **几何与材质**：圆角长方体（圆角 0.12·柱宽），instanced 一次绘制；`MeshStandardNodeMaterial`，roughness 0.35，metalness 0。
+- **几何与材质**：每根柱子一个圆角长方体 Mesh（圆角 0.12·柱宽，按目标高度建几何），`MeshStandardNodeMaterial`，roughness 0.35，metalness 0。柱子少，不用 instancing，换来静止时精确的圆角与精确的射线命中（`object.userData.index` 即柱序号）。
 - **生长**：第一次 `set` 时每根柱子的高与厚从 0 弹到目标（主题 `smooth` 弹簧，相邻两根间隔 40 ms 起步），像从背板里长出来；之后的 `set` 从当前高度弹到新高度，新增的柱子从 0 长出。`reducedMotion` 时直接到位。
 - **悬停**：被悬停的柱子亮度 × 1.2、厚度 × 1.15，弹簧过渡。
 
@@ -121,12 +122,12 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 |---|---|---|---|
 | `Space` | 空间容器：排布 Block、持有镜头 rig、管理焦点 | `focus?: string`（`v-model:focus`；省略时取第一个出现的 Block），`radius?: number`（弧半径，世界单位，默认 7），`gap?: number`（相邻 Block 间隔，默认 0.5），`camera?: boolean`（默认 true；false 时只排布与管理焦点，不动相机），`parallax?: boolean`（默认 true） | `update:focus`；默认插槽只放 `Block`（`v-if`/`v-for` 照常可用）。没绑定 `focus` 时 Space 自己记住焦点，点击非焦点 Block 照样切换 |
 | `Block` | 一块玻璃背板的世界层 Surface，装一个界面 | `name: string`（必填，Space 内唯一），`width: number`、`height: number`（pt），`position?`、`rotation?`、`scale?`（同 `Surface`），`radius?: number`（默认 48），`background?: 'glass' \| string`（默认 `'glass'`），`ptPerUnit?: number`（默认 244），`enterFrom?`、`leaveTo?`（`SurfacePose` 形状的偏移，见 §3.3） | `error`；默认插槽；`style`/`tw`/`class` 落到内层内容盒（默认纵向排列、`padding: 40`、`gap: 24`） |
-| `Card` | Block 内的分组容器：更薄的玻璃，圆角与 Block 同心 | `title?: string`（17 pt、600 字重的标题） | 默认插槽；`style`/`tw`/`class` 落到 Card 本身（默认 `bg: 'glass'`、`radius: 'concentric'`、`padding: 24`、`gap: 12`，玻璃厚度取主题默认值的一半） |
+| `Card` | Block 内的分组容器：更薄的玻璃，圆角与 Block 同心 | `title?: string`（17 pt、600 字重的标题） | 默认插槽；`style`/`tw`/`class` 落到 Card 本身（默认 `bg: 'glass'`、`radius: 'concentric'`、`padding: 24`、`gap: 12`，玻璃厚度 12 pt：主题的默认厚度是短边的比例，大卡片会厚到 60 pt） |
 | `Viewport3D` | 通用 3D 插槽：一个布局盒，挂一个 three 物体 | `object: unknown`（一个 `Object3D`），`depth?: number`，`update?: (dt, ctx) => boolean` | `pointerenter/leave/move`、`click`（事件带 `object`） |
 | `BarChart3D` | 内置 3D 柱状图 | `data: { label: string; value: number; color?: string }[]`，`max?: number`（默认把最大值向上取到 1/2/5 × 10ⁿ），`format?: (v: number) => string`（默认最多两位小数） | `select`（点击某根柱子，payload `{ index, label, value }`） |
 
 - `Block` 内部就是一个 `background: 'glass'` 的世界层 Surface（复用 Task 9 的 `<Surface>` 实现），外加：从 `Space` 取得排布位置，进场时 `animateTo` 从 `enterFrom` 弹到原位，离场时弹到 `leaveTo` 后再移除。
-- **离场时内容不能先消失**：`Space` 用 Vue 的 `BaseTransition` 包住插槽里的每个 Block（按位置与 key 稳定对应），离场钩子等 `animateTo(leaveTo)` 结束再调 `done()`；在此之前 Block 的组件与它传送进 Surface 的内容都保持挂载。`motion: 'frozen'` 时立即 `done()`。
+- **离场时内容不能先消失**：Block 卸载时先把它的 Surface 标为保留（渲染器的 `holdContent`）：对保留 Surface 里的节点，渲染器的 `remove` 不执行，Vue 照常卸载组件，节点留在原处；Block 再 `animateTo(leaveTo)`，结束后移除整个 Surface（节点随之释放）。`v-if`、`v-for` 与整个 Space 卸载都走这一条。挂在其中的 3D 物体也随 Block 飞走，Surface 销毁时才卸下。`motion: 'frozen'` 时离场立即完成。
 - `BarChart3D` 由 `Viewport3D`（图表区，`flex: 1`）与其下的标签行（n 等分列，13 pt `secondaryLabel`）组成；悬停时在柱顶上方 8 pt 处显示一个平面填充面板，里面是 `format(value)`。颜色 token 按当前主题与明暗解析，切换明暗时更新。空数组时只显示居中的"暂无数据"。
 - `Viewport3D` 与 `BarChart3D` 放进 `scroll` 节点里会报错（本期不支持对 3D 物体做裁剪）。
 
