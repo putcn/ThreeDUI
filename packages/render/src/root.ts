@@ -602,10 +602,11 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       })
       fitShadows(changed)
       // the camera or the field's Surface may have moved: the IME candidate window follows the caret. The caret is the
-      // field's code: a throw is reported and the field let go, and the tick still ends
-      const field = ime?.active
-      if (ime && field) {
-        try { ime.reposition() } catch (e) { reportError(field.surface, toError(e)); ime.blur(field) }
+      // field's code: a throw is reported and the field let go, and the tick still ends. The bridge is held here: an
+      // 'error' listener may dispose the root (`ime` null; the disposed bridge's `blur` is a no-op)
+      const bridge = ime, field = bridge?.active
+      if (bridge && field) {
+        try { bridge.reposition() } catch (e) { reportError(field.surface, toError(e)); bridge.blur(field) }
       }
       settleAfterTick()
     },

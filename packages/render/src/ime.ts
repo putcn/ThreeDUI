@@ -32,6 +32,8 @@ export interface DocLike {
   addEventListener(t: string, fn: () => void): void
   removeEventListener(t: string, fn: () => void): void
   activeElement: unknown
+  /** Whether the page has the system focus (`document.hasFocus`): without it, a field is never let go on `reposition`. */
+  hasFocus?(): boolean
 }
 /** The parts of a `<textarea>` (or, for passwords, an `<input type="password">`) the bridge uses. */
 export interface TextareaLike {
@@ -103,9 +105,12 @@ const PROXY_ATTRS: readonly (readonly [string, string])[] = [
  *   returns true.
  * - The proxy losing the page focus other than through `blur` (to another page element, or blurred by the page's code)
  *   detaches the field and calls `ImeField.onBlur`. A window or tab switch does not: the page keeps the proxy as its
- *   `activeElement` and focuses it again on return, so the field stays active (as a native input stays focused).
- * - A composition cut short (`blur`, an outside blur, another field or element taking over) is reported over first: the
- *   field's last `ImeState` has `composition: null`.
+ *   `activeElement` and focuses it again on return, so the field stays active (as a native input stays focused). Page
+ *   code that focuses another element while the window is in the background sends no second blur: `reposition` (every
+ *   tick) finds the page focused (`hasFocus`) on an element that is not the proxy, and lets the field go the same way.
+ * - A composition cut short (`blur`, an outside blur, another field or element taking over) is reported over: the
+ *   field's last `ImeState` has `composition: null`. The report comes once the bridge has let the field go (or taken
+ *   the next one), so a field whose `onChange` throws finds the bridge consistent; `onBlur` follows it even then.
  * - A `mousedown` on the canvas while a field is active is prevented: its default would move the page focus from the
  *   proxy to the canvas right after a press focused the field (the press itself arrives as `pointerdown`, before).
  *   With no field active the canvas takes focus as usual.
@@ -146,10 +151,7 @@ export class ImeBridge {
       // still the page's focused element: the window or tab lost focus, and the proxy gets it back on return
       if (this.doc.activeElement === this.proxy) return
       const f = this.field
-      if (!f) return   // `blur` (or a swap) detached it first
-      this.endComposition()
-      this.detach()
-      f.onBlur()
+      if (f) this.leave(f)   // else `blur` (or a swap) detached it first
     }],
   ]
 
@@ -172,7 +174,7 @@ export class ImeBridge {
     const tag = field.kind === 'password' ? 'input' : 'textarea'
     // focused again mid-composition, in the same element: the IME keeps its text. Otherwise a composition ends here
     const keep = this.field === field && this.composing && this.proxy !== null && this.tag === tag
-    if (!keep) this.endComposition()
+    const left = this.field, cut = keep ? null : this.cutComposition()
     if (field !== this.field) this.goodHeight = Number.NaN   // a new caret: no height of another's to fall back on
     this.field = null                                         // what the swap below fires belongs to no field
     if (this.proxy && this.tag !== tag) this.remove()
@@ -180,9 +182,10 @@ export class ImeBridge {
     el.setAttribute('inputmode', field.kind === 'number' ? 'decimal' : 'text')
     if (!keep) this.write(el, field)
     this.field = field
-    this.reposition()
+    this.place(field, el)   // not `reposition`: the proxy takes the page focus only below
     el.focus({ preventScroll: true })
     this.opts.pointer?.setActive(field.surface)
+    if (cut && left) left.onChange(cut)
   }
 
   /** Stop editing `field` (if it is the active one): the proxy blurs, the canvas takes focus back (keys keep working). */
@@ -190,12 +193,13 @@ export class ImeBridge {
     const el = this.proxy
     if (field !== this.field || !el) return
     const focused = this.doc.activeElement === el
-    this.endComposition()
+    const cut = this.cutComposition()
     this.field = null      // the proxy's blur below is not the field's (no `onBlur`)
     if (focused) el.blur() // commits a composition: its events reach no field
     this.detach()
     // only focus the proxy holds is handed to the canvas: the page may have moved it elsewhere already
     if (focused) this.opts.canvas.focus?.({ preventScroll: true })
+    if (cut) field.onChange(cut)
   }
 
   /** The app changed the field's value or selection (v-model, click): push it to the proxy (outside a composition). */
@@ -207,10 +211,17 @@ export class ImeBridge {
   /**
    * Re-place the proxy at the active caret (the root calls this every tick while a field is active). A caret top that
    * cannot be projected (behind the camera) leaves the proxy where it is; a bottom that cannot keeps the last height.
+   * The page focused (`hasFocus`) on another element than the proxy is leaving: the field is let go (see the class doc).
    */
   reposition(): void {
     const f = this.field, el = this.proxy
     if (!f || !el) return
+    if (this.doc.activeElement !== el && this.doc.hasFocus?.() === true) { this.leave(f); return }
+    this.place(f, el)
+  }
+
+  /** The proxy to `f`'s caret, projected (see `reposition`). */
+  private place(f: ImeField, el: TextareaLike): void {
     const c = f.caret()
     const top = this.opts.screenFromPoint(f.surface, c.x, c.y)
     if (!top || !Number.isFinite(top.x) || !Number.isFinite(top.y)) return
@@ -262,11 +273,21 @@ export class ImeBridge {
     el.setSelectionRange(f.selectionStart, f.selectionEnd)
   }
 
-  /** A composition in progress is over (cut short): the active field hears its state without one. */
-  private endComposition(): void {
-    if (!this.composing) return
+  /**
+   * A composition in progress is over (cut short): the active field's state without one, for the caller to report once
+   * the bridge's own state is settled; null when nothing was being composed.
+   */
+  private cutComposition(): ImeState | null {
+    if (!this.composing) return null
     this.composing = false
-    this.report()
+    return this.field && this.proxy ? this.read(this.proxy) : null
+  }
+
+  /** `f` lost the page focus outside the canvas UI: let go, then told (its cut composition, then `onBlur`). */
+  private leave(f: ImeField): void {
+    const cut = this.cutComposition()
+    this.detach()
+    try { if (cut) f.onChange(cut) } finally { f.onBlur() }
   }
 
   /** No field is active: nothing the proxy fires reaches one, and nothing typed stays in the page. */

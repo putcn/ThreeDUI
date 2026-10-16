@@ -314,6 +314,56 @@ describe('ImeBridge', () => {
     bridge.focus(field)                                           // the same textarea serves text and number fields
     expect(doc.created).toHaveLength(3); expect(doc.created[2]!.attrs.inputmode).toBe('text')
   })
+  it('a final report that throws finds the bridge done: the field let go, the proxy cleared, onBlur still called (N2)', () => {
+    const boom = new Error('boom')
+    /** `s`'s field mid-composition, its final report (composition: null) throwing after running `check`. */
+    const composing = (s: ReturnType<typeof setup>, check: () => void) => {
+      s.bridge.focus(s.field); const ta = s.doc.created[0]!
+      ta.fire('compositionstart', {}); ta.value = 'abcn'; ta.fire('compositionupdate', { data: 'n' })
+      s.field.onChange = st => { if (!st.composition) { check(); throw boom } }
+      return ta
+    }
+    // ImeBridge.blur: the report comes once the field is let go and the canvas has the page focus back
+    const a = setup(), ta = composing(a, () => { expect(a.bridge.active).toBeNull(); expect(a.canvas.focus).toHaveBeenCalled() })
+    expect(() => a.bridge.blur(a.field)).toThrow(boom)
+    expect(a.bridge.active).toBeNull(); expect(ta.value).toBe('')
+    // an outside blur: the report, then onBlur even though the report threw
+    const b = setup(), tb = composing(b, () => { expect(b.bridge.active).toBeNull() })
+    expect(() => tb.blur()).toThrow(boom)
+    expect(b.blurs).toEqual([1]); expect(b.bridge.active).toBeNull()
+    // another field takes over: it is active, its value in the focused proxy, before the old one hears its end
+    const c = setup(), second: ImeField = { ...c.field, value: 'second', selectionStart: 6, selectionEnd: 6, onChange: vi.fn() }
+    const tc = composing(c, () => { expect(c.bridge.active).toBe(second) })
+    expect(() => c.bridge.focus(second)).toThrow(boom)
+    expect(c.bridge.active).toBe(second); expect(tc.value).toBe('second'); expect(c.doc.activeElement).toBe(tc)
+    tc.value = 'secondx'; tc.fire('input', {}); expect(second.onChange).toHaveBeenCalledTimes(1)   // not stuck composing
+    expect(vi.mocked(second.onChange).mock.calls[0]![0].composition).toBeNull()
+  })
+  it('page code that moved the focus while the window was in the background: the next reposition lets the field go (N3)', () => {
+    const { bridge, doc, field, blurs, changes } = setup()
+    let hasFocus = true
+    const d = Object.assign(doc, { hasFocus: () => hasFocus })
+    bridge.focus(field); const ta = d.created[0]!
+    bridge.reposition()                                          // the proxy holds the page focus: nothing to decide
+    expect(bridge.active).toBe(field)
+    ta.fire('compositionstart', {}); ta.value = 'abcn'; ta.fire('compositionupdate', { data: 'n' })
+    hasFocus = false; ta.fire('blur', {})                        // the window lost focus: the proxy is still the activeElement
+    d.activeElement = { other: true }                            // page code focused another element meanwhile: no second blur comes
+    bridge.reposition()                                          // still in the background: the page has not settled where focus is
+    expect(bridge.active).toBe(field); expect(blurs).toEqual([])
+    hasFocus = true; bridge.reposition()                         // back in the window, and the proxy is not focused: that is leaving
+    expect(bridge.active).toBeNull(); expect(blurs).toEqual([1])
+    expect(changes.at(-1)).toMatchObject({ value: 'abcn', composition: null })
+    expect(ta.value).toBe('')
+  })
+  it('focus places the proxy while another element still has the page focus, and does not take that for leaving (N3)', () => {
+    const { bridge, doc, field, blurs } = setup()
+    const d = Object.assign(doc, { hasFocus: () => true }); d.activeElement = { other: true }
+    bridge.focus(field)
+    expect(bridge.active).toBe(field); expect(blurs).toEqual([])
+    expect(d.activeElement).toBe(d.created[0]); expect(d.created[0]!.style.left).toBe('110px')
+  })
+
   it('dispose removes the proxy and every listener it added (document, viewport, canvas)', () => {
     const { bridge, doc, field, canvas, viewport } = setup(); bridge.focus(field)
     const ta = doc.created[0]!
@@ -424,6 +474,15 @@ describe('UIRoot.ime', () => {
     expect(root.ime!.active).toBeNull(); expect(f.blurs).toBe(0); expect(renderer.domElement.focus).toHaveBeenCalled()
     expect(() => root.tick(0)).not.toThrow(); expect(errors).toHaveLength(1)
     root.dispose()
+  })
+  it('an error listener that disposes the root while tick reports a throwing caret: the tick still ends (N1)', async () => {
+    const { root } = await rootWithIme()
+    const s = root.createSurface({ width: 200, height: 100 }); root.tick(0)
+    const f = fieldOn(s); root.ime!.focus(f)
+    f.caret = () => { throw new Error('stale node') }
+    root.on('error', () => root.dispose())
+    expect(() => root.tick(0)).not.toThrow()
+    expect(root.ime).toBeNull(); expect(f.blurs).toBe(0)
   })
   it('dispose disposes the bridge (its listeners and proxy go) and ime is null after it', async () => {
     const { root, doc } = await rootWithIme()
