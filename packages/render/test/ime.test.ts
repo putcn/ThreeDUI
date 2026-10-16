@@ -218,6 +218,54 @@ describe('ImeBridge', () => {
     expect(ta.value).toBe('abcn'); ta.fire('input', {})
     expect(changes.at(-1)!.composition).toEqual({ start: 3, end: 4 })
   })
+  it('a window or tab switch keeps the field: the page still holds the proxy focused (I1)', () => {
+    const { bridge, doc, field, blurs, changes } = setup(); bridge.focus(field); const ta = doc.created[0]!
+    ta.value = 'abcd'; ta.fire('blur', {})                      // the window lost focus; activeElement is still the proxy
+    expect(blurs).toEqual([]); expect(bridge.active).toBe(field); expect(ta.value).toBe('abcd')
+    ta.selectionStart = ta.selectionEnd = 4; ta.fire('input', {})   // back in the window: typing goes on to the field
+    expect(changes.at(-1)).toMatchObject({ value: 'abcd', selectionStart: 4 })
+    ta.blur()                                                     // focus moved to another page element: that is leaving
+    expect(blurs).toEqual([1]); expect(bridge.active).toBeNull()
+  })
+  it('a kind change on the same field mid-composition makes a fresh proxy that carries the field (M1)', () => {
+    const { bridge, doc, field, keys } = setup(); bridge.focus(field); const ta = doc.created[0]!
+    ta.selectionStart = ta.selectionEnd = 3; ta.fire('compositionstart', {}); ta.value = 'abcn'; ta.fire('compositionupdate', { data: 'n' })
+    field.kind = 'password'; field.value = 'abcn'; field.selectionStart = field.selectionEnd = 4
+    bridge.focus(field)
+    const input = doc.created[1]!
+    expect(input.tag).toBe('input'); expect(input.value).toBe('abcn'); expect([input.selectionStart, input.selectionEnd]).toEqual([4, 4])
+    field.value = 'abcnx'; bridge.sync(field); expect(input.value).toBe('abcnx')   // not stuck composing
+    const enter = { key: 'Enter', preventDefault: vi.fn() }; input.fire('keydown', enter)
+    expect(keys).toEqual(['Enter'])
+  })
+  it('the last good caret height belongs to its field: another field starts from its own (M2)', () => {
+    let bottomNull = false
+    const { bridge, doc, field } = setup({ screenFromPoint: (_s, x, y) => bottomNull && y !== 20 ? null : { x: x * 0.5, y: y * 0.5 } })
+    bridge.focus(field)
+    expect(doc.created[0]!.style.height).toBe('12px')             // field: 24 pt, projected at half size
+    const other: ImeField = { ...field, caret: () => ({ x: 10, y: 20, height: 30 }) }
+    bottomNull = true; bridge.focus(other)
+    expect(doc.created[0]!.style.height).toBe('30px')             // not the first field's 12
+  })
+  it('a blur that interrupts a composition reports its end first: the field never keeps a stale range (M3)', () => {
+    const log: string[] = []
+    const { bridge, doc, field, changes } = setup(); field.onBlur = () => log.push('blur')
+    const push = field.onChange; field.onChange = s => { log.push(`change:${s.composition ? 'composing' : 'done'}`); push(s) }
+    bridge.focus(field); const ta = doc.created[0]!
+    ta.selectionStart = ta.selectionEnd = 3; ta.fire('compositionstart', {}); ta.value = 'abcni'; ta.selectionStart = ta.selectionEnd = 5; ta.fire('compositionupdate', { data: 'ni' })
+    bridge.blur(field)
+    expect(changes.at(-1)).toEqual({ value: 'abcni', selectionStart: 5, selectionEnd: 5, composition: null })
+    // an outside blur mid-composition: the final report, then onBlur
+    bridge.focus(field); log.length = 0
+    ta.selectionStart = ta.selectionEnd = 3; ta.fire('compositionstart', {}); ta.value = 'abcn'; ta.selectionStart = ta.selectionEnd = 4; ta.fire('compositionupdate', { data: 'n' })
+    ta.blur()
+    expect(log).toEqual(['change:composing', 'change:done', 'blur'])
+    // switching to another field mid-composition: the one left behind hears it end too
+    const second: ImeField = { ...field, onChange: vi.fn() }
+    bridge.focus(field); ta.fire('compositionstart', {}); ta.fire('compositionupdate', { data: 'x' }); log.length = 0
+    bridge.focus(second)
+    expect(log).toEqual(['change:done']); expect(second.onChange).not.toHaveBeenCalled()
+  })
   it('events after blur belong to no field; blur of a field that is not active is a no-op; blur clears the proxy', () => {
     const { bridge, doc, field, changes, canvas } = setup(); bridge.focus(field); const ta = doc.created[0]!
     const other: ImeField = { ...field }; bridge.blur(other)
@@ -360,6 +408,21 @@ describe('UIRoot.ime', () => {
     expect(renderer.domElement.focus).toHaveBeenCalledWith({ preventScroll: true })
     root.pointer!.handle('keydown', { key: 'Tab', preventDefault: vi.fn() })
     expect(s.focus.current).toBe(two)
+    root.dispose()
+  })
+  it('a caret that throws in tick is reported and its field blurred; the tick still ends (afterTick resolves) (M4)', async () => {
+    const { root, renderer } = await rootWithIme()
+    const s = root.createSurface({ width: 200, height: 100 }); root.tick(0)
+    const f = fieldOn(s); root.ime!.focus(f)
+    const boom = new Error('stale node'); f.caret = () => { throw boom }
+    const errors: { surface: Surface | null; error: Error }[] = []; root.on('error', e => errors.push(e))
+    let settled = false; void root.afterTick().then(() => { settled = true })
+    expect(() => root.tick(0)).not.toThrow()
+    await Promise.resolve()
+    expect(settled).toBe(true)
+    expect(errors).toEqual([{ surface: s, error: boom }])
+    expect(root.ime!.active).toBeNull(); expect(f.blurs).toBe(0); expect(renderer.domElement.focus).toHaveBeenCalled()
+    expect(() => root.tick(0)).not.toThrow(); expect(errors).toHaveLength(1)
     root.dispose()
   })
   it('dispose disposes the bridge (its listeners and proxy go) and ime is null after it', async () => {

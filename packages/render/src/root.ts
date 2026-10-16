@@ -75,7 +75,9 @@ export interface UIRootEventMap {
   quality: { tier: QualityTier; prev: QualityTier; profile: Readonly<QualityProfile> }
   /**
    * A Surface failed (it stopped drawing: `Surface.markFailed`), or, with `surface: null`, a render of the UI threw and
-   * no Surface reproduced it (`render` / `renderUI`). Without a listener the root logs it (`console.error`).
+   * no Surface reproduced it (`render` / `renderUI`); or an active IME field's `caret()` threw in `tick` (`surface`: the
+   * field's, which keeps drawing; the field is blurred, `ImeBridge.blur`). Without a listener the root logs it
+   * (`console.error`).
    */
   error: { surface: Surface | null; error: Error }
   /**
@@ -599,8 +601,12 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
         s.prepare(renderer, projectedPx(s), dpr, camera, cameraMoved || moved || animating.has(s))
       })
       fitShadows(changed)
-      // the camera or the field's Surface may have moved: the IME candidate window follows the caret
-      if (ime?.active) ime.reposition()
+      // the camera or the field's Surface may have moved: the IME candidate window follows the caret. The caret is the
+      // field's code: a throw is reported and the field let go, and the tick still ends
+      const field = ime?.active
+      if (ime && field) {
+        try { ime.reposition() } catch (e) { reportError(field.surface, toError(e)); ime.blur(field) }
+      }
       settleAfterTick()
     },
     setTheme(t) { if (disposed) return; checkTheme('UIRoot.setTheme', t); theme = t; restyleAll() },
