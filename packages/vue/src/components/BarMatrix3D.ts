@@ -32,7 +32,7 @@ const BarMatrix3DProps = z.object({
     '第四维：每格一个有限数（如周转天数），与 values 同形（行 × 列）；柱子的颜色按它在自身最小值到最大值之间的位置在色带上取（最小取色带第一色、最大取最后一色，全相等取中间色），并在读数行下显示色带图例。省略时颜色按 数值 / max 取'),
   colorRamp: z.array(z.string()).min(2).max(6).optional().describe(
     '色带：2–6 个颜色 token 或 #hex，从低到高。默认 ["#34c759", "#ffb86b", "#ff6b6b"]（绿 → 琥珀 → 红：周转天数少为好，所以低值为绿）'),
-  colorLabel: z.string().optional().describe('colorValues 的名称，如 "周转天数"：写在图例色带下方，也放在读数里颜色值的前面'),
+  colorLabel: z.string().optional().describe('colorValues 的名称，如 "周转"：写在图例色带下方，也原样放在读数里颜色值的前面（"周转 12 天"）'),
   max: z.number().positive().finite().optional().describe('满高对应的数值；默认把最大值向上取到好看的刻度顶（4580 → 5000、17 → 20；全为 0 时取 1）。比它大的数值按它封顶（柱子不会更高，读数仍显示原值）'),
   format: formatFn.optional().describe('读数里数值的写法 (v: number) => string，如 v => `${v.toLocaleString()} 件`；默认最多两位小数（1.5、2、0.33）'),
   colorFormat: formatFn.optional().describe('读数与图例里 colorValues 的写法 (v: number) => string，如 v => `${v} 天`；默认最多两位小数'),
