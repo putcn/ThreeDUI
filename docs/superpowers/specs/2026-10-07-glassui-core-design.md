@@ -316,13 +316,15 @@ app.mount(root.screen.createSurface({ fill: true }))  // 或 mount(someSurface)
 | `Dialog` | 模态，走 Portal 到顶层 Surface，背景暗化 + 玻璃面板缩放入场 | v-model:open, title, closeOnBackdrop；slot default/footer |
 | `GlassContainer` | 对应 Apple `GlassEffectContainer`：子玻璃形状按 `spacing` 融合，支持 `glassId` 形变过渡 | spacing；slot |
 
+空间组件（`Space`、`Block`、`Card`、`Viewport3D`、`BarChart3D`）以及它们需要的 render 能力（Surface 变换动画、`CameraRig`、3D 视口、嵌套玻璃、柱状图）见 `2026-10-15-glassui-spatial-ui-design.md`。
+
 **尺寸与间距 token（spike 中确认，80pt 高控件为基准）**：控件内边距 26、前置/后置图标 28、图标与文字间距 14、图标+文字组整体居中（组内间距 12）、checkbox 玻璃钮 44 × 44（圆角 12）、开关 136 × 62（滑块 48，边距 7，滑块中心 = 半宽 − 边距 − 滑块半径）、同一行内的控件右边缘对齐输入框右边缘。
 
 每个组件：`defineComponent` + zod props schema → 自动导出到 `manifest.json`（名称、描述、props 的类型/默认值/取值说明、events 的 payload、slots、2–3 个示例片段、常见错误）。组件内部只用 `Box/Text/Icon/glass` 原语与 Style，不直接碰 render 包。
 
 ### 8.3 Liquid Glass 组件规范（在组件层固定）
 
-- 玻璃只用于控制层（按钮、输入框、开关、对话框面板、工具条）；内容区用填充色与 vibrancy，不叠玻璃。
+- 玻璃用于容器与控件：Block 背板、Card、对话框面板，以及按钮、输入框、开关、工具条。`Box` 只负责布局，不带玻璃；文字与列表项不单独玻璃化，落在所在容器的玻璃上。玻璃里的玻璃按空间界面 spec（`2026-10-15-glassui-spatial-ui-design.md`）§2.4 处理。（2026-10-15 修订；原文：玻璃只用于控制层，内容区用填充色与 vibrancy，不叠玻璃。）
 - 按钮三层结构：发光层（有色）+ 透明玻璃壳（直壁 + 小圆角）+ 装饰层（轮廓亮线、底边亮带、透射光晕）。主按钮 = 发光层强度 ≈1.1；次按钮 = 无发光层的清玻璃；checkbox = 44pt 方形清玻璃钮 + 勾；开关 = 发光层按滑块位置软分割。
 - 形状：按钮默认 capsule；面板固定半径；嵌套子元素默认 `radius: 'concentric'`。
 - 按压：`scale 0.96 → spring('snappy')`，指尖处内发光；悬停：`glint` 增强 + 轻微 `tilt`（≤3°，仅指针设备）。
