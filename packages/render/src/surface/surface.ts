@@ -735,14 +735,14 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * Sizes the content RT (and the pyramid) for the Surface's projected size — `dpr × max(quality.contentScale, 1/dpr) ×
    * contentScale` texels per CSS px, so never below one texel per CSS px from the quality alone — through `rtTarget`:
    * the first `prepare` takes exactly that, a growth 25 % more, and a shrink waits until `moving` (the root: the camera,
-   * the Surface or its animation moved this tick) has been false for `RT_SETTLE_FRAMES` calls in a row. Then redraws it
-   * when dirty (a resize makes it dirty). Then the pyramid, when the RT changed since it was last drawn and the Surface
-   * has glass instances to sample it (its only input is the content RT; without glass its 9 passes are skipped until
-   * glass appears). Then the luma (`SurfaceLuma.update`, not in the 'fill' glass mode), from the content RT's own mips: on a
-   * redraw and while its smoothing settles after one; on a glass Surface drawn with `camera` (the root passes its
-   * own), every frame, over the slab's screen capture too (frosted as the slab frosts it); likewise on a 'none' Surface
-   * with a behind-capture, over that (unfrosted). A throw fails the Surface instead of propagating; a failed or disposed
-   * Surface does nothing.
+   * its projection, the Surface or its animation moved this tick) has been false for `RT_SETTLE_FRAMES` calls in a row
+   * with no growth among them. Then redraws it when dirty (a resize makes it dirty). Then the pyramid, when the RT
+   * changed since it was last drawn and the Surface has glass instances to sample it (its only input is the content RT;
+   * without glass its 9 passes are skipped until glass appears). Then the luma (`SurfaceLuma.update`, not in the 'fill'
+   * glass mode), from the content RT's own mips: on a redraw and while its smoothing settles after one; on a glass
+   * Surface drawn with `camera` (the root passes its own), every frame, over the slab's screen capture too (frosted as
+   * the slab frosts it); likewise on a 'none' Surface with a behind-capture, over that (unfrosted). A throw fails the
+   * Surface instead of propagating; a failed or disposed Surface does nothing.
    */
   prepare(renderer: RendererLike, projectedPx: { width: number; height: number }, dpr: number, camera?: Camera, moving = false): void {
     if (this.error || this.isDisposed) return
@@ -755,6 +755,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
       this.stillFrames = moving ? 0 : Math.min(RT_SETTLE_FRAMES, this.stillFrames + 1)
       const size = rtTarget(this.contentPass, need, { settled: this.stillFrames >= RT_SETTLE_FRAMES, fresh: !this.sized })
       this.sized = true
+      // a growth starts the count over: with nothing moving (a resize, a DPR change) it would otherwise shrink right back
+      if (size.width > this.contentPass.width || size.height > this.contentPass.height) this.stillFrames = 0
       if (this.contentPass.resize(size.width, size.height)) this.contentDirty = true
       this.pyramid?.resize(size.width, size.height)
       const redrawn = this.contentDirty

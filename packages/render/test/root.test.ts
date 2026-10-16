@@ -607,6 +607,26 @@ describe('the root API for the Vue layer', () => {
     void s.animateTo({ position: [0.5, 0, 0] }); root.tick(1 / 60)
     expect(moving()).toBe(true); expect(s.position.x).toBeGreaterThan(0)
   })
+  it('a projection-only change (a zoom, a new aspect) counts as the camera moving', async () => {
+    const { root, camera } = await createRoot()
+    camera.position.set(0, 0, 5)
+    const s = root.createSurface({ layer: 'world', width: 100, height: 100 })
+    const prep = vi.spyOn(s, 'prepare'), moving = () => prep.mock.calls.at(-1)![4]
+    root.tick(1 / 60); root.tick(1 / 60); expect(moving()).toBe(false)
+    camera.fov = 30; camera.updateProjectionMatrix(); root.tick(1 / 60); expect(moving()).toBe(true)
+    root.tick(1 / 60); expect(moving()).toBe(false)
+  })
+  it('an opacity-only animation redraws the shadow map on every tick it runs', async () => {
+    const { root, camera } = await createRoot()
+    camera.position.set(0, 0, 5)
+    const s = root.createSurface({ layer: 'world', width: 100, height: 100 }), shadow = root.lights.key.shadow
+    root.tick(1 / 60); root.tick(1 / 60)
+    shadow.needsUpdate = false; root.tick(1 / 60); expect(shadow.needsUpdate).toBe(false)   // quiet: no refit
+    void s.animateTo({ opacity: 0.5 })
+    for (let i = 0; i < 5; i++) { shadow.needsUpdate = false; root.tick(1 / 60); expect(shadow.needsUpdate).toBe(true) }
+    for (let i = 0; i < 180; i++) root.tick(1 / 60)
+    shadow.needsUpdate = false; root.tick(1 / 60); expect(shadow.needsUpdate).toBe(false)   // settled: quiet again
+  })
   it('a world Surface out of view is neither drawn nor prepared, and redraws when it comes back', async () => {
     const { root, camera } = await createRoot()
     camera.position.set(0, 0, 5); camera.lookAt(0, 0, 0)

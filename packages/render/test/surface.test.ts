@@ -871,6 +871,18 @@ describe('Surface motion', () => {
     s.prepare(r, { width: 400, height: 300 }, 1); expect(size()).toEqual([448, 320])                      // the 30th: shrinks
     s.prepare(r, { width: 400, height: 300 }, 1, undefined, true); expect(size()).toEqual([448, 320])
   })
+  it('a growth while nothing moves (a resize, a DPR change) keeps its headroom: the settle count starts over', () => {
+    const s = world(), r = stubRenderer(), size = () => [s.contentPass.width, s.contentPass.height]
+    s.tick(1 / 60)
+    for (let i = 0; i < 31; i++) s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(size()).toEqual([448, 320])                                                                     // settled
+    const resize = vi.spyOn(s.contentPass, 'resize')
+    s.prepare(r, { width: 500, height: 300 }, 1); expect(size()).toEqual([640, 320])                      // 512 × 1.25 → 640
+    for (let i = 0; i < 29; i++) s.prepare(r, { width: 500, height: 300 }, 1)
+    expect(size()).toEqual([640, 320])                                                                     // not back to 512 next frame
+    expect(resize.mock.results.filter(x => x.value === true)).toHaveLength(1)                             // one reallocation
+    s.prepare(r, { width: 500, height: 300 }, 1); expect(size()).toEqual([512, 320])                      // 30 still frames after it
+  })
 })
 
 describe('Surface: the dual-Kawase pyramid (quality.blur = \'kawase\')', () => {

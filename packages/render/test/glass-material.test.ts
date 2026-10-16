@@ -8,6 +8,7 @@ import { evalSlabVertex, type SlabInstanceParams } from '../src/glass/slab9'
 import { evalNode } from './fixtures/tsl-eval'
 import { buildShaders } from './fixtures/build-shaders'
 import { FILL, FROST } from '../src/glass/frost'
+import type { SurfaceUniforms } from '../src/flat'
 
 const s = { width: 400, height: 300, ptPerUnit: 100 }
 const params: ResolvedGlass = { thickness: 8, fillet: 2.4, filletBottom: 1.6, profile: 'fillet', scatter: 0.05, lift: 0.1, edgeGlow: 0.8, ior: 1.5, dispersion: 0.8, roughness: 0.06, tint: null, absorption: 0, glow: null, cornerExponent: 2, envIntensity: 1, specularIntensity: 1, innerGlow: 0, adaptive: true, variant: 'regular' }
@@ -438,7 +439,7 @@ describe('createGlassMaterial: quality modes (spec §5.6)', () => {
 })
 
 describe('createGlassMaterial: the transmitted shadow fades with the glass (I5)', () => {
-  const make = () => { const b = new GlassBatch(); b.update([inst], s); return createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface, content: new Texture() }).material }
+  const make = (su: SurfaceUniforms = surface) => { const b = new GlassBatch(); b.update([inst], s); return createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface: su, content: new Texture() }).material }
   it('casts its colour by opacity: white (nothing) at 0, the full transmitted colour at 1', () => {
     const m = make()
     const shadow = (p: Parameters<typeof pins>[0]) => evalNode(m.castShadowNode, pins(p))
@@ -459,6 +460,15 @@ describe('createGlassMaterial: the transmitted shadow fades with the glass (I5)'
     // a clip (radius 2 here, via the pinned misc) outside of which nothing casts either
     const clipped = (inside: boolean) => evalNode(m.maskShadowNode, { ...pins(), vGlassMisc: [1, -1, 2, 1], vGlassClip: [inside ? 0 : 50, 0, 10, 10] })[0]
     expect(clipped(true)).toBe(1); expect(clipped(false)).toBe(0)
+  })
+  it('fades with the whole Surface too (su.opacity): a stacked Block\'s glass shadows other Surfaces\' content', () => {
+    const full = make(), faded = make({ ...surface, opacity: uniform(0.5) })
+    // the darkening (1 − colour) is what the opacity scales
+    const dark = (m: ReturnType<typeof make>) => evalNode(m.castShadowNode, pins({ opacity: 0.8 })).slice(0, 3).map(v => 1 - v)
+    const f = dark(full), h = dark(faded)
+    f.forEach((v, i) => { expect(v).toBeGreaterThan(0); expect(h[i]).toBeCloseTo(v / 2, 12) })
+    const mask = (m: ReturnType<typeof make>, opacity: number) => evalNode(m.maskShadowNode, pins({ opacity }))[0]
+    expect(mask(full, 0.015)).toBe(1); expect(mask(faded, 0.015)).toBe(0)   // 0.0075 ≤ 0.01: nothing cast
   })
 })
 

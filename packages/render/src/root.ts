@@ -110,8 +110,9 @@ export interface UIRoot {
    * Surface motion, view culling, layout, animation, content passes, draw order and the shadow fit; `dt` in seconds.
    * Surface motion steps and billboard world Surfaces turn to face the camera before any matrix is read; a world Surface
    * out of view (`Surface.culled`) or faded out is neither drawn nor prepared, its content redrawn when it shows again.
-   * `prepare` is told whether the camera, the Surface or its animation moved (the content RT's settle-to-shrink). Ends by
-   * resolving the `afterTick` promises. A no-op after `dispose`.
+   * `prepare` is told whether the camera (its pose or projection), the Surface or its animation moved (the content RT's
+   * settle-to-shrink); a Surface's motion re-fits the shadows while it runs. Ends by resolving the `afterTick` promises.
+   * A no-op after `dispose`.
    */
   tick(dt: number): void
   /**
@@ -200,7 +201,7 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  * Surface ticks; glyphs evicted by a later Surface's are re-laid out; draw orders are assigned (screen Surfaces above
  * world ones, nearer above farther); the content passes of the shown Surfaces draw (a hidden one's wait for it to show
  * again); the key light's shadow camera is re-fitted to every shown Surface when the camera, a Surface's pose or its
- * glass changed (the map redraws only then); `afterTick` waiters resolve.
+ * glass changed, or a Surface's motion runs (the map redraws only then); `afterTick` waiters resolve.
  */
 export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const { renderer, scene, camera } = opts
@@ -373,7 +374,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
 
   const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3(), point = new Vector3(), view = new Vector3()
   const qCam = new Quaternion(), qParent = new Quaternion()
-  const lastCamera = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
+  const lastCamera = new Matrix4(), lastProjection = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
   /** Each Surface's `matrixWorld` at its last `prepare` (whether it moved since: the content RT's settle count). */
   const lastSeen = new WeakMap<Surface, Matrix4>()
   const frustum = new Frustum(), viewProjection = new Matrix4()
@@ -447,9 +448,11 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       screen.update(camera, { width: size.x, height: size.y })   // also brings camera.matrixWorld up to date
       camera.getWorldPosition(lights.group.position); camera.getWorldQuaternion(lights.group.quaternion)
       lights.group.updateMatrixWorld(true)                         // the key light stays top-left-front of the view
-      const cameraMoved = !lastCamera.equals(camera.matrixWorld)
-      let changed = cameraMoved
-      lastCamera.copy(camera.matrixWorld)
+      // the shadow fit follows the view; the content RTs also follow the projection (a zoom, a new aspect)
+      const viewMoved = !lastCamera.equals(camera.matrixWorld)
+      const cameraMoved = viewMoved || !lastProjection.equals(camera.projectionMatrix)
+      let changed = viewMoved
+      lastCamera.copy(camera.matrixWorld); lastProjection.copy(camera.projectionMatrix)
       camera.getWorldQuaternion(qCam)
       for (const s of surfaces) {
         if (s.model.placement !== 'world') continue
@@ -464,8 +467,9 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       each(s => s.tick(dt))
       // the pages are shared: a later Surface's glyphs may have evicted an earlier one's this tick
       if (text.atlas.epoch !== epoch) each(s => s.refreshText())
-      // rebuilt or animating; a hidden Surface's content waits for it to show again
-      for (const s of surfaces) if (!s.error && s.layer.visible && (s.contentDirty || s.needsFrame)) changed = true
+      // rebuilt or animating (its nodes, or its own motion: a fading glass's shadow fades with it); a hidden Surface's
+      // content waits for it to show again
+      for (const s of surfaces) if (!s.error && s.layer.visible && (s.contentDirty || s.needsFrame || animating.has(s))) changed = true
       assignDrawOrders()
       const dpr = renderer.getPixelRatio()
       each(s => {

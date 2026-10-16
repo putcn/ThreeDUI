@@ -173,7 +173,8 @@ function blackTexture(): DataTexture {
  * refracted per colour channel through the real slab thickness (`mode`: or seen straight through, or replaced by a
  * frosted fill — see `GlassMode`), with Beer–Lambert tint, frost lift, a planar reflection of the content (panel, not
  * in 'fill'), adaptive darkening (clear variant, not in 'fill'), press/edge/inner glow and a coloured transmitted
- * shadow that fades with the instance's opacity (none at all at ≤ 0.01: `maskShadowNode`).
+ * shadow that fades with the instance's opacity times the Surface's (`surface.opacity`; none at all at ≤ 0.01:
+ * `maskShadowNode`).
  *
  * Varyings: the fragment stage never reads an instance attribute. Each would cost one inter-stage variable, and 14 of
  * them plus three's own exceed WebGPU's default 16 (`maxInterStageShaderVariables`) and WebGL2's guaranteed 15
@@ -390,9 +391,10 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   if (keep) m.specularIntensityNode = keep                               // F0 and F90 both scale by it: no specular, no env
   // 'fill': the lit shell is the fill too, so the (1 − FILL.alpha) of it that shows does not wash the colour out
   m.colorNode = fill ? c : tint.mul(tint).mul(0.6)
-  // × the whole Surface's opacity; the shadow below keeps the instance's alone: it lands on the Surface's own content
-  // face, which fades with the Surface
-  m.opacityNode = opacity.mul(o.surface.opacity ?? float(1))
+  // × the whole Surface's opacity, which fades the transmitted shadow below too: stacked Surfaces share the key light's
+  // map, so a fading Block's glass also shadows the content of the Surfaces behind it
+  const fade = opacity.mul(o.surface.opacity ?? float(1))
+  m.opacityNode = fade
 
   // press glow around the touch point (centred slab uv), light leaking at the steep rims, and the inner glow layer
   const dt = slabUV.sub(0.5).sub(touch)
@@ -409,8 +411,8 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const absorbed = exp(float(1).sub(tint).mul(absorption).mul(0.9).negate()).mul(0.9)
   const shadow = select(glowStrength.greaterThan(0), mix(neutral, glowColor, 0.6), select(absorption.lessThan(1e-4), neutral, absorbed))
   // a fading glass lets more light through (white transmits all), and one faded out writes nothing to the map at all
-  m.castShadowNode = vec4(mix(vec3(1), shadow, clamp(opacity, 0, 1)), 1)
-  m.maskShadowNode = clipMask.and(opacity.greaterThan(0.01))
+  m.castShadowNode = vec4(mix(vec3(1), shadow, clamp(fade, 0, 1)), 1)
+  m.maskShadowNode = clipMask.and(fade.greaterThan(0.01))
 
   return {
     material: m,
