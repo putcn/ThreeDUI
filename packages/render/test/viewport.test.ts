@@ -118,6 +118,31 @@ describe('Surface.attach3D', () => {
   })
 })
 
+describe('an attached object\'s own draw order and shadow opt-out (Task 9N)', () => {
+  it('a drawable\'s own renderOrder orders it within the viewport slot (clamped); groups get the group order; detach restores', () => {
+    const { s, vp } = make(), root = new Group(), inner = new Group()
+    const at = (order: number): Mesh => { const m = new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial()); m.renderOrder = order; return m }
+    const [back, mid, front, far] = [at(-3), at(0), at(2), at(1e6)]
+    inner.add(back, mid, front, far); root.add(inner)
+    const detach = s.attach3D(vp, root); s.tick(1 / 60)
+    expect(mid.renderOrder).toBe(SURFACE_ORDER.viewport)
+    expect(back.renderOrder).toBeLessThan(mid.renderOrder); expect(mid.renderOrder).toBeLessThan(front.renderOrder)
+    // the whole slot stays between the rims and the foreground images, however large the own order
+    for (const m of [back, mid, front, far]) { expect(m.renderOrder).toBeGreaterThan(SURFACE_ORDER.rims); expect(m.renderOrder).toBeLessThan(SURFACE_ORDER.images) }
+    expect(inner.renderOrder).toBe(root.renderOrder)
+    detach()
+    expect([back, mid, front, far].map(m => m.renderOrder)).toEqual([-3, 0, 2, 1e6])
+  })
+  it('a drawable with userData.noShadow never casts, whatever the Surface\'s switch; the others follow it', () => {
+    const { s, vp, mesh } = make(), quiet = new Mesh(new BoxGeometry(1, 1, 1), new MeshStandardMaterial()), root = new Group()
+    quiet.userData.noShadow = true; root.add(mesh, quiet)
+    s.attach3D(vp, root); s.tick(1 / 60)
+    expect([mesh.castShadow, quiet.castShadow]).toEqual([true, false])
+    s.castShadows = false; expect([mesh.castShadow, quiet.castShadow]).toEqual([false, false])
+    s.castShadows = true; expect([mesh.castShadow, quiet.castShadow]).toEqual([true, false])
+  })
+})
+
 describe('Surface.castShadows (Plan 3 Task 9K fix)', () => {
   /** Every mesh under the Surface that the key light's shadow pass draws as a caster (three: castShadow), by name or kind. */
   const casting = (s: Surface): Mesh[] => { const out: Mesh[] = []; s.traverse(o => { if (o instanceof Mesh && o.castShadow) out.push(o) }); return out }

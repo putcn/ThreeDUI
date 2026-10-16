@@ -34,7 +34,11 @@ describe('the twin on a render Surface', () => {
       w.bins.getMatrixAt(i, m); p.setFromMatrixPosition(m).applyMatrix4(w.bins.matrixWorld).project(camera)
       rc.setFromCamera(new Vector2(p.x, p.y), camera)
       const hit = hitSurfaces(rc, [s])!
-      expect(hit.target).toEqual({ node: vp, object: w.bins, instanceId: i })
+      expect(hit.target).toEqual({ node: vp, object: w.bins, instanceId: i, point: expect.any(Array) })
+      // the hit point (anchor pt) is on that bin: within half its diagonal (30 × 15 × 22 model pt, scaled to fit) of its centre
+      w.bins.getMatrixAt(i, m)
+      const centre = s.viewports.get(vp)!.anchor.worldToLocal(new Vector3().setFromMatrixPosition(m).applyMatrix4(w.bins.matrixWorld))
+      expect(new Vector3(...hit.target!.point!).distanceTo(centre)).toBeLessThan(Math.hypot(30, 15, 22) / 2)
       expect(w.binAt(hit.target!.instanceId!).id).toBe(`F-${String(bay + 1).padStart(2, '0')}-4`)
     }
   })

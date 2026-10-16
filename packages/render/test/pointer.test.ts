@@ -541,7 +541,7 @@ describe('3D viewport hits', () => {
   it('a 3D object nearer than the quad wins and names its node and object', () => {
     const { camera, s, vp, mesh } = world()
     const h = hitSurfaces(rayAt(camera, 400, 300), [s])!
-    expect(h.target).toEqual({ node: vp, object: mesh }); expect(h.x).toBeCloseTo(200, 0); expect(h.y).toBeCloseTo(150, 0)
+    expect(h.target).toEqual({ node: vp, object: mesh, point: expect.any(Array) }); expect(h.x).toBeCloseTo(200, 0); expect(h.y).toBeCloseTo(150, 0)
     const blank = hitSurfaces(rayAt(camera, 400 - 60, 300), [s])!      // on the box, beside the mesh
     expect(blank.target).toBeUndefined()
   })
@@ -566,7 +566,7 @@ describe('3D viewport hits', () => {
     const { camera, s, vp, host, mesh } = world(); host.setStyle({ bg: 'none' }); s.tick(0)
     const rc = rayAt(camera, 400, 300)
     expect(s.takesPointer(200, 150)).toBe(false)
-    expect(hitSurfaces(rc, [s])?.target).toEqual({ node: vp, object: mesh })
+    expect(hitSurfaces(rc, [s])?.target).toEqual({ node: vp, object: mesh, point: expect.any(Array) })
     mesh.visible = false; expect(hitSurfaces(rc, [s])).toBeNull()
     mesh.visible = true; s.viewports.get(vp)!.anchor.visible = false; expect(hitSurfaces(rc, [s])).toBeNull()
   })
@@ -584,13 +584,34 @@ describe('3D viewport hits', () => {
     const { camera, s, vp, bridge } = world(row)
     /** Canvas px x over Surface x `pt` at the cubes' fronts (0.55 units proud: 4.45 from the camera). */
     const at = (pt: number): number => 400 + (pt - 200) / 100 * 300 / (Math.tan(25 * Math.PI / 180) * 4.45)
-    expect(hitSurfaces(rayAt(camera, at(250), 300), [s])!.target).toEqual({ node: vp, object: row, instanceId: 2 })
-    expect(hitSurfaces(rayAt(camera, at(150), 300), [s])!.target).toEqual({ node: vp, object: row, instanceId: 0 })   // 0 is an instance
+    expect(hitSurfaces(rayAt(camera, at(250), 300), [s])!.target).toEqual({ node: vp, object: row, instanceId: 2, point: expect.any(Array) })
+    expect(hitSurfaces(rayAt(camera, at(150), 300), [s])!.target).toEqual({ node: vp, object: row, instanceId: 0, point: expect.any(Array) })   // 0 is an instance
     const seen: unknown[] = []
     vp.setHandler('pointermove', e => seen.push([e.object, e.instanceId]))
     bridge.handle('pointermove', { clientX: at(200), clientY: 300, pointerType: 'mouse' })
     expect(seen).toEqual([[row, 1]])
     const plain = world(), hit = hitSurfaces(rayAt(plain.camera, 400, 300), [plain.s])!
-    expect(hit.target).toEqual({ node: plain.vp, object: plain.mesh }); expect('instanceId' in hit.target!).toBe(false)
+    expect(hit.target).toEqual({ node: plain.vp, object: plain.mesh, point: expect.any(Array) }); expect('instanceId' in hit.target!).toBe(false)
+  })
+  it('a 3D hit carries its point in the anchor\'s frame (pt), where the ray meets the object (Task 9N)', () => {
+    const { camera, s, vp, mesh, bridge } = world(), anchor = s.viewports.get(vp)!.anchor
+    // off-centre on the mesh's front face (60 pt proud, 40 × 40 pt): about 7 pt right of and above its centre
+    const rc = rayAt(camera, 410, 290), h = hitSurfaces(rc, [s])!
+    const world3 = rc.intersectObject(mesh)[0]!.point
+    const exact = anchor.worldToLocal(world3.clone()), own = mesh.worldToLocal(world3.clone()).add(mesh.position)
+    expect(h.target!.point).toHaveLength(3)
+    h.target!.point!.forEach((v, i) => {
+      expect(Math.abs(v - exact.getComponent(i))).toBeLessThan(1e-6)
+      expect(Math.abs(v - own.getComponent(i))).toBeLessThan(1e-6)   // the mesh's local hit, placed where the mesh sits
+    })
+    const [x, y, z] = h.target!.point!
+    expect(z).toBeCloseTo(60, 4); expect(x).toBeGreaterThan(3); expect(x).toBeLessThan(20); expect(y).toBeGreaterThan(3); expect(y).toBeLessThan(20)
+    // and the node's events carry it
+    const seen: unknown[] = []
+    vp.setHandler('pointermove', e => seen.push(e.point))
+    bridge.handle('pointermove', { clientX: 410, clientY: 290, pointerType: 'mouse' })
+    expect(seen).toEqual([h.target!.point])
+    bridge.handle('pointermove', { clientX: 340, clientY: 300, pointerType: 'mouse' })   // on the box beside the mesh: none
+    expect(seen.at(-1)).toBeUndefined()
   })
 })

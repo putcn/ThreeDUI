@@ -322,6 +322,20 @@ describe('3D targets (Plan 3 Task 9C)', () => {
     expect(got).toEqual([['pointermove', obj, undefined, false]])
     expect('instanceId' in d.dispatch(target, 'click', {})).toBe(false)
   })
+  it('a target with a point carries it on move, down, up and click; without one the events have no point key (Task 9N)', () => {
+    const { root, tracker, d } = scene(), target = root.children[0]!, obj = { isObject3D: true }, got: unknown[] = []
+    for (const t of ['pointerenter', 'pointermove', 'pointerdown', 'pointerup', 'click'] as const) d.on(target, t, e => got.push([t, e.object, e.point, 'point' in e]))
+    const a: [number, number, number] = [1, 2, 3], b: [number, number, number] = [-4, 0, 5.5], c: [number, number, number] = [0, 0, 0]
+    tracker.move(-1000, -1000, 'mouse', { node: target, object: obj, point: a })
+    tracker.down(-1000, -1000, 'mouse', { node: target, object: obj, point: b })
+    tracker.up(-1000, -1000, 'mouse', { node: target, object: obj, point: c })   // the origin is a point, not absence
+    expect(got).toEqual([['pointerenter', obj, a, true], ['pointermove', obj, a, true], ['pointerdown', obj, b, true], ['pointerup', obj, c, true], ['click', obj, c, true]])
+    got.length = 0
+    tracker.move(-1000, -1000, 'mouse', { node: target, object: obj })                   // the same node, no point
+    expect(got).toEqual([['pointermove', obj, undefined, false]])
+    expect('point' in d.dispatch(target, 'click', {})).toBe(false)
+    expect(d.dispatch(target, 'click', { point: a }).point).toBe(a)
+  })
 })
 
 describe('screen position (Plan 3 Task 9K fix)', () => {

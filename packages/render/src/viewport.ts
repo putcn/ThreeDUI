@@ -41,6 +41,17 @@ function materialsOf(o: Object3D): Material[] {
 
 const isGroup = (o: Object3D): boolean => (o as Partial<Group>).isGroup === true
 
+/**
+ * An adopted drawable's own `renderOrder` survives as its place inside the viewport's slot: the slot's order plus the
+ * own one × `step`, the own one clamped to ±`span` (so the slot stays within ±0.1 of `SURFACE_ORDER.viewport`, between
+ * the rims and the foreground images). An object with several parts (a chart's plate, surface and hover marks) orders
+ * them this way; three would otherwise order equal `renderOrder`s by their distance from the camera.
+ */
+export const VIEWPORT_ORDER = { step: 1e-3, span: 100 } as const
+const slotOrder = (slot: number, own: number): number => slot + Math.max(-VIEWPORT_ORDER.span, Math.min(VIEWPORT_ORDER.span, own)) * VIEWPORT_ORDER.step
+/** Whether an adopted drawable casts a shadow: when its attachment's do, unless it opts out (`userData.noShadow === true`). */
+const casts = (o: Object3D, on: boolean): boolean => on && o.userData.noShadow !== true
+
 /** `n` is `root` or under it, with no `display: 'none'` on the way (its box is laid out and shown). */
 function displayed(n: Node, root: Node): boolean {
   for (let p: Node | null = n; p; p = p.parent) {
@@ -67,11 +78,12 @@ function faceUnder(n: Node, glass: readonly GlassInstance[]): number {
  *
  * Adoption, each step so that drawables added later are adopted too: every drawable under `object` (anything with a
  * material) gets `renderOrder` (`SURFACE_ORDER.viewport`: after the Surface's rims, before its foreground images and
- * text) and `castShadow` (`castShadows`: the Surface's, default true); every material `transparent` (the transparent
- * queue, so the order holds; depth write and test untouched), and `opacity` = its own × the Surface's, written only
- * when that changes. A material whose opacity its owner changed takes the new value as its own. The originals are
- * recorded once, and restored when the attachment lets go of them: at `dispose`, or at the first step after they left
- * `object`. Geometries and materials stay the owner's: nothing is disposed.
+ * text; its own `renderOrder` kept as its place within that slot, `VIEWPORT_ORDER`) and `castShadow` (`castShadows`:
+ * the Surface's, default true; never for one whose `userData.noShadow` is true); every material `transparent` (the
+ * transparent queue, so the order holds; depth write and test untouched), and `opacity` = its own × the Surface's,
+ * written only when that changes. A material whose opacity its owner changed takes the new value as its own. The
+ * originals are recorded once, and restored when the attachment lets go of them: at `dispose`, or at the first step
+ * after they left `object`. Geometries and materials stay the owner's: nothing is disposed.
  *
  * Group order: three sorts draws by the `renderOrder` of the nearest `Group` above them first (the Surface's `layer`
  * carries its `drawOrder` for that), so the anchor and every Group inside `object` (adopted like a drawable) carry
@@ -90,7 +102,7 @@ export class Viewport3DAttachment {
   private steps = 0
   private face = 0
   private order = 0
-  private casts = true
+  private on = true
   private disposed = false
 
   /** `renderOrder`: what the drawables get (`SURFACE_ORDER.viewport`); `groupOrder`: the Surface's `drawOrder`. */
@@ -111,11 +123,14 @@ export class Viewport3DAttachment {
     for (const o of this.heldDraws.keys()) if (isGroup(o)) o.renderOrder = v
   }
 
-  /** Whether its drawables cast shadows (`Surface.castShadows`): set on those adopted, and on those adopted later. */
-  get castShadows(): boolean { return this.casts }
+  /**
+   * Whether its drawables cast shadows (`Surface.castShadows`): set on those adopted, and on those adopted later; one
+   * whose `userData.noShadow` is true never does.
+   */
+  get castShadows(): boolean { return this.on }
   set castShadows(v: boolean) {
-    this.casts = v
-    for (const o of this.heldDraws.keys()) if (!isGroup(o)) o.castShadow = v
+    this.on = v
+    for (const o of this.heldDraws.keys()) if (!isGroup(o)) o.castShadow = casts(o, v)
   }
 
   /** pt: `Attach3DOptions.depth`, or the node's current width. */
@@ -159,7 +174,7 @@ export class Viewport3DAttachment {
       }
       const mats = materialsOf(o)
       if (!mats.length) return
-      if (!this.heldDraws.has(o)) { holdDraw(o, this.renderOrder); o.castShadow = this.casts }
+      if (!this.heldDraws.has(o)) { holdDraw(o, this.renderOrder, true); o.castShadow = casts(o, this.on) }
       this.heldDraws.set(o, now)
       for (const m of mats) {
         if (!this.heldMaterials.has(m)) holdMaterial(m)
@@ -187,13 +202,16 @@ export class Viewport3DAttachment {
   }
 }
 
-/** Records `o`'s order and shadow once (`releaseDraw` restores them), then gives it `renderOrder`. */
-function holdDraw(o: Object3D, renderOrder: number): void {
+/**
+ * Records `o`'s order and shadow once (`releaseDraw` restores them), then gives it `renderOrder`: as is (a Group's), or
+ * with its own order kept as its place in that slot (`slot`: a drawable's, `VIEWPORT_ORDER`).
+ */
+function holdDraw(o: Object3D, renderOrder: number, slot = false): void {
   let r = draws.get(o)
   if (!r) {
     r = { renderOrder: o.renderOrder, castShadow: o.castShadow, users: 0 }
     draws.set(o, r)
-    o.renderOrder = renderOrder
+    o.renderOrder = slot ? slotOrder(renderOrder, r.renderOrder) : renderOrder
   }
   r.users++
 }

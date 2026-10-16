@@ -22,6 +22,12 @@ export interface UIEvent {
   /** Which instance of `object` the pointer is on, when `object` is instanced (a three.js `InstancedMesh`); absent otherwise. */
   instanceId?: number
   /**
+   * Where the pointer meets `object`, in the frame of the anchor the object is attached by (pt: x right, y up, z out of
+   * the face it stands on; spatial spec §12.3), so a chart can tell which part of a mesh is under the pointer (the
+   * surface chart's cell). Absent unless the pointer is on a 3D object.
+   */
+  point?: [number, number, number]
+  /**
    * Where the pointer is on the canvas, CSS px from its top-left: unlike `x`/`y` (the point on the Surface, or on a 3D
    * object, taken onto it) it moves only with the pointer, so it suits drags. Set on events a pointer caused (by the
    * renderer's bridge); absent on the others (keys, focus) and wherever the caller gave none.
@@ -64,6 +70,7 @@ export class EventDispatcher {
       ...(init.deltaY !== undefined ? { deltaY: init.deltaY } : {}),
       ...(init.object !== undefined ? { object: init.object } : {}),
       ...(init.instanceId !== undefined ? { instanceId: init.instanceId } : {}),
+      ...(init.point !== undefined ? { point: init.point } : {}),
       ...(init.screenX !== undefined ? { screenX: init.screenX } : {}),
       ...(init.screenY !== undefined ? { screenY: init.screenY } : {}),
       propagationStopped: false,
@@ -89,9 +96,10 @@ export class EventDispatcher {
 /**
  * Where a pointer landed when it is not for the hit test to say: a 3D object (`object`, a three.js `Object3D`, typed
  * `unknown` in core) that the renderer hit and that is attached to `node`; `instanceId`, the instance hit when the object
- * is instanced (an `InstancedMesh`), absent otherwise.
+ * is instanced (an `InstancedMesh`), absent otherwise; `point`, where the hit is in the attachment anchor's frame (pt,
+ * `UIEvent.point`), absent when the caller names none.
  */
-export interface PointerTarget { node: Node; object: unknown; instanceId?: number }
+export interface PointerTarget { node: Node; object: unknown; instanceId?: number; point?: [number, number, number] }
 
 /** Where the pointer is on the canvas, CSS px from its top-left (`UIEvent.screenX` / `screenY`). */
 export interface ScreenPoint { x: number; y: number }
@@ -110,9 +118,10 @@ const DBLCLICK = { ms: 500, pt: 4 } as const
  * dirty) before events are dispatched, so listeners see it.
  * `move`, `down` and `up` may name a `target` (a 3D object the renderer hit, and the node it is attached to): while
  * `pointerReachable(target.node, root)`, that node is the hit, whatever `hitTest` says at (x, y), and every event the
- * call dispatches carries `object` (and the target's `instanceId`, when it has one); otherwise the hit test decides as
- * usual and no event carries either. `move`, `down`, `up` and `contextMenu` may also name `screen`, the pointer's
- * place on the canvas: every event the call dispatches (and a later `cancel`'s) carries it as `screenX` / `screenY`.
+ * call dispatches carries `object` (and the target's `instanceId` and `point`, when it has them); otherwise the hit
+ * test decides as usual and no event carries any of them. `move`, `down`, `up` and `contextMenu` may also name
+ * `screen`, the pointer's place on the canvas: every event the call dispatches (and a later `cancel`'s) carries it as
+ * `screenX` / `screenY`.
  * Call `cancel()` when the pointer is lost or leaves the Surface.
  */
 export class PointerTracker {
@@ -120,10 +129,10 @@ export class PointerTracker {
   private hoverPath: Node[] = []
   private pressPath: Node[] = []
   /**
-   * The last position, the 3D object (and instance) it was on and its place on the canvas (each absent when none): the
-   * init of every event dispatched.
+   * The last position, the 3D object (its instance, the point on it) it was on and its place on the canvas (each absent
+   * when none): the init of every event dispatched.
    */
-  private last: { x: number; y: number; pointerType: PointerType; object?: unknown; instanceId?: number; screenX?: number; screenY?: number } = { x: 0, y: 0, pointerType: 'mouse' }
+  private last: Pick<UIEvent, 'x' | 'y' | 'pointerType' | 'object' | 'instanceId' | 'point' | 'screenX' | 'screenY'> = { x: 0, y: 0, pointerType: 'mouse' }
   private lastClick: { node: Node; t: number; x: number; y: number } | null = null
   private readonly now: () => number
 
@@ -184,13 +193,18 @@ export class PointerTracker {
   }
 
   /**
-   * The node at (x, y), or `target`'s while it is reachable (then `last` carries its object and instance); records
-   * `last`, with `screen` when given.
+   * The node at (x, y), or `target`'s while it is reachable (then `last` carries its object, instance and point);
+   * records `last`, with `screen` when given.
    */
   private locate(x: number, y: number, pointerType: PointerType, target?: PointerTarget, screen?: ScreenPoint): Node | null {
     const at = screen ? { screenX: screen.x, screenY: screen.y } : {}
     if (target && pointerReachable(target.node, this.root)) {
-      this.last = { x, y, pointerType, object: target.object, ...(target.instanceId !== undefined ? { instanceId: target.instanceId } : {}), ...at }
+      this.last = {
+        x, y, pointerType, object: target.object,
+        ...(target.instanceId !== undefined ? { instanceId: target.instanceId } : {}),
+        ...(target.point !== undefined ? { point: target.point } : {}),
+        ...at,
+      }
       return target.node
     }
     this.last = { x, y, pointerType, ...at }

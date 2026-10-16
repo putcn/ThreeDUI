@@ -4,8 +4,9 @@ import type { Surface } from './surface/surface'
 import type { Viewport3DAttachment } from './viewport'
 
 /**
- * `target`: present when the ray hit a 3D object attached to a node (`Surface.attach3D`), naming the node and the object
- * hit, and the instance hit (`instanceId`) when the object is an `InstancedMesh`.
+ * `target`: present when the ray hit a 3D object attached to a node (`Surface.attach3D`), naming the node, the object
+ * hit, the instance hit (`instanceId`) when the object is an `InstancedMesh`, and the hit point in the attachment
+ * anchor's frame (`point`, pt).
  */
 export interface SurfaceHit { surface: Surface; x: number; y: number; distance: number; target?: PointerTarget }
 
@@ -30,7 +31,8 @@ const surfaceOf = (h: Intersection): Surface => h.object.userData.surface as Sur
  * The same Surfaces' 3D attachments (`Surface.viewports`, shown anchors only) are raycast too, recursively, and only
  * where every ancestor of the object hit is visible: the nearest such hit wins over the quad hit when it is nearer, or
  * when no quad hit was taken (a 3D object takes the pointer even over an empty area of a 'none' Surface). It carries
- * `target` (the attached node, the object hit and, for an `InstancedMesh`, the instance hit), and its (x, y) is the hit
+ * `target` (the attached node, the object hit, for an `InstancedMesh` the instance hit, and `point`: the hit point in the
+ * anchor's frame, the object's box centre on its face, 1 unit = 1 pt; spatial spec §12.3), and its (x, y) is the hit
  * point taken into the content quad's space (straight down onto the content plane), through `pointFromUV`.
  */
 export function hitSurfaces(raycaster: Raycaster, surfaces: readonly Surface[]): SurfaceHit | null {
@@ -72,9 +74,10 @@ function hitViewports(raycaster: Raycaster, surfaces: readonly Surface[]): Surfa
     let a: Viewport3DAttachment | undefined, surface: Surface | undefined
     for (let o: Object3D | null = h.object; o && !surface; o = o.parent) { a = o.userData.viewport as Viewport3DAttachment | undefined; surface = a && owner.get(a) }
     if (!a || !surface) continue
+    const point = a.anchor.worldToLocal(hitPoint.copy(h.point)).toArray()
     const at = surface.contentMesh.worldToLocal(hitPoint.copy(h.point))
     const [x, y] = surface.pointFromUV(at.x + 0.5, at.y + 0.5)
-    const target: PointerTarget = { node: a.node, object: h.object, ...(h.instanceId !== undefined ? { instanceId: h.instanceId } : {}) }
+    const target: PointerTarget = { node: a.node, object: h.object, ...(h.instanceId !== undefined ? { instanceId: h.instanceId } : {}), point }
     return { surface, x, y, distance: h.distance, target }
   }
   return null
@@ -159,8 +162,8 @@ const FAR = -1e6
  * blurs and lets the browser move focus out of the canvas — unless the Surface traps focus (`Surface.trapFocus`, a modal
  * dialog): then Tab wraps to the first (Shift+Tab to the last), is always prevented and never leaves.
  * A hit on a 3D object (`SurfaceHit.target`) hands the tracker of the Surface it belongs to its node and object with
- * the move, down or up (the node takes the event while it can take the pointer, and the event carries `object`, and
- * `instanceId` for an instanced one); a press captured by another Surface gets none.
+ * the move, down or up (the node takes the event while it can take the pointer, and the event carries `object`, the
+ * hit `point`, and `instanceId` for an instanced one); a press captured by another Surface gets none.
  * Every pointer event it dispatches (moves, enters and leaves, presses, clicks, `contextmenu`, `wheel`, a cancel)
  * carries the pointer's place on the canvas, CSS px from its top-left, as `screenX` / `screenY`.
  * `handle` is the testable core; `attach` wires the canvas events to it.
