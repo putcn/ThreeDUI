@@ -279,7 +279,7 @@ describe('PointerTracker semantics', () => {
     expect(log).toEqual(['leave:btn:btn'])
     expect(chain.map(n => n.state.hover)).toEqual([true, true, false])
   })
-  it('a touch enters and leaves (the events) but never hovers: hover is a pointer device\'s (spec §8.3); a mouse or pen over the same path does', () => {
+  it('a touch enters and leaves (the events) but never hovers: hover is a pointing device\'s (spec §8.3); a mouse, a pen or an XR ray over the same path does', () => {
     const s = scene(); const d = new EventDispatcher(); const log: string[] = []
     d.on(s.btn, 'pointerenter', e => log.push(`enter:${e.pointerType}:${s.btn.state.hover}`))
     d.on(s.btn, 'pointerleave', e => log.push(`leave:${e.pointerType}`))
@@ -289,6 +289,7 @@ describe('PointerTracker semantics', () => {
     p.move(100, 80, 'mouse'); expect([s.btn.state.hover, s.panel.state.hover, s.root.state.hover]).toEqual([true, true, true])   // same path, no enter
     p.move(100, 80, 'touch'); expect([s.btn.state.hover, s.root.state.hover]).toEqual([false, false])
     p.move(100, 80, 'pen'); expect(s.btn.state.hover).toBe(true)
+    p.move(100, 80, 'touch'); p.move(100, 80, 'xr'); expect([s.btn.state.hover, s.root.state.hover]).toEqual([true, true])   // a ray points, as a mouse
     p.move(10, 10, 'touch'); expect([s.btn.state.hover, s.root.state.hover]).toEqual([false, false])
     expect(log).toEqual(['enter:touch:false', 'leave:touch'])
   })
