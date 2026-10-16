@@ -8,6 +8,7 @@ import { createMeasureFn } from './text/measure'
 import { AtlasPages } from './text/pages'
 import { createStudioEnvironment, createUILights, fitShadowCamera, UI_ENV_INTENSITY } from './lighting/lights'
 import { PointerBridge, type CanvasLike } from './pointer'
+import { ImeBridge, type DocLike, type ViewportLike } from './ime'
 import { checkQualityTier, defaultTier, QUALITY, QualityController, type QualityProfile, type QualityTier } from './quality'
 import { FrameSampler, FrameScheduler } from './scheduler'
 import { projectPolygon } from './project'
@@ -18,7 +19,8 @@ import { BarMatrix } from './chart/matrix'
 
 /** The subset of `WebGPURenderer` the root drives (so tests can pass a stub). */
 export interface UIRenderer extends RendererLike {
-  domElement: CanvasLike & { width?: number; height?: number; style?: { touchAction: string } }
+  /** `focus`: the IME bridge hands the canvas the page focus back after an edit (`ImeBridge.blur`). */
+  domElement: CanvasLike & { width?: number; height?: number; style?: { touchAction: string }; focus?(opts?: { preventScroll?: boolean }): void }
   /** CSS px. */
   getSize(target: Vector2): Vector2
   getPixelRatio(): number
@@ -56,6 +58,11 @@ export interface UIRootOptions {
    * An explicit value is fixed: its query is not read or followed.
    */
   reducedMotion?: boolean; reducedTransparency?: boolean; increasedContrast?: boolean
+  /**
+   * The page `UIRoot.ime` puts its proxy in. Default: the global `document` (and `visualViewport`) where there is one;
+   * without either `ime` is null (Node). Tests pass fakes.
+   */
+  ime?: { doc: DocLike; viewport?: ViewportLike }
 }
 
 /**
@@ -87,6 +94,14 @@ export interface UIRoot {
   readonly contrast: boolean
   readonly text: TextEngine; readonly quality: QualityController; readonly anim: AnimationRuntime
   readonly surfaces: readonly Surface[]; readonly pointer: PointerBridge | null
+  /**
+   * Text input (spec §7.3): the proxy-textarea bridge an editable node hands its `ImeField` to. Made on first access
+   * where there is a page (a global `document`, or `UIRootOptions.ime`), else null; null after `dispose`, which disposes
+   * it. Each `tick` re-places its proxy at the active caret (`ImeBridge.reposition`, after layout and the camera): a
+   * caret on a moving Surface is followed. Removing a Surface (`removeSurface`, `Surface.dispose`) blurs the active field
+   * if it lives there.
+   */
+  readonly ime: ImeBridge | null
   readonly backend: 'webgpu' | 'webgl2' | 'unknown'
   /**
    * `layer: 'screen'` (default): pt = CSS px, `fill`, `center` or at `left/top` (`CreateSurfaceOptions`); `'world'`: a
@@ -144,8 +159,8 @@ export interface UIRoot {
    * neither drawn nor prepared, its content redrawn when it shows again. Each shown Surface is handed the key light's
    * direction in its own frame (`Surface.setLightDirection`: its drop shadows) before it ticks. `prepare` is told
    * whether the camera (its pose or projection), the Surface or its animation moved (the content RT's settle-to-shrink);
-   * a Surface's motion re-fits the shadows while it runs. Ends by resolving the `afterTick` promises. A no-op after
-   * `dispose`.
+   * a Surface's motion re-fits the shadows while it runs. Ends by re-placing the IME proxy at the active caret (`ime`),
+   * then resolving the `afterTick` promises. A no-op after `dispose`.
    */
   tick(dt: number): void
   /**
@@ -238,8 +253,8 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  * out; draw orders are assigned (screen Surfaces above world ones, nearer above farther); the content passes of the
  * shown Surfaces draw (a hidden one's wait for it to show again); the key light's shadow camera is re-fitted to every
  * shown Surface when the lights, a Surface's pose or its glass changed, or a Surface's motion runs (the map redraws
- * only then: a camera move alone redraws nothing unless the lights follow it or it turns a billboard); `afterTick`
- * waiters resolve.
+ * only then: a camera move alone redraws nothing unless the lights follow it or it turns a billboard); the IME proxy
+ * moves to the active caret (`ime`); `afterTick` waiters resolve.
  */
 export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const { renderer, scene, camera } = opts
@@ -316,6 +331,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     if (i < 0) return false
     surfaces.splice(i, 1)
     pointer?.forget(s); screen.unplace(s); lastPose.delete(s); lastSeen.delete(s)
+    const field = ime?.active
+    if (ime && field?.surface === s) ime.blur(field)   // the field goes with its Surface: the canvas takes the keys back
     return true
   }
 
@@ -420,6 +437,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   let lastFitted = -1, looping = false, disposed = false
   /** The last `createCameraRig`'s (a disposed one stays until the next). */
   let rig: CameraRig | null = null
+  /** `root.ime`, made on first access. */
+  let ime: ImeBridge | null = null
   /** The view a rig frames a world Surface with (`Surface.focusView`): one object, its values rewritten each tick. */
   const focusView: { fovDeg: number; aspect: number; margin: number } = { fovDeg: 38, aspect: 1, margin: RIG_MARGIN }
   const scheduler = new FrameScheduler(), frames = new FrameSampler()
@@ -470,6 +489,16 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     get theme() { return theme },
     get scheme() { return scheme },
     get contrast() { return contrast },
+    get ime() {
+      if (disposed) return null
+      if (!ime && (opts.ime || typeof document !== 'undefined')) {
+        ime = new ImeBridge({
+          canvas, pointer, screenFromPoint: (s, x, y) => root.screenFromPoint(s, x, y),
+          ...(opts.ime ? { doc: opts.ime.doc } : {}), ...(opts.ime?.viewport ? { viewport: opts.ime.viewport } : {}),
+        })
+      }
+      return ime
+    },
     createSurface(o) {
       if (disposed) throw new GlassUIError('UIRoot.createSurface', 'root 已经 dispose')
       const { layer = 'screen', fill, center, left, top, ...rest } = o
@@ -570,6 +599,8 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
         s.prepare(renderer, projectedPx(s), dpr, camera, cameraMoved || moved || animating.has(s))
       })
       fitShadows(changed)
+      // the camera or the field's Surface may have moved: the IME candidate window follows the caret
+      if (ime?.active) ime.reposition()
       settleAfterTick()
     },
     setTheme(t) { if (disposed) return; checkTheme('UIRoot.setTheme', t); theme = t; restyleAll() },
@@ -629,6 +660,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       disposed = true
       if (looping) { looping = false; renderer.setAnimationLoop?.(null) }   // only a loop `autoTick` installed: the host may run its own
       pointer?.detach()
+      ime?.dispose(); ime = null   // before the Surfaces go: their removal hands nothing to the canvas
       rig?.dispose()
       for (const stop of stopMedia) stop()
       if (pointer && canvas.style && touchAction !== undefined) canvas.style.touchAction = touchAction

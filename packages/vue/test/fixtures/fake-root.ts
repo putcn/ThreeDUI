@@ -217,6 +217,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     anim, text,
     surfaces: surfaces as unknown as readonly Surface[],
     pointer: bridge as unknown as GlassRoot['pointer'],
+    ime: null,
     surfacesMade, rigs, charts, surfaceCharts, barMatrices,
     createSurface: o => make(o) as unknown as Surface,
     createCameraRig() {

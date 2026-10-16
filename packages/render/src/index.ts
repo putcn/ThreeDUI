@@ -1,7 +1,7 @@
 /**
  * `@glassui/render`: the public API — a root (`createUIRoot`) over a host three.js renderer, its Surfaces, the screen
- * layer, the quality tiers and the image loader. Everything else (batches, materials, passes, pointer routing) is in
- * `@glassui/render/internal` and may change without notice.
+ * layer, the quality tiers, the image loader and the IME bridge. Everything else (batches, materials, passes, pointer
+ * routing) is in `@glassui/render/internal` and may change without notice.
  */
 export const RENDER_VERSION = '0.0.0'
 export { createUIRoot, type UIRoot, type UIRootOptions, type UIRootEventMap, type CreateSurfaceOptions, type UIRenderer } from './root'
@@ -16,3 +16,4 @@ export type { GridCell } from './chart/frame'
 export { ScreenLayer, type ScreenPlacement } from './surface/screen'
 export { QUALITY, QualityController, type QualityTier, type QualityProfile } from './quality'
 export { defaultImageLoader, type ImageLoader, type ImageSource } from './image/images'
+export { ImeBridge, type ImeBridgeOptions, type ImeField, type ImeState, type DocLike, type TextareaLike, type ViewportLike } from './ime'
