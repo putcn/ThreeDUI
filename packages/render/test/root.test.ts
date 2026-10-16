@@ -9,6 +9,7 @@ import { toColor } from '../src/color'
 import type { QualityTier } from '../src/quality'
 import { BarChart } from '../src/chart/bar'
 import { SurfaceChart } from '../src/chart/surface'
+import { BarMatrix } from '../src/chart/matrix'
 import { UI_KEY } from '../src/lighting/lights'
 
 // Type-level guard (checked by `pnpm typecheck`): the real renderer satisfies the stub-able subset.
@@ -867,6 +868,18 @@ describe('the root API for the Vue layer', () => {
     expect(made.length).toBeGreaterThan(before); expect(chart.labelPlanes.x.length).toBe(2)
     root.dispose()
     expect(() => root.createSurfaceChart()).toThrow(/\[UIRoot\.createSurfaceChart\].*dispose/)
+  })
+  it('createBarMatrix makes a BarMatrix that draws its labels with the root\'s canvas factory; throws after dispose (Task 9O)', async () => {
+    const made: [number, number][] = [], o = base()
+    const root = await createUIRoot({ ...o, createCanvas: ((w: number, h: number) => { made.push([w, h]); return createCanvas(w, h) }) as never })
+    const matrix = root.createBarMatrix()
+    expect(matrix).toBeInstanceOf(BarMatrix)
+    matrix.set({ values: [[1, 2], [3, 4]], max: 4, colors: [[[0, 1, 0, 1], [0, 1, 0, 1]], [[1, 0, 0, 1], [1, 0, 0, 1]]] }); matrix.labels({ rows: ['A', 'B'], cols: ['a', 'b'] })
+    const before = made.length
+    matrix.update(1 / 60, { width: 400, height: 200, reducedMotion: true, theme: root.theme, scheme: root.scheme })
+    expect(made.length).toBeGreaterThan(before); expect(matrix.labelPlanes.cols.length).toBe(2); expect(matrix.bars.length).toBe(4)
+    root.dispose()
+    expect(() => root.createBarMatrix()).toThrow(/\[UIRoot\.createBarMatrix\].*dispose/)
   })
 })
 

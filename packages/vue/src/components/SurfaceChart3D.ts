@@ -6,6 +6,7 @@ import { formatValue, niceMax, niceTicks } from '../chart'
 import { defineGlassComponent } from '../define'
 import { useRoot, useScheme } from '../inject'
 import { useOwned3D } from '../owned3d'
+import { READOUT, READOUT_GAP, readoutRow } from '../readout'
 import { Text } from './Text'
 import { colorOf } from './tokens'
 import { Viewport3D } from './Viewport3D'
@@ -14,8 +15,6 @@ import { Viewport3D } from './Viewport3D'
 const DEFAULT_RAMP = ['#cfd8ff', '#a59bff', 'accent', '#c2185b'] as const
 /** The readout's line when no cell is hovered. */
 const HINT = '指向曲面查看数值'
-/** pt: the readout row's height (the same for the hint and a reading, so nothing below moves), and its gap to the chart. */
-const READOUT = 20, GAP = 10
 
 const fn = z.custom<(v: number) => string>(v => typeof v === 'function', '需要一个函数 (v: number) => string')
 const SurfaceChart3DProps = z.object({
@@ -112,22 +111,19 @@ export const SurfaceChart3D = defineGlassComponent({
   const box = shallowRef<Node | null>(null)
   useOwned3D(chart, box)
 
-  /** The readout under the chart: "y · x · value" for the hovered cell, else the hint; flat type, no panel. */
+  /** The readout under the chart: "y · x · value" for the hovered cell, else the hint. */
   const readout = (x: Props): VNode => {
-    const c = hovered.value, r = c && reading(c), dot = { text: ' · ', color: 'tertiaryLabel' }
-    const line = r
-      ? h(Text, { value: [{ text: r.y, color: 'secondaryLabel' }, dot, { text: r.x, color: 'secondaryLabel' }, dot, { text: (x.format ?? formatValue)(r.value), weight: 600 }], size: 13, wrap: false })
-      : h(Text, { value: HINT, size: 13, color: 'tertiaryLabel', wrap: false })
-    return h('box', { style: { height: READOUT, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' } }, [line])
+    const c = hovered.value, r = c && reading(c)
+    return readoutRow(r && [{ text: r.y, color: 'secondaryLabel' }, { text: r.x, color: 'secondaryLabel' }, { text: (x.format ?? formatValue)(r.value), weight: 600 }], HINT)
   }
 
   return () => {
     const x = p.value
     // as tall as the chart and its readout, so the Card does not jump when data arrives
-    if (x.values.length === 0) return h('box', { ref: box, style: { height: x.height + GAP + READOUT, alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' } }, [h(Text, { value: '暂无数据', color: 'secondaryLabel' })])
+    if (x.values.length === 0) return h('box', { ref: box, style: { height: x.height + READOUT_GAP + READOUT, alignItems: 'center', justifyContent: 'center', alignSelf: 'stretch' } }, [h(Text, { value: '暂无数据', color: 'secondaryLabel' })])
     // how far the chart rises off the glass, for the shadow fit: its own number, at any width (its tallest data is
     // 0.45 × the shorter side, so no box wider than it is high rises further), so a resize never re-attaches it
-    return h('box', { ref: box, style: { flexDirection: 'column', gap: GAP, alignSelf: 'stretch' } }, [
+    return h('box', { ref: box, style: { flexDirection: 'column', gap: READOUT_GAP, alignSelf: 'stretch' } }, [
       h(Viewport3D, { object: chart, update, depth: chart.riseFor(x.height, x.height), style: { height: x.height }, ...handlers }),
       readout(x),
     ])

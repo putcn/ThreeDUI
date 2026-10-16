@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { defaultTheme, resolveColor, resolveRadius, resolveFontSize } from '../src/style/theme'
+import { defaultTheme, rampColor, resolveColor, resolveRadius, resolveFontSize, type RGBA } from '../src/style/theme'
 import { GlassUIError } from '../src/errors'
 
 describe('theme', () => {
@@ -54,5 +54,17 @@ describe('theme', () => {
       thicknessRatio: 0.2, filletRatio: 0.06, filletBottomRatio: 0.04, scatter: 0.05, lift: 0.1, edgeGlow: 0.8, ior: 1.5, dispersion: 0.8, roughness: 0.06,
       envIntensity: 1, specularIntensity: 1, innerGlow: 0, adaptive: true, variant: 'regular',
     })
+  })
+  it('rampColor: evenly spaced stops mixed in sRGB between the two nearest; t clamped to 0..1 (Task 9O)', () => {
+    const ramp: RGBA[] = [[0, 0.8, 0.2, 1], [1, 0.6, 0.4, 1], [1, 0.2, 0.2, 0.5]]
+    expect(rampColor(ramp, 0)).toEqual(ramp[0]); expect(rampColor(ramp, 1)).toEqual(ramp[2]); expect(rampColor(ramp, 0.5)).toEqual(ramp[1])
+    const quarter = rampColor(ramp, 0.25)
+    for (const [i, want] of [0.5, 0.7, 0.3, 1].entries()) expect(quarter[i]).toBeCloseTo(want, 12)
+    const late = rampColor(ramp, 0.75)
+    for (const [i, want] of [1, 0.4, 0.3, 0.75].entries()) expect(late[i]).toBeCloseTo(want, 12)
+    expect(rampColor(ramp, -2)).toEqual(ramp[0]); expect(rampColor(ramp, 7)).toEqual(ramp[2])
+    expect(rampColor([[0, 0, 0, 1], [1, 1, 1, 1]], 0.3).map(v => +v.toFixed(12))).toEqual([0.3, 0.3, 0.3, 1])
+    // a fresh array: the caller may keep or change it
+    const got = rampColor(ramp, 0); got[0] = 9; expect(ramp[0]![0]).toBe(0)
   })
 })

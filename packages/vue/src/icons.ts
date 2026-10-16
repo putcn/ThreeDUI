@@ -1,5 +1,6 @@
 import type { RGBA } from '@glassui/core'
 import type { CanvasFactory, CanvasLike } from '@glassui/text'
+import { cssColor as css } from './components/tokens'
 
 /** The built-in icons (`<Icon name>`): the playground's set, then SF-Symbols-like strokes on the same 24-unit grid. */
 export const ICON_NAMES = [
@@ -136,8 +137,6 @@ function draw(ctx: Ctx, name: IconName, color: string, lw: number): void {
   }
 }
 
-/** `[r, g, b, a]` (sRGB 0..1) as a canvas colour. */
-const css = ([r, g, b, a]: RGBA): string => `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${Math.round(a * 1000) / 1000})`
 
 /** Canvases made per factory, by `name|size|colour|weight`; the oldest go past `CACHE_MAX` (a node keeps its own). */
 const caches = new WeakMap<CanvasFactory, Map<string, CanvasLike>>()

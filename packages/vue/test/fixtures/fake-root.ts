@@ -3,7 +3,7 @@ import {
   AnimationRuntime, createSurface as createModel, createYogaLayout, defaultTheme, EventDispatcher, FocusManager, GlassUIError, PointerTracker, resolveTextStyle,
   type ColorScheme, type MeasureFn, type Node, type SurfaceModel, type Theme,
 } from '@glassui/core'
-import type { Attach3DOptions, BarChart, BarChartData, CameraRig, CreateSurfaceOptions, PoseSpring, Surface, SurfaceCell, SurfaceChart, SurfaceChartData, SurfaceChartLabels, SurfacePose, UIRootEventMap, Viewport3DContext } from '@glassui/render'
+import type { Attach3DOptions, BarChart, BarChartData, BarMatrix, BarMatrixData, BarMatrixLabels, CameraRig, GridCell, CreateSurfaceOptions, PoseSpring, Surface, SurfaceCell, SurfaceChart, SurfaceChartData, SurfaceChartLabels, SurfacePose, UIRootEventMap, Viewport3DContext } from '@glassui/render'
 import type { GlassRoot } from '../../src/root'
 import { createFakeText } from './fake-text'
 
@@ -108,6 +108,20 @@ export interface FakeSurfaceChart {
   dispose: Mock<() => void>
 }
 
+/**
+ * The fake root's `BarMatrix`: every method a spy (`update` returns false: nothing moves), no bars; `riseFor(w, h)` is
+ * a stand-in, min(w, h) + 40.
+ */
+export interface FakeBarMatrix {
+  set: Mock<(data: BarMatrixData) => void>
+  labels: Mock<(l: BarMatrixLabels) => void>
+  hover: Mock<(cell: GridCell | null) => void>
+  riseFor: Mock<(width: number, height: number) => number>
+  update: Mock<(dt: number, ctx: Viewport3DContext) => boolean>
+  dispose: Mock<() => void>
+  bars: BarMatrix['bars']
+}
+
 export interface FakeRoot extends GlassRoot {
   /** Lays out every live Surface, runs the animation runtime, then resolves the `afterTick` waiters and the pending `animateTo` promises; dt in seconds. */
   tick(dt?: number): void
@@ -123,6 +137,8 @@ export interface FakeRoot extends GlassRoot {
   readonly charts: FakeChart[]
   /** Every chart `createSurfaceChart` made, in creation order. */
   readonly surfaceCharts: FakeSurfaceChart[]
+  /** Every matrix `createBarMatrix` made, in creation order. */
+  readonly barMatrices: FakeBarMatrix[]
 }
 
 /**
@@ -136,7 +152,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     const t = resolveTextStyle(n, theme, scheme)
     return text.measure({ text: String(n.props.value ?? ''), font: { family: t.family, size: t.size, weight: t.weight }, lineHeight: t.lineHeight, letterSpacing: t.letterSpacing, maxLines: t.maxLines, wrap: t.wrap }, { maxWidth })
   }
-  const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = [], rigs: FakeRig[] = [], charts: FakeChart[] = [], surfaceCharts: FakeSurfaceChart[] = []
+  const surfaces: FakeSurface[] = [], surfacesMade: FakeSurface[] = [], rigs: FakeRig[] = [], charts: FakeChart[] = [], surfaceCharts: FakeSurfaceChart[] = [], barMatrices: FakeBarMatrix[] = []
   /** The pointer bridge's key target, as `PointerBridge`: `setActive` sets it, removing its Surface clears it. */
   const bridge: { active: FakeSurface | null; setActive(s: FakeSurface | null): void } = { active: null, setActive: vi.fn((s: FakeSurface | null) => { bridge.active = s }) }
   let waiters: (() => void)[] = []
@@ -201,7 +217,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     anim, text,
     surfaces: surfaces as unknown as readonly Surface[],
     pointer: bridge as unknown as GlassRoot['pointer'],
-    surfacesMade, rigs, charts, surfaceCharts,
+    surfacesMade, rigs, charts, surfaceCharts, barMatrices,
     createSurface: o => make(o) as unknown as Surface,
     createCameraRig() {
       const rig: FakeRig = { focus: vi.fn(async () => true), dispose: vi.fn(() => { rig.disposed = true }), parallax: true, disposed: false }
@@ -219,6 +235,11 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
       const chart: FakeSurfaceChart = { set: vi.fn(), labels: vi.fn(), hover: vi.fn(), cellAt, riseFor, update: vi.fn(() => false), dispose: vi.fn() }
       surfaceCharts.push(chart)
       return chart as unknown as SurfaceChart
+    },
+    createBarMatrix() {
+      const matrix: FakeBarMatrix = { set: vi.fn(), labels: vi.fn(), hover: vi.fn(), riseFor: vi.fn((w: number, h: number) => Math.min(w, h) + 40), update: vi.fn(() => false), dispose: vi.fn(), bars: [] }
+      barMatrices.push(matrix)
+      return matrix as unknown as BarMatrix
     },
     removeSurface(s) {
       const f = s as unknown as FakeSurface

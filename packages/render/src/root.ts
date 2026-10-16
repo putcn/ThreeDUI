@@ -14,6 +14,7 @@ import { projectPolygon } from './project'
 import { CameraRig, type CameraRigOptions } from './rig'
 import { BarChart } from './chart/bar'
 import { SurfaceChart } from './chart/surface'
+import { BarMatrix } from './chart/matrix'
 
 /** The subset of `WebGPURenderer` the root drives (so tests can pass a stub). */
 export interface UIRenderer extends RendererLike {
@@ -119,6 +120,12 @@ export interface UIRoot {
    * holds nor disposes it (`SurfaceChart.dispose`). Throws after `dispose`.
    */
   createSurfaceChart(): SurfaceChart
+  /**
+   * A new zone × category stock matrix (spatial spec §12.2), for `Surface.attach3D` with its `update` as the
+   * attachment's; its labels are drawn on the root's canvases (`createCanvas`, default DOM ones). It is the caller's: the
+   * root neither holds nor disposes it (`BarMatrix.dispose`). Throws after `dispose`.
+   */
+  createBarMatrix(): BarMatrix
   /**
    * Swaps the theme: the shared context's theme and text measure, the animation runtime's theme, then every Surface
    * restyled (`Surface.restyle`: fills, an opaque background, the glass, every node marked); emits `'theme'`. A theme
@@ -489,6 +496,10 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     createSurfaceChart() {
       if (disposed) throw new GlassUIError('UIRoot.createSurfaceChart', 'root 已经 dispose')
       return new SurfaceChart({ createCanvas })
+    },
+    createBarMatrix() {
+      if (disposed) throw new GlassUIError('UIRoot.createBarMatrix', 'root 已经 dispose')
+      return new BarMatrix({ createCanvas })
     },
     tick(dt) {
       if (disposed) return

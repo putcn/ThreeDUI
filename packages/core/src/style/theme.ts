@@ -76,6 +76,20 @@ export function resolveColor(token: string, theme: Theme, scheme: ColorScheme): 
   return resolveColor(hex, theme, scheme)
 }
 
+/**
+ * A chart's colour scale: `ramp` (2 or more colours, low → high, as evenly spaced stops) at `t` (clamped to 0..1),
+ * mixed in sRGB between its two nearest stops (alpha too); exactly a stop's colour on it. The 3D charts colour their
+ * cells with it (spatial spec §12) and draw their legends from it. A new array each call.
+ */
+export function rampColor(ramp: readonly RGBA[], t: number): RGBA {
+  const n = ramp.length - 1
+  if (n < 1) return [...ramp[0]!]
+  const x = Math.min(1, Math.max(0, t)) * n, k = Math.min(n - 1, Math.floor(x)), u = x - k
+  const a = ramp[k]!, b = ramp[k + 1]!
+  // a·(1 − u) + b·u, not a + (b − a)·u: exact at both ends of a segment
+  return [a[0] * (1 - u) + b[0] * u, a[1] * (1 - u) + b[1] * u, a[2] * (1 - u) + b[2] * u, a[3] * (1 - u) + b[3] * u]
+}
+
 export function resolveRadius(v: Style['radius'], theme: Theme, width: number, height: number, parentRadius = 0, inset = 0): number {
   if (v === undefined) return 0
   if (typeof v === 'number') return v

@@ -8,7 +8,7 @@ import { useCanvasFactory, useRoot, useScheme } from '../inject'
 import { useLaidOutWidth } from '../layout-width'
 import { drawLineChart, GUTTER, type LineChartDrawing } from '../linechart-draw'
 import { Text } from './Text'
-import { colorOf } from './tokens'
+import { colorOf, cssColor as css } from './tokens'
 
 /** The series colours when a series names none, by its index (then again from the first). */
 const DEFAULT_COLORS = ['accent', 'success', 'danger', 'secondaryLabel'] as const
@@ -47,8 +47,6 @@ const ticksOf = (x: Props): number[] => {
 }
 /** pt: a series dot's diameter (in the legend and the hover panel). */
 const DOT = 8
-/** An `RGBA` (sRGB 0..1) as a canvas fill style. */
-const css = ([r, g, b, a]: RGBA): string => `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${a})`
 
 export const LineChart = defineGlassComponent({
   name: 'LineChart',

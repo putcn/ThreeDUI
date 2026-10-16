@@ -1,4 +1,5 @@
 import type { RGBA } from '@glassui/core'
+import { cssColor as css } from './components/tokens'
 
 /** pt: the gutter left of the plot (the y labels) and the one under it (the x labels). */
 export const GUTTER = { left: 44, bottom: 22 } as const
@@ -36,8 +37,6 @@ const MIN_FONT_SIZE = 8
 /** The alpha of an area under a curve at its top (fading to 0 at the plot's bottom), and of the hover guide, × the colour's own. */
 const AREA_ALPHA = 0.22, GUIDE_ALPHA = 0.5
 
-/** `[r, g, b, a]` as a canvas colour, its alpha × `k`. */
-const css = ([r, g, b, a]: RGBA, k = 1): string => `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${Math.round(a * k * 1000) / 1000})`
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
 
 /** The indices of the x labels drawn: all of up to 6, else 6 spread evenly over them, the first and last included. */

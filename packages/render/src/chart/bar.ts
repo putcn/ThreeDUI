@@ -23,10 +23,10 @@ export const BAR = {
   hoverDepth: 1.15,
 } as const
 
-/** A bar's matrix never goes singular (a raycast or a normal through it would break): its y and z scales stay above this. */
-const MIN_SCALE = 1e-4
+/** A bar's matrix never goes singular (a raycast or a normal through it would break): its scales stay above this. */
+export const MIN_SCALE = 1e-4
 /** pt: a geometry's smallest side, so a box with no width (or a bar with no height) still builds a finite one. */
-const MIN_SIZE = 1e-3
+export const MIN_SIZE = 1e-3
 
 /**
  * The spatial spec's layout (§2.5) for `n` bars in a box `width` × `height` pt centred on the origin: n equal columns,
@@ -38,12 +38,19 @@ export function barLayout(n: number, width: number, height: number, values: read
   return Array.from({ length: n }, (_, i) => ({ x: (i + 0.5) * column - width / 2, width: BAR.widthRatio * column, height: (values[i] ?? 0) / max * height }))
 }
 
-/** A rounded box `width` × `height` × `depth` pt, its base at y = 0 and its back at z = 0 (it stands on the plate, rising out of it). */
-function barGeometry(width: number, height: number, depth: number): RoundedBoxGeometry {
+/**
+ * A rounded box `width` × `height` × `depth` pt (corners `BAR.radiusRatio` of its width, at most half its height and
+ * depth), its base at y = 0 and its back at z = 0 (it stands on the plate, rising out of it). Its `parameters` keep the
+ * three sizes, so a caller sees when a new size needs a new one.
+ */
+export function barGeometry(width: number, height: number, depth: number): RoundedBoxGeometry {
   const g = new RoundedBoxGeometry(width, height, depth, 3, Math.min(BAR.radiusRatio * width, height / 2, depth / 2))
   g.translate(0, height / 2, depth / 2)
   return g
 }
+
+/** A bar's material: lit, a little glossy (roughness 0.35, metalness 0); its colour is the bar's. */
+export const barMaterial = (): MeshStandardNodeMaterial => new MeshStandardNodeMaterial({ roughness: 0.35, metalness: 0 })
 
 /** One bar: its mesh, its colour and its springs. */
 interface Bar {
@@ -149,7 +156,7 @@ export class BarChart extends Group {
       const w = Math.max(l.width, MIN_SIZE), h = Math.max(l.height > 0 ? l.height : w, MIN_SIZE), d = BAR.depthRatio * w
       let b = this.list[i]
       if (!b) {
-        const mesh = new Mesh(barGeometry(w, h, d), new MeshStandardNodeMaterial({ roughness: 0.35, metalness: 0 }))
+        const mesh = new Mesh(barGeometry(w, h, d), barMaterial())
         mesh.name = `bar-${i}`; mesh.userData.index = i
         b = { mesh, base: new Color(), height: new Spring(0, cfg), depth: new Spring(0, cfg), brightness: new Spring(1, cfg), wait: this.entrance ? i * BAR.stagger : 0 }
         this.list.push(b); this.add(mesh)
