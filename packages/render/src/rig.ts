@@ -113,10 +113,21 @@ class Follower {
     this.turn = new Spring(1, cfg)
   }
 
-  /** Puts it on this pose, at rest. */
+  /** Puts it on this pose, at rest (its slerp done). */
   place(position: Vector3, quaternion: Quaternion): void {
     this.pos.forEach((sp, i) => { sp.jump(position.getComponent(i)) })
     this.pose.position.copy(position); this.pose.quaternion.copy(quaternion)
+    this.from.copy(quaternion); this.turn.jump(1)
+  }
+
+  /**
+   * Moves it to `position` with the position springs' velocity kept; with a `quaternion`, turns it there and restarts
+   * the slerp from it (`retarget`).
+   */
+  rebase(position: Vector3, quaternion: Quaternion | null): void {
+    this.pos.forEach((sp, i) => { sp.value = position.getComponent(i) })
+    this.pose.position.copy(position)
+    if (quaternion) { this.pose.quaternion.copy(quaternion); this.retarget() }
   }
 
   /** A new goal ahead: the position springs carry on, velocity and all (no jump); the slerp restarts from where it is. */
@@ -148,8 +159,11 @@ class Follower {
  * camera is then the plain pose orbited about the target's centre by the smoothed pointer — yaw `px × parallax` about
  * the target's up axis, pitch `−py × parallax` about its right one — so the centre stays where the plain pose has it
  * (in the middle of the frame, once it faces the target) however fast the pointer moves; the light pose takes no
- * parallax, so the pointer moves the camera under a still light. Then `camera.updateMatrixWorld()`. The camera's parent,
- * if it has one, must be untransformed: the rig writes world poses into `position` and `quaternion`.
+ * parallax, so the pointer moves the camera under a still light. When that pivot or frame changes (a new target, a
+ * retargeted rest pose), the plain pose is first rebased so that, orbited about the new one, the camera stays where it
+ * is (no jump, however far the parallax has swung): position springs keep their velocity, a turned frame restarts the
+ * slerps (the light's too, so it does not snap). Then `camera.updateMatrixWorld()`. The camera's parent, if it has one,
+ * must be untransformed: the rig writes world poses into `position` and `quaternion`.
  *
  * Pointer: a `pointermove` from a mouse or pen aims the parallax at its position on the canvas ([−1, 1] each way, y up);
  * any other move (touch has no hover) and `pointerleave` aim it back at (0, 0). The smoothed value follows on
@@ -187,6 +201,10 @@ export class CameraRig {
   /** The parallax as a world rotation about the target's centre, and the inverse of the target's orientation. */
   private readonly orbit = new Quaternion()
   private readonly unturn = new Quaternion()
+  /** The centre and orientation the camera was last orbited about (`update` rebases the plain pose when they change). */
+  private readonly pivot = new Vector3()
+  private readonly frame = new Quaternion()
+  private readonly rebased = { position: new Vector3(), quaternion: new Quaternion() }
 
   /** Reads `opts` (a readable `GlassUIError` for one out of range), then listens on the canvas. */
   constructor(env: RigEnvironment, opts: CameraRigOptions = {}) {
@@ -217,7 +235,8 @@ export class CameraRig {
   /**
    * Turns the camera to face `target` (a world Surface; a screen one, which follows the camera, throws a readable
    * `GlassUIError`). Ends the previous focus `false`. Already driving: the plain pose's and the light's position
-   * springs keep their velocity (no jump), their slerps restart from where they are. Idle: both start at rest on the
+   * springs keep their velocity, their slerps restart from where they are, and the next `update` rebases the plain
+   * pose on the new target's centre (see the class) so the camera does not jump. Idle: both start at rest on the
    * camera's pose (where the lights were), the parallax at 0. Resolves `true` when the camera's plain pose settles on the
    * goal; `immediate` (or reduced motion now) puts it and the light there at the next `update` and resolves then.
    * `false` at once for a disposed or failed target (the rig then has none) and on a disposed rig.
@@ -252,19 +271,29 @@ export class CameraRig {
     const aspect = this.env.aspect()
     if (!(aspect > 0 && aspect < Infinity)) return
     const cam = this.env.camera, reduced = this.env.reducedMotion()
-    // the parallax angles: toward the pointer's aim, or back toward 0 with parallax off; reduced motion holds them at 0
-    if (reduced) { this.px.jump(0); this.py.jump(0) }
-    else { this.px.set(this.parallax ? this.aim.x : 0); this.py.set(this.parallax ? this.aim.y : 0); this.px.step(dt); this.py.step(dt) }
     // the goal: the plain focus pose, which the camera's plain pose and the light follow, each on its own springs
     const d = restFrame(t, cam.getEffectiveFOV(), aspect, this.margin, this.centre, this.goal.quaternion)
     this.goal.position.set(0, 0, d).applyQuaternion(this.goal.quaternion).add(this.centre)
+    const g = this.goal.quaternion, turned = !this.frame.equals(g)
+    if (turned || !this.pivot.equals(this.centre)) {
+      // a new pivot or frame: the plain pose the camera is, orbited about the new one with the parallax it was drawn
+      // with — P' = c + M⁻¹(camera − c), its quaternion M⁻¹·camera — so the camera does not jump. An unturned frame
+      // keeps M and the orientation: only the position moves
+      this.orbitIn(g).invert()
+      const r = this.rebased
+      r.position.copy(cam.position).sub(this.centre).applyQuaternion(this.orbit).add(this.centre)
+      this.plain.rebase(r.position, turned ? r.quaternion.multiplyQuaternions(this.orbit, cam.quaternion) : null)
+      if (turned) this.light.retarget()
+      this.pivot.copy(this.centre); this.frame.copy(g)
+    }
+    // the parallax angles: toward the pointer's aim, or back toward 0 with parallax off; reduced motion holds them at 0
+    if (reduced) { this.px.jump(0); this.py.jump(0) }
+    else { this.px.set(this.parallax ? this.aim.x : 0); this.py.set(this.parallax ? this.aim.y : 0); this.px.step(dt); this.py.step(dt) }
     const snap = this.snap || reduced
     this.snap = false
     this.plain.step(this.goal, snap, dt); this.light.step(this.goal, snap, dt)
-    // the camera: the plain pose orbited about the target's centre — yaw about the target's up axis, then pitch about
-    // its right one: the rotation R in the target's frame G, G·R·G⁻¹ in the world
-    const g = this.goal.quaternion
-    this.orbit.setFromEuler(orbitEuler.set(-this.py.value * this.amplitude, this.px.value * this.amplitude, 0, 'YXZ')).premultiply(g).multiply(this.unturn.copy(g).invert())
+    // the camera: the plain pose orbited about the target's centre
+    this.orbitIn(g)
     cam.position.copy(this.plain.pose.position).sub(this.centre).applyQuaternion(this.orbit).add(this.centre)
     cam.quaternion.multiplyQuaternions(this.orbit, this.plain.pose.quaternion)
     cam.updateMatrixWorld()
@@ -279,6 +308,15 @@ export class CameraRig {
     this.env.canvas.removeEventListener('pointermove', this.onMove)
     this.env.canvas.removeEventListener('pointerleave', this.onLeave)
     this.end(false)
+  }
+
+  /**
+   * `orbit` ← the smoothed parallax as a world rotation for frame `g`: yaw about its up axis, then pitch about its right
+   * one — the rotation R in the frame, G·R·G⁻¹ in the world. Returns `orbit`.
+   */
+  private orbitIn(g: Quaternion): Quaternion {
+    const r = orbitEuler.set(-this.py.value * this.amplitude, this.px.value * this.amplitude, 0, 'YXZ')
+    return this.orbit.setFromEuler(r).premultiply(g).multiply(this.unturn.copy(g).invert())
   }
 
   /** Resolves the pending focus (if any) with `ok`. */

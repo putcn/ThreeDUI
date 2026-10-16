@@ -7,6 +7,7 @@ import { Surface, type SurfaceContext } from '../src/surface/surface'
 import { AtlasPages } from '../src/text/pages'
 import { createMeasureFn } from '../src/text/measure'
 import { CameraRig, fitDistance, focusPose } from '../src/rig'
+import type { SurfacePose } from '../src/surface/motion'
 
 let ctx: SurfaceContext
 beforeAll(async () => {
@@ -26,6 +27,19 @@ const rig = () => new CameraRig({ camera, canvas, aspect: () => aspect, reducedM
 const surface = (pos = [0, 0, 0], rotY = 0) => { const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, placement: 'world' }, ctx); s.position.set(pos[0]!, pos[1]!, pos[2]!); s.rotation.y = rotY; s.updateMatrixWorld(true); return s }
 const run = (r: CameraRig, s: number) => { for (let t = 0; t < s; t += 1 / 60) r.update(1 / 60) }
 const forward = () => new Vector3(0, 0, -1).applyQuaternion(camera.quaternion)
+/**
+ * One `update`'s travel — the camera's (position, angle) and the light's angle — right after `act`, on a rig focused at
+ * once on a Surface at the origin with the pointer settled at canvas (x, y) beforehand.
+ */
+const firstStep = (x: number, y: number, act: (r: CameraRig, a: Surface) => void) => {
+  const r = rig(), a = surface(); void r.focus(a, { immediate: true }); r.update(1 / 60)
+  listeners.get('pointermove')!({ clientX: x, clientY: y, pointerType: 'mouse' }); run(r, 2)
+  const p0 = camera.position.clone(), q0 = camera.quaternion.clone(), l0 = r.lightPose!.quaternion.clone()
+  act(r, a); r.update(1 / 60)
+  const out = { move: camera.position.distanceTo(p0), turn: camera.quaternion.angleTo(q0), light: r.lightPose!.quaternion.angleTo(l0) }
+  r.dispose()
+  return out
+}
 
 describe('CameraRig', () => {
   it('fitDistance fits the taller or the wider side with the margin', () => {
@@ -182,6 +196,24 @@ describe('CameraRig', () => {
     r.dispose()
   })
 
+  it('a focus change with the parallax swung does not jump the camera: the plain pose is rebased on the new pivot', () => {
+    for (const [at, rotY] of [[[4, 0, 0], 0], [[2, 0, 0], 0.5]] as const) {
+      const to = (r: CameraRig) => { void r.focus(surface([...at], rotY)) }
+      const still = firstStep(400, 300, to), swung = firstStep(0, 0, to)          // the pointer in the middle / in the top-left corner
+      expect(still.move).toBeLessThan(0.05)                                         // one frame's travel from rest
+      expect(swung.move).toBeLessThan(still.move * 1.2 + 1e-3); expect(swung.turn).toBeLessThan(still.turn * 1.2 + 1e-3)
+    }
+  })
+  it('a rest-pose retarget mid-focus with the parallax swung jumps neither the camera nor the light', () => {
+    const poses: SurfacePose[] = [{ position: [0.6, 0.3, -0.5] }, { rotation: [0, 0.4, 0] }]
+    for (const pose of poses) {
+      const to = (_: CameraRig, a: Surface) => { void a.animateTo(pose) }
+      const still = firstStep(400, 300, to), swung = firstStep(0, 0, to)
+      expect(still.move).toBeLessThan(0.05); expect(still.turn).toBeLessThan(0.01)
+      expect(swung.move).toBeLessThan(still.move * 1.2 + 1e-3); expect(swung.turn).toBeLessThan(still.turn * 1.2 + 1e-3)
+      expect(still.light).toBeLessThan(0.01); expect(swung.light).toBeLessThan(0.01)
+    }
+  })
   it('the light pose ignores parallax and lags the camera on a focus change', () => {
     const r = rig(), a = surface(); void r.focus(a, { immediate: true }); r.update(1 / 60)
     const p0 = r.lightPose!.position.clone()

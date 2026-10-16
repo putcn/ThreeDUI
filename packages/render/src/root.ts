@@ -502,9 +502,14 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
         if (s.billboard) s.quaternion.copy(s.parent ? s.parent.getWorldQuaternion(qParent).invert() : qParent.identity()).multiply(qCam)
         s.updateWorldMatrix(true, true)
       }
-      // view culling: a world Surface whose bounds miss the view frustum draws, captures and prepares nothing this tick
+      // view culling: a world Surface whose bounds miss the view frustum draws, captures and prepares nothing this tick;
+      // one leaving or coming back refits the shadows (a swap in one tick keeps the drawn count, so it alone would not)
       frustum.setFromProjectionMatrix(viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse), camera.coordinateSystem, camera.reversedDepth)
-      for (const s of surfaces) if (s.model.placement === 'world') s.culled = !frustum.intersectsBox(s.glassBounds.applyMatrix4(s.matrixWorld))
+      for (const s of surfaces) {
+        if (s.model.placement !== 'world') continue
+        const culled = !frustum.intersectsBox(s.glassBounds.applyMatrix4(s.matrixWorld))
+        if (culled !== s.culled) { s.culled = culled; changed = true }
+      }
       const epoch = text.atlas.epoch
       each(s => s.tick(dt))
       // the pages are shared: a later Surface's glyphs may have evicted an earlier one's this tick

@@ -793,6 +793,23 @@ describe('the root API for the Vue layer', () => {
       expect(camera.matrixWorld.equals(view)).toBe(false); expect(key.shadow.needsUpdate).toBe(true)
     }
   })
+  it('a camera move that swaps which Surface is culled refits, though the drawn count holds', async () => {
+    const { root, renderer } = await createRoot({ pointer: false })
+    const rig = root.createCameraRig(), s = root.createSurface({ layer: 'world', width: 244, height: 244 })
+    const leaving = root.createSurface({ layer: 'world', width: 50, height: 50 }), coming = root.createSurface({ layer: 'world', width: 50, height: 50 })
+    leaving.position.set(12.9, 0, -20); coming.position.set(-12.9, 0, -20)          // just inside the frustum's sides, 20 units out
+    void rig.focus(s, { immediate: true }); for (let i = 0; i < 3; i++) root.tick(1 / 60)   // all three drawn: content clean, poses fitted
+    expect([leaving.culled, coming.culled]).toEqual([false, false])
+    const move = renderer.domElement.addEventListener.mock.calls.find(([t]) => t === 'pointermove')![1] as (e: unknown) => void
+    move({ clientX: 0, clientY: 300, pointerType: 'mouse' }); for (let i = 0; i < 4; i++) root.tick(1)   // the view swings 2.5° right
+    expect([leaving.culled, coming.culled]).toEqual([false, true])
+    const key = root.lights.key, light = root.lights.group.matrixWorld.clone()
+    key.shadow.needsUpdate = false; root.tick(1 / 60); expect(key.shadow.needsUpdate).toBe(false)   // quiet
+    // one tick swings the view 5° left: one Surface leaves the view as the other comes back; the light stays
+    move({ clientX: 800, clientY: 300, pointerType: 'mouse' }); root.tick(2)
+    expect([leaving.culled, coming.culled]).toEqual([true, false]); expect(root.lights.group.matrixWorld.equals(light)).toBe(true)
+    expect(key.shadow.needsUpdate).toBe(true)
+  })
   it('with no rig a camera move still refits: the lights follow the camera', async () => {
     const { root, camera } = await createRoot()                                      // no screen Surface: only the lights move
     root.createSurface({ layer: 'world', width: 244, height: 244 }).position.set(0, 0, -3)
