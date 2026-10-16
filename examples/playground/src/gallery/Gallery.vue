@@ -1,10 +1,10 @@
 <script setup lang="ts">
 // The component gallery (`?scene=gallery`): every @glassui/vue component, section by section. The content sits on the
-// wall with no glass under it (spec §8.3: glass on controls, never on content areas); the controls (Buttons) are glass
-// right on the wall, with no panel behind them. Beside the column stands a world-layer <Surface>: a glass panel in the
-// scene, turned about Y, with hover and clicks of its own.
+// wall with no glass under it (spec §8.3: glass on controls, never on content areas); the controls (Buttons, Switches,
+// Checkboxes) are glass right on the wall, with no panel behind them. Beside the column stands a world-layer <Surface>:
+// a glass panel in the scene, turned about Y, with hover and clicks of its own.
 import { computed, h, onBeforeUnmount, ref, type FunctionalComponent } from 'vue'
-import { Box, Button, Icon, ICON_NAMES, Stack, Surface, Text, useScheme } from '@glassui/vue'
+import { Box, Button, Checkbox, Icon, ICON_NAMES, Stack, Surface, Switch, Text, useScheme } from '@glassui/vue'
 
 // The page is a vertical `scroll` (the wheel scrolls it once later sections outgrow the viewport). No page fill: the
 // content sits on the wall itself, which the later sections' glass refracts.
@@ -17,6 +17,8 @@ const taps = ref(0)
 
 /** A small spaced caption over each group. */
 const Caption: FunctionalComponent<{ value: string }> = p => h(Text, { value: p.value, size: 12, weight: 600, color: 'secondaryLabel', style: { letterSpacing: 1.4 } })
+/** A row's caption at its left, one line (the longest, GLASS PROMINENT · 主操作, is ≈ 190 pt). */
+const RowCaption: FunctionalComponent<{ value: string }> = p => h(Text, { value: p.value, size: 12, weight: 600, color: 'secondaryLabel', wrap: false, style: { width: 224, flexShrink: 0, letterSpacing: 1 } })
 
 const ramp = [
   { token: '4xl', weight: 700, text: '玻璃 Liquid Glass' },
@@ -51,6 +53,16 @@ const save = () => {
   saveTimer = setTimeout(() => { saving.value = false }, 1600)
 }
 onBeforeUnmount(() => clearTimeout(saveTimer))
+
+/** The Switch & Checkbox section: every toggle is v-model'd, so each flips when pressed. */
+const wifi = ref(true), bluetooth = ref(false), remember = ref(true), notify = ref(false), agree = ref(true), news = ref(false)
+/** The reference's pair (the terms checkbox, "Remember me"), with a readout. */
+const terms = ref(false), rememberMe = ref(true)
+/** "全部通知" over three channels: checked when all are on, a dash when only some are; toggling it sets them all. */
+const channels = ref([{ key: 'mail', label: '邮件', on: true }, { key: 'sms', label: '短信', on: false }, { key: 'push', label: '推送', on: true }])
+const allOn = computed(() => channels.value.every(c => c.on))
+const someOn = computed(() => !allOn.value && channels.value.some(c => c.on))
+const setAll = (on: boolean) => { for (const c of channels.value) c.on = on }
 </script>
 
 <template>
@@ -189,8 +201,7 @@ onBeforeUnmount(() => clearTimeout(saveTimer))
         <!-- every variant in every size: glass right on the wall, no panel behind it -->
         <Stack :gap="16">
           <Stack v-for="v in variants" :key="v.variant" direction="horizontal" :gap="16" align="center">
-            <!-- one line each: the longest, GLASS PROMINENT · 主操作, is ≈ 190 pt -->
-            <Text :value="v.caption" :size="12" :weight="600" color="secondaryLabel" :wrap="false" :style="{ width: 224, flexShrink: 0, letterSpacing: 1 }" />
+            <RowCaption :value="v.caption" />
             <Button v-for="(s, i) in sizes" :key="s" :variant="v.variant" :size="s" :label="v.labels[i]" />
           </Stack>
         </Stack>
@@ -237,6 +248,65 @@ onBeforeUnmount(() => clearTimeout(saveTimer))
         <Stack :gap="10" align="start" :style="{ maxWidth: 560 }">
           <Button variant="glassProminent" size="large" label="创建账号" trailing-icon="arrow-right" full-width @press="presses++" />
           <Text :value="presses ? `press 触发了 ${presses} 次` : '点按、Enter 或空格都会触发 press；Tab 聚焦时显示焦点环'" size="sm" color="secondaryLabel" />
+        </Stack>
+      </Stack>
+
+      <Stack id="toggles" :gap="24">
+        <Stack :gap="12">
+          <Stack direction="horizontal" justify="between" align="end">
+            <Text value="Switch & Checkbox" size="xl" :weight="700" />
+            <Text value="开关与复选框 · v-model:checked · 点按、Enter、空格切换" size="sm" color="secondaryLabel" :style="{ marginBottom: 3 }" />
+          </Stack>
+          <Box :style="{ height: 1, bg: 'separator' }" />
+        </Stack>
+
+        <!-- glass right on the wall, as the Buttons: on and off, then with labels (a Switch's on its left, a Checkbox's on its right) -->
+        <Stack :gap="16">
+          <Stack direction="horizontal" :gap="16" align="center">
+            <RowCaption value="SWITCH · 开关" />
+            <Switch v-model:checked="wifi" />
+            <Switch v-model:checked="bluetooth" />
+          </Stack>
+          <Stack direction="horizontal" :gap="32" align="center">
+            <RowCaption value="SWITCH · 带标签" />
+            <Switch v-model:checked="remember" label="记住我" />
+            <Switch v-model:checked="notify" label="通知" />
+          </Stack>
+          <Stack direction="horizontal" :gap="32" align="center">
+            <RowCaption value="CHECKBOX · 复选框" />
+            <Checkbox v-model:checked="agree" label="同意服务条款" />
+            <Checkbox v-model:checked="news" label="订阅动态" />
+          </Stack>
+        </Stack>
+
+        <Stack direction="horizontal" :gap="40" align="end" wrap>
+          <Stack :gap="10">
+            <Stack direction="horizontal" :gap="12" align="center">
+              <Switch :checked="true" disabled />
+              <Switch disabled />
+              <Checkbox :checked="true" disabled label="已锁定" :style="{ marginLeft: 12 }" />
+            </Stack>
+            <Caption value="禁用 DISABLED" />
+          </Stack>
+          <Stack :gap="10">
+            <Stack :gap="12" align="start">
+              <Checkbox :checked="allOn" :indeterminate="someOn" label="全部通知" @update:checked="setAll" />
+              <!-- the channels, indented under the parent's label (its box 44 + gap 16) -->
+              <Stack :gap="12" align="start" :style="{ paddingLeft: 60 }">
+                <Checkbox v-for="ch in channels" :key="ch.key" v-model:checked="ch.on" :label="ch.label" />
+              </Stack>
+            </Stack>
+            <Caption value="部分选中 INDETERMINATE · 点「全部通知」试试" />
+          </Stack>
+        </Stack>
+
+        <!-- the reference's pair: the terms checkbox at the left, "Remember me" at the right, its label against it -->
+        <Stack :gap="10" :style="{ maxWidth: 640 }">
+          <Stack direction="horizontal" justify="between" align="center">
+            <Checkbox v-model:checked="terms" label="我同意服务条款与隐私政策" />
+            <Switch v-model:checked="rememberMe" label="记住我" />
+          </Stack>
+          <Text :value="`条款：${terms ? '已同意' : '未同意'} · 记住我：${rememberMe ? '开' : '关'}；Tab 聚焦时显示焦点环`" size="sm" color="secondaryLabel" />
         </Stack>
       </Stack>
     </Box>

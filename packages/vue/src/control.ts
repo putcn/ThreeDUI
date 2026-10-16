@@ -33,6 +33,12 @@ export function controlStyle(opts: { pressScale?: number } = {}): Style {
   }
 }
 
+/**
+ * A toggle's label (Switch, Checkbox): 20 pt at weight 500 in the label colour, 16 pt from its control, as the
+ * reference's "Remember me" and terms line beside the 62 pt switch and the 44 pt checkbox.
+ */
+export const TOGGLE_LABEL = { size: 20, weight: 500, color: 'label', gap: 16 } as const
+
 export interface GlassControlOptions {
   /** While true the control ignores everything; turning it on drops the lift, the tilt and a Space press it has. */
   disabled: Readonly<Ref<boolean>>

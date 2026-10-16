@@ -174,17 +174,30 @@ export function iconCanvas(name: IconName, size: number, rgba: RGBA, weight: num
   return cv
 }
 
+/** Knob canvases made per factory, by `size|disc|stretch` (a theme's metrics make a handful). */
+const knobs = new WeakMap<CanvasFactory, Map<string, CanvasLike>>()
+
 /**
  * The switch knob (spec §5: a flat decal riding on the switch's top face, not geometry): a white disc with a soft
- * drop shadow, centred on a square canvas `sizePx` across at 2×; the disc is `discPx` across.
+ * drop shadow, centred on a square canvas `sizePx` across at 2×; the disc is `discPx` across. `stretchPx` widens the
+ * canvas and the disc by that much, the disc into a capsule as tall (the Switch's press stretch: an image stretched
+ * to the wider rect would draw an ellipse). Cached as `iconCanvas` is: the same arguments (and factory) return the
+ * same canvas, which must not be drawn on.
  */
-export function knobCanvas(sizePx: number, discPx: number, createCanvas: CanvasFactory): CanvasLike {
-  const px = Math.max(1, Math.ceil(sizePx * 2)), k = px / sizePx
-  const cv = createCanvas(px, px), ctx = ctx2d(cv)
+export function knobCanvas(sizePx: number, discPx: number, createCanvas: CanvasFactory, stretchPx = 0): CanvasLike {
+  let cache = knobs.get(createCanvas)
+  if (!cache) knobs.set(createCanvas, cache = new Map())
+  const key = `${sizePx}|${discPx}|${stretchPx}`
+  const hit = cache.get(key)
+  if (hit) return hit
+  const h = Math.max(1, Math.ceil(sizePx * 2)), k = h / sizePx, w = Math.max(1, Math.ceil((sizePx + stretchPx) * 2))
+  const cv = createCanvas(w, h), ctx = ctx2d(cv)
   ctx.shadowColor = 'rgba(30, 30, 60, 0.28)'
   ctx.shadowBlur = 5 * k
   ctx.shadowOffsetY = 1.5 * k
   ctx.fillStyle = '#ffffff'
-  ctx.beginPath(); ctx.arc(px / 2, px / 2, discPx / 2 * k, 0, Math.PI * 2); ctx.fill()
+  const d = discPx * k, across = (discPx + stretchPx) * k
+  ctx.beginPath(); ctx.roundRect((w - across) / 2, (h - d) / 2, across, d, d / 2); ctx.fill()
+  cache.set(key, cv)
   return cv
 }
