@@ -735,6 +735,35 @@ describe('the root API for the Vue layer', () => {
     expect(rig.disposed).toBe(true)
     expect(() => root.createCameraRig()).toThrow(/\[UIRoot\.createCameraRig\].*dispose/)
   })
+  it('with a focused rig the lights follow its light pose, without one the camera', async () => {
+    const { root, camera } = await createRoot()
+    root.tick(1 / 60); expect(root.lights.group.position.distanceTo(camera.getWorldPosition(new Vector3()))).toBeLessThan(1e-9)
+    const rig = root.createCameraRig(), s = root.createSurface({ layer: 'world', width: 244, height: 244 })
+    void rig.focus(s, { immediate: true }); root.tick(1 / 60)
+    expect(root.lights.group.position.distanceTo(rig.lightPose!.position)).toBeLessThan(1e-9)
+    expect(root.lights.group.quaternion.angleTo(rig.lightPose!.quaternion)).toBeLessThan(1e-9)
+  })
+  it('a moving light refits the shadow map', async () => {
+    const { root } = await createRoot()
+    const rig = root.createCameraRig(), a = root.createSurface({ layer: 'world', width: 244, height: 244 }), b = root.createSurface({ layer: 'world', width: 244, height: 244 })
+    b.position.set(3, 0, 0); void rig.focus(a, { immediate: true }); root.tick(1 / 60); root.tick(1 / 60)
+    root.lights.key.shadow.needsUpdate = false
+    void rig.focus(b); root.tick(1 / 60); expect(root.lights.key.shadow.needsUpdate).toBe(true)
+  })
+  it('the light alone moving (the camera at rest) refits the shadow map', async () => {
+    const { root, camera } = await createRoot()
+    const rig = root.createCameraRig(), a = root.createSurface({ layer: 'world', width: 244, height: 244 }), b = root.createSurface({ layer: 'world', width: 244, height: 244 })
+    b.position.set(3, 0, 0); void rig.focus(a, { immediate: true }); root.tick(1 / 60)
+    let ok = false; void rig.focus(b).then(v => { ok = v })
+    for (let i = 0; i < 300 && !ok; i++) { root.tick(1 / 60); await Promise.resolve() }
+    expect(ok).toBe(true)                                                            // the camera (0.8 s) has arrived…
+    const key = root.lights.key, view = camera.matrixWorld.clone(), light = root.lights.group.matrixWorld.clone()
+    key.shadow.needsUpdate = false; root.tick(1 / 60)
+    expect(camera.matrixWorld.equals(view)).toBe(true); expect(root.lights.group.matrixWorld.equals(light)).toBe(false)   // …the light (1.2 s) has not
+    expect(key.shadow.needsUpdate).toBe(true)
+    for (let i = 0; i < 360; i++) root.tick(1 / 60)                                 // the light at rest too: quiet
+    key.shadow.needsUpdate = false; root.tick(1 / 60); expect(key.shadow.needsUpdate).toBe(false)
+  })
   it('createBarChart makes a BarChart; throws after dispose', async () => {
     expect((await createRoot()).root.createBarChart()).toBeInstanceOf(BarChart)
     const { root } = await createRoot()

@@ -99,11 +99,12 @@ export interface UIRoot {
   removeSurface(surface: Surface): void
   /**
    * A `CameraRig` on the root's camera (spatial spec §2.2): `focus` springs the camera square-on to a world Surface's rest
-   * pose, with pointer parallax; each `tick` updates it after the Surfaces' motion and before the screen layer and the
-   * lights follow the camera, with the viewport's aspect (`renderer.getSize`) and `anim.reducedMotion`. While it lives
-   * it writes the camera every tick: no other controller may drive the camera meanwhile. One live rig per root (a
-   * second throws a readable `GlassUIError` until the first is disposed); a perspective camera only; throws after
-   * `dispose`, which disposes the rig.
+   * pose, with pointer parallax; each `tick` updates it after the Surfaces' motion and before the screen layer follows
+   * the camera, with the viewport's aspect (`renderer.getSize`) and `anim.reducedMotion`; while it has a target the
+   * lights take its `lightPose` (§11.1: anchored in space, no parallax, lagging a focus change), else the camera's pose.
+   * While it lives it writes the camera every tick: no other controller may drive the camera meanwhile. One live rig per
+   * root (a second throws a readable `GlassUIError` until the first is disposed); a perspective camera only; throws
+   * after `dispose`, which disposes the rig.
    */
   createCameraRig(opts?: CameraRigOptions): CameraRig
   /**
@@ -213,12 +214,13 @@ const domCanvas: CanvasFactory = (width, height) => Object.assign(document.creat
  * settings is planned; `dispose` leaves them as the root set them.
  *
  * Each `tick`: every Surface's motion steps (`Surface.stepMotion`); the camera rig, if there is one, moves the camera
- * (`createCameraRig`); the screen layer and the lights follow the camera;
+ * (`createCameraRig`); the screen layer follows the camera, the lights the rig's light pose (`CameraRig.lightPose`)
+ * while it has one, else the camera;
  * billboard world Surfaces turn to face it; world Surfaces out of the view frustum are culled (`Surface.culled`); every
  * Surface ticks; glyphs evicted by a later Surface's are re-laid out; draw orders are assigned (screen Surfaces above
  * world ones, nearer above farther); the content passes of the shown Surfaces draw (a hidden one's wait for it to show
- * again); the key light's shadow camera is re-fitted to every shown Surface when the camera, a Surface's pose or its
- * glass changed, or a Surface's motion runs (the map redraws only then); `afterTick` waiters resolve.
+ * again); the key light's shadow camera is re-fitted to every shown Surface when the camera, the lights, a Surface's pose
+ * or its glass changed, or a Surface's motion runs (the map redraws only then); `afterTick` waiters resolve.
  */
 export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   const { renderer, scene, camera } = opts
@@ -391,7 +393,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
 
   const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3(), point = new Vector3(), view = new Vector3()
   const qCam = new Quaternion(), qParent = new Quaternion()
-  const lastCamera = new Matrix4(), lastProjection = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
+  const lastCamera = new Matrix4(), lastProjection = new Matrix4(), lastLight = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
   /** Each Surface's `matrixWorld` at its last `prepare` (whether it moved since: the content RT's settle count). */
   const lastSeen = new WeakMap<Surface, Matrix4>()
   const frustum = new Frustum(), viewProjection = new Matrix4()
@@ -477,16 +479,20 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       const animating = new Set<Surface>()
       for (const s of surfaces) if (s.stepMotion(dt)) animating.add(s)
       renderer.getSize(size)
-      // the camera rig aims at the Surfaces' rest poses with this size's aspect; the screen layer and lights follow it
+      // the camera rig aims at the Surfaces' rest poses with this size's aspect; the screen layer follows it
       if (rig && !rig.disposed) rig.update(dt)
       screen.update(camera, { width: size.x, height: size.y })   // also brings camera.matrixWorld up to date
-      camera.getWorldPosition(lights.group.position); camera.getWorldQuaternion(lights.group.quaternion)
-      lights.group.updateMatrixWorld(true)                         // the key light stays top-left-front of the view
-      // the shadow fit follows the view; the content RTs also follow the projection (a zoom, a new aspect)
+      // the lights: anchored where the rig focuses (no parallax, lagging a focus change), or else on the camera; either
+      // way the key light stays top-left-front of that pose
+      const lit = rig && !rig.disposed ? rig.lightPose : null
+      if (lit) { lights.group.position.copy(lit.position); lights.group.quaternion.copy(lit.quaternion) }
+      else { camera.getWorldPosition(lights.group.position); camera.getWorldQuaternion(lights.group.quaternion) }
+      lights.group.updateMatrixWorld(true)
+      // the shadow fit follows the view and the lights; the content RTs also follow the projection (a zoom, a new aspect)
       const viewMoved = !lastCamera.equals(camera.matrixWorld)
       const cameraMoved = viewMoved || !lastProjection.equals(camera.projectionMatrix)
-      let changed = viewMoved
-      lastCamera.copy(camera.matrixWorld); lastProjection.copy(camera.projectionMatrix)
+      let changed = viewMoved || !lastLight.equals(lights.group.matrixWorld)
+      lastCamera.copy(camera.matrixWorld); lastProjection.copy(camera.projectionMatrix); lastLight.copy(lights.group.matrixWorld)
       camera.getWorldQuaternion(qCam)
       for (const s of surfaces) {
         if (s.model.placement !== 'world') continue
