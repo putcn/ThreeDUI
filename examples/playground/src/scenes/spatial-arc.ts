@@ -48,7 +48,7 @@ export const PANEL = { width: 300, height: 170, ptPerUnit: 360, offset: [1.15, -
  * less under the panel (test/scene.test.ts checks every pitch). Seen from the focus pose it looks about 1.18 × its size.
  */
 export const PLACE_PANEL = {
-  width: 320, height: 236, ptPerUnit: 360,
+  width: 320, height: 216, ptPerUnit: 360,
   offset: { right: [1.93, 0.78, 1.25], left: [-1.93, 0.78, 1.25] } as Record<'left' | 'right', [number, number, number]>,
 }
 

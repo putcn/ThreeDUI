@@ -58,8 +58,10 @@ const renderer = new WebGPURenderer({ antialias: true, forceWebGL })
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2))
 renderer.setSize(innerWidth, innerHeight)
 document.body.appendChild(renderer.domElement)
-// the canvas's right button belongs to the UI (the network map turns on a right drag): no browser menu over it
+// the canvas's right button belongs to the UI (the network map turns on a right drag): no browser menu over it; nor does
+// a trackpad pinch (a wheel with ctrl) zoom the page over it: the wheel still reaches the UI (the map zooms)
 renderer.domElement.addEventListener('contextmenu', e => { e.preventDefault() })
+renderer.domElement.addEventListener('wheel', e => { if (e.ctrlKey) e.preventDefault() }, { passive: false })
 
 const hostScene = new Scene()
 hostScene.background = new Color(0xd9d4d2)   // only seen past the wall's edges when orbiting far

@@ -123,9 +123,10 @@ export interface NetworkMap {
   /** Highlights the place `id` (its prism lit, its lanes bright, the others dimmed); null: none. */
   hover(id: string | null): void
   /**
-   * The place a pointer event names: an instance of a kind's prisms (`object`, `instanceId`), or, on the plate, the
-   * nearest place whose prism (from its foot to its top, as the window shows them) is within `PICK_RADIUS` of `point`
-   * (the anchor-frame point, pt); null when none, or when it is outside the window.
+   * The place a pointer event names: an instance of a kind's prisms (`object`, `instanceId`: the pointer's raycast hits
+   * a prism only where the window shows it), or, on the plate, the nearest place in the window whose prism (from its
+   * foot to its top, as the window shows them) is within `PICK_RADIUS` of `point` (the anchor-frame point, pt); null
+   * when none.
    */
   pick(object: unknown, instanceId?: number, point?: readonly [number, number, number]): Location | null
   /** Where the place `id`'s foot shows on the plate (pt, the box centre the origin, y up), or null outside the window. */
@@ -484,7 +485,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
     pick(object, instanceId, point) {
       const k = kindOf.get(object)
       const l = k !== undefined && instanceId !== undefined ? ofKind[k][instanceId] : undefined
-      if (l) return map.placeOf(l.id) ? l : null
+      if (l) return l
       if (object !== plate || !point) return null
       let best: Location | null = null, bestD = PICK_RADIUS
       const [px, py] = point, m = markScale()

@@ -138,7 +138,7 @@ describe('the network map', () => {
     m.update(1 / 60, ctx())
     expect(m.pick(prisms(m.group, 'warehouse'), 0)).toBe(ofKind('warehouse')[0])
     expect(m.pick(prisms(m.group, 'store'), 3)).toBe(ofKind('store')[3])
-    expect(m.pick(prisms(m.group, 'supplier'), 1)?.kind ?? 'off-window').toBeDefined()
+    expect(m.pick(prisms(m.group, 'supplier'), 1)).toBe(ofKind('supplier')[1])
     expect(m.pick(prisms(m.group, 'store'), 999)).toBeNull()
     expect(m.pick(prisms(m.group, 'store'))).toBeNull()                            // no instance named
     expect(m.pick(named(m.group, 'districts'), 0, [0, 0, 0])).toBeNull()             // the ground takes no pointer
