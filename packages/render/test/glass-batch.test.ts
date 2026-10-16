@@ -57,6 +57,14 @@ describe('GlassBatch', () => {
     b.update([inst('b', 2), inst('a', 1, { params: { ...params, variant: 'clear', adaptive: true } })], s)
     expect(b.buffer.get(0, 'iGlow2')[3]).toBe(0); expect(b.buffer.get(1, 'iGlow2')[3]).toBe(-1)
   })
+  it('{ luma: false } gives every instance luma index −1 (never darkens), and still honours the touch map', () => {
+    const b = new GlassBatch(), clear = inst('a', 1, { params: { ...params, variant: 'clear', adaptive: true } })
+    b.update([inst('b', 2), clear], s, new Map([[clear.node, { u: 0.25, v: -0.5, press: 1 }]]), { luma: false })
+    expect([0, 1].map(i => b.buffer.get(i, 'iGlow2')[3])).toEqual([-1, -1])
+    expect(b.buffer.get(0, 'iTouch').slice(0, 3)).toEqual([0.25, -0.5, 1])
+    b.update([inst('b', 2), clear], s, undefined, { luma: true })
+    expect(b.buffer.get(0, 'iGlow2')[3]).toBe(0)
+  })
   it('writes clip rect and inverse transform', () => {
     const b = new GlassBatch()
     b.update([inst('a', 1, { clip: { x: 0, y: 0, width: 200, height: 100, radius: 12, transform: scaleAbout(100, 50, 0.5) } })], s)

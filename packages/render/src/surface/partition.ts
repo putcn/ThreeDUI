@@ -40,3 +40,19 @@ export function partition(rl: RenderList): Partition {
 
 /** The thickness of the glass a foreground item rides on (0 for content-layer items). */
 export function liftFor(p: Partition, node: Node): number { return p.glassOf.get(node)?.params.thickness ?? 0 }
+
+/**
+ * Spatial spec §2.4: `glass` split by nesting, each half in list order. An instance is inner when one of its node's
+ * ancestors is another instance's node, at any depth (a third level is inner too: only two levels are told apart);
+ * the rest are outer.
+ */
+export function splitNested(glass: readonly GlassInstance[]): { outer: GlassInstance[]; inner: GlassInstance[] } {
+  const nodes = new Set(glass.map(g => g.node))
+  const out = { outer: [] as GlassInstance[], inner: [] as GlassInstance[] }
+  for (const g of glass) {
+    let nested = false
+    for (let p = g.node.parent; p && !nested; p = p.parent) nested = nodes.has(p)
+    ;(nested ? out.inner : out.outer).push(g)
+  }
+  return out
+}

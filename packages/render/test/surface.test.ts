@@ -269,7 +269,7 @@ describe('Surface', () => {
     const { s, btn } = signup()
     s.root.appendChild(image('photo', new Texture(), 300, 30)); btn.appendChild(image('icon', new Texture(), 8, 8, 32, 32))
     s.tick(1 / 60)
-    expect(SURFACE_ORDER).toEqual({ slab: -1, content: 0, glassBack: 1, glassFront: 2, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 })
+    expect(SURFACE_ORDER).toEqual({ slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 })
     expect(CONTENT_ORDER).toEqual({ panels: 0, pools: 1, images: 1.5, glyphs: 2 })
     const fg = meshes(s)
     const quad = fg.filter(m => m.renderOrder === SURFACE_ORDER.content)
@@ -853,8 +853,8 @@ describe('Surface motion', () => {
     const fade = (x: Surface) => (x as unknown as { su: { opacity: unknown } }).su.opacity
     const reads = (x: Surface, m: Mesh) => materialGraph(m.material as Material).some(n => n === fade(x))
     const plane = meshes(s).filter(m => m.name !== 'capture-probe'), content = meshes(s.contentPass.scene)
-    const { content: quad, glassBack, glassFront, rims, images, glyphs } = SURFACE_ORDER
-    expect(new Set(plane.map(m => m.renderOrder))).toEqual(new Set([quad, glassBack, glassFront, rims, images, glyphs]))
+    const { content: quad, glassBack, glassFront, innerGlassBack, innerGlassFront, rims, images, glyphs } = SURFACE_ORDER
+    expect(new Set(plane.map(m => m.renderOrder))).toEqual(new Set([quad, glassBack, glassFront, innerGlassBack, innerGlassFront, rims, images, glyphs]))   // the inner glass fades too
     for (const m of plane) expect(reads(s, m)).toBe(true)
     expect(content.length).toBeGreaterThanOrEqual(4)                       // panels, pools, the photo, content glyphs
     for (const m of content) expect(reads(s, m)).toBe(false)
@@ -1290,6 +1290,109 @@ describe('Surface: the glass modes of the quality tiers (spec §5.6)', () => {
     expect(elementGlass(s)).toHaveLength(1); expect(refractions(elementGlass(s))).toBe(3)
     s.setQuality({ ...QUALITY.medium, dispersion: 'never' })
     expect(refractions(elementGlass(s))).toBe(1)
+  })
+})
+
+describe('nested glass', () => {
+  const nested = (c: SurfaceContext = ctx) => {
+    const s = new Surface({ id: 'n', width: 400, height: 300, ptPerUnit: 100 }, c)
+    const card = new Node('box'); card.setStyle({ width: 300, height: 200, padding: 20, gap: 10, bg: 'glass' })
+    const title = new Node('text'); title.setProp('value', 'Hi')
+    const btn = new Node('box'); btn.setStyle({ width: 120, height: 44, bg: 'glass' })
+    const label = new Node('text'); label.setProp('value', 'Go')
+    btn.appendChild(label); card.appendChild(title); card.appendChild(btn); s.root.appendChild(card)
+    s.tick(1 / 60)
+    return { s, card, btn }
+  }
+  /** The textures `m`'s node graph samples. */
+  const texturesOf = (m: Mesh) => materialGraph(m.material as Material).filter(n => n.isTextureNode).map(n => n.value)
+  const innerGlass = (s: Surface) => meshes(s.plane).filter(m => m.renderOrder === SURFACE_ORDER.innerGlassBack || m.renderOrder === SURFACE_ORDER.innerGlassFront)
+  it('splits the glass into outer and inner batches and samples a stacked RT for the inner', () => {
+    const { s } = nested()
+    expect(s.glass.buffer.count).toBe(1); expect(s.innerGlass.buffer.count).toBe(1)
+    expect(s.stack).not.toBeNull()
+    const inner = meshes(s.plane).filter(m => m.renderOrder === SURFACE_ORDER.innerGlassBack || m.renderOrder === SURFACE_ORDER.innerGlassFront)
+    expect(inner.length).toBe(2)
+    for (const m of inner) { expect(texturesOf(m)).toContain(s.stack!.texture); expect(texturesOf(m)).not.toContain(s.contentPass.texture) }
+    expect(s.innerGlass.buffer.get(0, 'iGlow2')[3]).toBe(-1)
+  })
+  it('the stack holds the outer glass as a translucent panel and only the text riding on it', () => {
+    const { s } = nested()
+    expect(s.stack!.panels.buffer.count).toBe(1)
+    let glyphs = 0; for (const pb of s.stack!.text.perPage.values()) glyphs += pb.buffer.count
+    expect(glyphs).toBe(2)                                          // "Hi", not "Go"
+  })
+  it('renders the stack right after the content pass', () => {
+    const { s } = nested(), r = stubRenderer()
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    const scenes = r.render.mock.calls.map(c => c[0])
+    expect(scenes.indexOf(s.stack!.pass.scene)).toBe(scenes.indexOf(s.contentPass.scene) + 1)
+  })
+  it('drops the stack when the nesting goes away, and never makes one on the fill tier', () => {
+    const { s, card, btn } = nested(); card.removeChild(btn); s.root.appendChild(btn); s.tick(1 / 60)
+    expect(s.stack).toBeNull(); expect(s.innerGlass.buffer.count).toBe(0)
+    const fill = nested({ ...ctx, quality: { ...ctx.quality, glassMode: 'fill' } }).s
+    expect(fill.stack).toBeNull()
+  })
+  it('the stack resizes with the content RT and redraws only with it, as an RT the size of the content\'s', () => {
+    const { s } = nested(), r = stubRenderer()
+    s.prepare(r, { width: 400, height: 300 }, 2)
+    expect([s.stack!.pass.width, s.stack!.pass.height]).toEqual([s.contentPass.width, s.contentPass.height])
+    s.prepare(r, { width: 400, height: 300 }, 2)                    // nothing changed: neither redraws
+    expect(r.render).toHaveBeenCalledTimes(2)
+    s.prepare(r, { width: 800, height: 300 }, 2)
+    expect([s.stack!.pass.width, s.stack!.pass.height]).toEqual([s.contentPass.width, s.contentPass.height])
+    expect(r.render).toHaveBeenCalledTimes(4)
+  })
+  it('the inner glass draws only while there is nested glass (a Surface without it builds no inner glass shader)', () => {
+    const plain = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, ctx); plain.tick(1 / 60)
+    expect(innerGlass(plain)).toHaveLength(2); expect(innerGlass(plain).every(m => !m.visible)).toBe(true)
+    const { s, card, btn } = nested()
+    expect(innerGlass(s)).toHaveLength(2); expect(innerGlass(s).every(m => m.visible)).toBe(true)
+    card.removeChild(btn); s.root.appendChild(btn); s.tick(1 / 60)
+    expect(innerGlass(s).every(m => !m.visible)).toBe(true)
+  })
+  it('the press glow lands on the batch that holds the pressed glass, and follows it there', () => {
+    const { s, card, btn } = nested()
+    const x = card.layout.x + btn.layout.x, y = card.layout.y + btn.layout.y, { width: w, height: h } = btn.layout
+    // a quarter right of and above the button's centre is u = v = ¼ (slab uv, y up)
+    s.setPointer([x + 0.75 * w, y + 0.25 * h]); s.pointer.down(x + 0.75 * w, y + 0.25 * h); s.tick(1 / 60)
+    expect(s.innerGlass.buffer.get(0, 'iTouch').slice(0, 3)).toEqual([0.25, 0.25, 1]); expect(s.glass.buffer.get(0, 'iTouch')[2]).toBe(0)
+    s.setPointer([x + 0.25 * w, y + 0.75 * h]); s.tick(1 / 60)     // moved while pressed, nothing else changed
+    expect(s.innerGlass.buffer.get(0, 'iTouch').slice(0, 3)).toEqual([-0.25, -0.25, 1])
+  })
+  it('adaptive darkening reads the outer glass only: the luma packs the outer batch, and the inner glass never samples it', () => {
+    const { s, card, btn } = nested()
+    for (const n of [card, btn]) n.setStyle({ glass: { variant: 'clear', adaptive: true } })
+    s.tick(1 / 60)
+    let bound: RenderTarget | null = null; const drawn: (RenderTarget | null)[] = []
+    const r = { ...stubRenderer(), setRenderTarget: vi.fn((t: RenderTarget | null) => { bound = t }), render: vi.fn(() => { drawn.push(bound) }) }
+    s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(drawn.slice(0, 2)).toEqual([s.contentPass.target, s.stack!.pass.target])
+    const luma = drawn[2]!
+    expect(luma.width).toBe(256)
+    expect(s.glass.buffer.get(0, 'iGlow2')[3]).toBe(0); expect(s.innerGlass.buffer.get(0, 'iGlow2')[3]).toBe(-1)
+    for (const m of elementGlass(s)) expect(texturesOf(m)).toContain(luma.texture)
+    for (const m of innerGlass(s)) expect(texturesOf(m)).not.toContain(luma.texture)
+    // only the inner glass clear + adaptive: nothing to measure
+    card.setStyle({ glass: {} }); s.tick(1 / 60)
+    drawn.length = 0; s.prepare(r, { width: 400, height: 300 }, 1)
+    expect(drawn).toEqual([s.contentPass.target, s.stack!.pass.target])
+  })
+  it('setQuality passes the texel type on and drops the stack on the fill tier; dispose frees it', () => {
+    const { s } = nested(), stack = s.stack!
+    s.setQuality({ ...ctx.quality, contentType: 'half' })
+    expect(s.stack).toBe(stack); expect(stack.texture.type).toBe(HalfFloatType)
+    s.setQuality({ ...ctx.quality, glassMode: 'fill' })
+    expect(s.stack).toBeNull()
+    for (const m of innerGlass(s)) expect(texturesOf(m)).not.toContain(stack.texture)
+    s.setQuality(ctx.quality)
+    const again = s.stack!, freed = vi.fn()
+    expect(again).not.toBe(stack); expect(again.panels.buffer.count).toBe(1)   // filled as it appears
+    for (const m of innerGlass(s)) expect(texturesOf(m)).toContain(again.texture)
+    again.pass.target.addEventListener('dispose', freed)
+    s.dispose()
+    expect(freed).toHaveBeenCalled()
   })
 })
 

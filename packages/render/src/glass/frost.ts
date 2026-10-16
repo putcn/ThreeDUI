@@ -1,3 +1,5 @@
+import { resolveColor, type ColorScheme, type RGBA, type Theme } from '@glassui/core'
+
 /**
  * Frost (spec §5.3): glass of roughness `r` sees its backdrop at mip level `r · levelPerRoughness`, lifted toward white
  * by `r · liftPerRoughness + lift`. The glass material applies it per instance; what is behind a glass Surface's
@@ -25,3 +27,19 @@ export const SLAB_BEHIND = {
  * background slab fills with plain `fill`, no border.
  */
 export const FILL = { alpha: 0.92, borderPt: 1, borderMinPx: 2, labelMix: 0.04 } as const
+
+/**
+ * The `'fill'` glass mode's colours as the theme gives them for `scheme`, sRGB (core RGBA): `fill` (the slab's), `glass`
+ * (element glass with neither glow nor tint: `fill` moved `FILL.labelMix` toward `label`), `border` (`tertiaryLabel`)
+ * and `label`. A theme missing one of the tokens gets the default light theme's value for it instead of failing.
+ * `fillColors` (the materials' linear colours) and the stacked RT's panels (`StackPass`) both read them.
+ */
+export function fillTokens(theme: Theme, scheme: ColorScheme): { fill: RGBA; glass: RGBA; border: RGBA; label: RGBA } {
+  const table = theme.colors[scheme]
+  const token = (name: string, fallback: RGBA): RGBA => Object.hasOwn(table, name) ? resolveColor(name, theme, scheme) : fallback
+  const label = token('label', [28 / 255, 28 / 255, 34 / 255, 1])
+  const fill = token('fill', [1, 1, 1, 1]), border = token('tertiaryLabel', [138 / 255, 138 / 255, 152 / 255, 1])
+  const k = FILL.labelMix
+  const glass: RGBA = [fill[0] + (label[0] - fill[0]) * k, fill[1] + (label[1] - fill[1]) * k, fill[2] + (label[2] - fill[2]) * k, 1]
+  return { fill, glass, border, label }
+}

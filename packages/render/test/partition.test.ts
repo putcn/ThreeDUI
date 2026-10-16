@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import { Node, createSurface, createYogaLayout, buildRenderList, defaultTheme as theme, type GlassInstance, type LayoutEngine, type RenderList, type TextInstance } from '@glassui/core'
-import { partition, liftFor } from '../src/surface/partition'
+import { partition, liftFor, splitNested } from '../src/surface/partition'
 
 let engine: LayoutEngine
 beforeAll(async () => { engine = await createYogaLayout() })
@@ -53,5 +53,13 @@ describe('partition', () => {
     const p = partition(list([glassAt(g, 5)], leaves.map(textAt)))
     expect(p.foreground.text).toHaveLength(depth / 2); expect(p.content.text).toHaveLength(depth / 2)
     expect(reads).toBeLessThanOrEqual(all.length) // the uncached walk would read ~depth² parents
+  })
+
+  it('splitNested: glass under glass is inner, at any depth', () => {
+    const a = new Node('box'), b = new Node('box'), c = new Node('box'), d = new Node('box')
+    a.appendChild(b); b.appendChild(c)
+    const g = (node: Node) => ({ node } as GlassInstance)
+    const { outer, inner } = splitNested([g(a), g(b), g(c), g(d)])
+    expect(outer.map(i => i.node)).toEqual([a, d]); expect(inner.map(i => i.node)).toEqual([b, c])
   })
 })

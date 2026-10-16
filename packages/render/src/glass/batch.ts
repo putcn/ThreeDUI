@@ -38,7 +38,13 @@ export class GlassBatch {
   /** The packed nodes in instance order. */
   get nodes(): readonly Node[] { return this.sorted }
 
-  update(instances: readonly GlassInstance[], s: SurfaceDims, touch?: Map<Node, TouchState>): void {
+  /**
+   * Packs `instances` (stable-sorted by `z`); `touch` gives a node its press glow. The luma index (`iGlow2.w`) of clear +
+   * adaptive glass is its instance index (`SurfaceLuma` packs its rects in this order); with `opts.luma === false` every
+   * instance's is −1, so none darkens (nested glass, spatial spec §2.4: its index would collide with the outer batch's).
+   */
+  update(instances: readonly GlassInstance[], s: SurfaceDims, touch?: Map<Node, TouchState>, opts: { luma?: boolean } = {}): void {
+    const luma = opts.luma !== false
     const sorted = [...instances].sort((a, b) => a.z - b.z)
     this.sorted = sorted.map(i => i.node)
     const b = this.buffer
@@ -59,7 +65,7 @@ export class GlassBatch {
       if (p.glow) b.set(i, 'iGlow', srgbToLinear(p.glow.color[0]), srgbToLinear(p.glow.color[1]), srgbToLinear(p.glow.color[2]), p.glow.strength)
       else b.set(i, 'iGlow', 0, 0, 0, 0)
       // luma index: only clear + adaptive glass samples the backdrop luma pass (adaptive darkening)
-      b.set(i, 'iGlow2', p.glow?.split ?? -1, GLOW_SOFTNESS, inst.opacity, p.variant === 'clear' && p.adaptive ? i : -1)
+      b.set(i, 'iGlow2', p.glow?.split ?? -1, GLOW_SOFTNESS, inst.opacity, luma && p.variant === 'clear' && p.adaptive ? i : -1)
       const t = touch?.get(inst.node)
       b.set(i, 'iTouch', t?.u ?? 0, t?.v ?? 0, t?.press ?? 0, REFLECTION_STRENGTH)
       writeClip(b, i, inst.clip)
