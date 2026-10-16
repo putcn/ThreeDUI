@@ -1,5 +1,5 @@
-import { computed, getCurrentScope, inject, onScopeDispose, ref, unref, type Ref } from '@vue/runtime-core'
-import { GlassUIError, type ColorScheme } from '@glassui/core'
+import { computed, getCurrentScope, inject, onScopeDispose, ref, shallowRef, unref, type Ref } from '@vue/runtime-core'
+import { GlassUIError, type ColorScheme, type Theme } from '@glassui/core'
 import type { CanvasLike } from '@glassui/text'
 import type { Surface } from '@glassui/render'
 import { GLASS_OPTIONS, GLASS_ROOT, GLASS_SURFACE } from './keys'
@@ -54,4 +54,15 @@ export function useScheme(): Readonly<Ref<ColorScheme>> {
   const off = root.on('theme', e => { scheme.value = e.scheme })
   if (getCurrentScope()) onScopeDispose(off)
   return scheme
+}
+
+/**
+ * The root's theme, kept current by its `theme` event as `useScheme` keeps the scheme: a `setTheme` that keeps the
+ * scheme still swaps the colours the tokens name, so components that resolve tokens themselves (Icon, Button) read both.
+ */
+export function useTheme(): Readonly<Ref<Theme>> {
+  const root = useRoot(), theme = shallowRef<Theme>(root.theme)
+  const off = root.on('theme', e => { theme.value = e.theme })
+  if (getCurrentScope()) onScopeDispose(off)
+  return theme
 }

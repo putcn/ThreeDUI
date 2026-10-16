@@ -9,7 +9,8 @@ import { defineGlassComponent } from '../define'
 import { useCanvasFactory } from '../inject'
 import { READOUT, READOUT_GAP, readoutRow } from '../readout'
 import { Text } from './Text'
-import { colorOf, cssColor } from './tokens'
+import { cssColor } from '../colors'
+import { colorOf } from './tokens'
 import { Viewport3D } from './Viewport3D'
 
 /** The default colour ramp, low → high: green, amber, red (few days of cover is good, so low is green). */

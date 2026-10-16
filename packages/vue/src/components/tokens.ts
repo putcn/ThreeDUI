@@ -11,9 +11,6 @@ export function colorOf(scope: string, v: string, theme: Theme, scheme: ColorSch
   }
 }
 
-/** `[r, g, b, a]` (sRGB 0..1) as a canvas colour (`rgba(…)`), its alpha × `k`. */
-export const cssColor = ([r, g, b, a]: RGBA, k = 1): string => `rgba(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)}, ${Math.round(a * k * 1000) / 1000})`
-
 /** Checks a font size: a number, or one of `theme.fontSize`'s tokens; anything else throws `[scope] …` (a string number hints at `:size`). */
 export function checkFontSize(scope: string, v: number | string, theme: Theme): void {
   if (typeof v === 'number' || Object.hasOwn(theme.fontSize, v)) return

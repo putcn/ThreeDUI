@@ -1,5 +1,5 @@
 import type { RGBA } from '@glassui/core'
-import { cssColor as css } from './components/tokens'
+import { cssColor as css } from './colors'
 
 /** pt: the gutter left of the plot (the y labels) and the one under it (the x labels). */
 export const GUTTER = { left: 44, bottom: 22 } as const

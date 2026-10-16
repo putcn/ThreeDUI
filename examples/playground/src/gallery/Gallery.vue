@@ -1,9 +1,10 @@
 <script setup lang="ts">
-// The component gallery (`?scene=gallery`): every @glassui/vue component, section by section. Content only, so no
-// glass in the column (spec §8.3: glass on controls, never on content areas); later sections add the controls. Beside
-// it stands a world-layer <Surface>: a glass panel in the scene, turned about Y, with hover and clicks of its own.
-import { computed, h, ref, type FunctionalComponent } from 'vue'
-import { Box, Icon, ICON_NAMES, Stack, Surface, Text, useScheme } from '@glassui/vue'
+// The component gallery (`?scene=gallery`): every @glassui/vue component, section by section. The content sits on the
+// wall with no glass under it (spec §8.3: glass on controls, never on content areas); the controls (Buttons) are glass
+// right on the wall, with no panel behind them. Beside the column stands a world-layer <Surface>: a glass panel in the
+// scene, turned about Y, with hover and clicks of its own.
+import { computed, h, onBeforeUnmount, ref, type FunctionalComponent } from 'vue'
+import { Box, Button, Icon, ICON_NAMES, Stack, Surface, Text, useScheme } from '@glassui/vue'
 
 // The page is a vertical `scroll` (the wheel scrolls it once later sections outgrow the viewport). No page fill: the
 // content sits on the wall itself, which the later sections' glass refracts.
@@ -31,6 +32,25 @@ const colors = [
 ] as const
 const tile = { padding: 16, radius: 16, border: { width: 1, color: 'separator' }, flexGrow: 1, flexBasis: 0 }
 const tint = (a: number) => ({ width: 36, height: 36, radius: 10, bg: 'accent', opacity: a })
+
+/** The Buttons section: each variant in the three sizes (small, regular, large), its labels growing with the size. */
+const variants = [
+  { variant: 'glassProminent', caption: 'GLASS PROMINENT · 主操作', labels: ['确定', '创建账号', '开始免费试用'] },
+  { variant: 'glass', caption: 'GLASS · 次要操作', labels: ['取消', '稍后再说', '查看详情'] },
+  { variant: 'filled', caption: 'FILLED · 实心', labels: ['提交', '保存更改', '立即购买'] },
+  { variant: 'tinted', caption: 'TINTED · 淡底', labels: ['收藏', '加入清单', '订阅更新'] },
+  { variant: 'plain', caption: 'PLAIN · 纯文字', labels: ['编辑', '查看全部', '了解更多'] },
+] as const
+const sizes = ['small', 'regular', 'large'] as const
+/** Presses of the primary action, and the "保存" Button that loads for a moment when pressed. */
+const presses = ref(0), saving = ref(false)
+let saveTimer: ReturnType<typeof setTimeout> | undefined
+const save = () => {
+  if (saving.value) return
+  saving.value = true
+  saveTimer = setTimeout(() => { saving.value = false }, 1600)
+}
+onBeforeUnmount(() => clearTimeout(saveTimer))
 </script>
 
 <template>
@@ -154,6 +174,68 @@ const tint = (a: number) => ({ width: 36, height: 36, radius: 10, bg: 'accent', 
               </Stack>
             </Stack>
           </Stack>
+        </Stack>
+      </Stack>
+
+      <Stack id="buttons" :gap="24">
+        <Stack :gap="12">
+          <Stack direction="horizontal" justify="between" align="end">
+            <Text value="Buttons" size="xl" :weight="700" />
+            <Text value="按钮 · 五种外观 × 三种尺寸 · 悬停上浮倾斜，按下缩小" size="sm" color="secondaryLabel" :style="{ marginBottom: 3 }" />
+          </Stack>
+          <Box :style="{ height: 1, bg: 'separator' }" />
+        </Stack>
+
+        <!-- every variant in every size: glass right on the wall, no panel behind it -->
+        <Stack :gap="16">
+          <Stack v-for="v in variants" :key="v.variant" direction="horizontal" :gap="16" align="center">
+            <Text :value="v.caption" :size="12" :weight="600" color="secondaryLabel" :style="{ width: 176, letterSpacing: 1 }" />
+            <Button v-for="(s, i) in sizes" :key="s" :variant="v.variant" :size="s" :label="v.labels[i]" />
+          </Stack>
+        </Stack>
+
+        <Stack direction="horizontal" :gap="40" align="end" wrap>
+          <Stack :gap="10">
+            <Stack direction="horizontal" :gap="12" align="center">
+              <Button label="不可用" disabled />
+              <Button variant="glassProminent" label="不可用" disabled />
+              <Button variant="filled" label="不可用" disabled />
+            </Stack>
+            <Caption value="禁用 DISABLED" />
+          </Stack>
+          <Stack :gap="10">
+            <Stack direction="horizontal" :gap="12" align="center">
+              <Button label="同步中" loading />
+              <Button variant="glassProminent" label="保存" leading-icon="check" :loading="saving" @press="save" />
+            </Stack>
+            <Caption value="加载中 LOADING · 点「保存」试试" />
+          </Stack>
+        </Stack>
+
+        <Stack direction="horizontal" :gap="40" align="end" wrap>
+          <Stack :gap="10">
+            <Stack direction="horizontal" :gap="12" align="center">
+              <Button shape="circle" size="small" leading-icon="plus" />
+              <Button shape="circle" leading-icon="heart" />
+              <Button shape="circle" size="large" leading-icon="gear" />
+              <Button shape="circle" variant="glassProminent" leading-icon="search" />
+              <Button shape="circle" variant="tinted" leading-icon="star" />
+            </Stack>
+            <Caption value="圆形 CIRCLE · 只放图标" />
+          </Stack>
+          <Stack :gap="10">
+            <Stack direction="horizontal" :gap="12" align="center">
+              <Button shape="roundedRectangle" label="新建" leading-icon="plus" />
+              <Button shape="roundedRectangle" variant="filled" label="下一步" trailing-icon="chevron-right" />
+            </Stack>
+            <Caption value="圆角矩形 ROUNDED RECTANGLE · 图标" />
+          </Stack>
+        </Stack>
+
+        <!-- the reference's primary action: large glowing glass, the label and arrow centred, full width -->
+        <Stack :gap="10" align="start" :style="{ maxWidth: 560 }">
+          <Button variant="glassProminent" size="large" label="创建账号" trailing-icon="arrow-right" full-width @press="presses++" />
+          <Text :value="presses ? `press 触发了 ${presses} 次` : '点按、Enter 或空格都会触发 press；Tab 聚焦时显示焦点环'" size="sm" color="secondaryLabel" />
         </Stack>
       </Stack>
     </Box>

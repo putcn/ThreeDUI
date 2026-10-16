@@ -1,6 +1,6 @@
 import type { RGBA } from '@glassui/core'
 import type { CanvasFactory, CanvasLike } from '@glassui/text'
-import { cssColor as css } from './components/tokens'
+import { cssColor as css } from './colors'
 
 /** The built-in icons (`<Icon name>`): the playground's set, then SF-Symbols-like strokes on the same 24-unit grid. */
 export const ICON_NAMES = [
@@ -8,6 +8,17 @@ export const ICON_NAMES = [
   'eye-slash', 'chevron-left', 'chevron-right', 'chevron-up', 'chevron-down', 'plus', 'minus', 'search', 'gear', 'info', 'warning', 'star', 'heart',
 ] as const
 export type IconName = (typeof ICON_NAMES)[number]
+
+/**
+ * Names from other icon sets → ours: an icon prop's (`Icon.name`, `Button.leadingIcon`…) error suggests the one meant
+ * (an alias is still an invalid name).
+ */
+export const ICON_ALIASES: Readonly<Record<string, IconName>> = {
+  close: 'x', cross: 'x', times: 'x', settings: 'gear', cog: 'gear', ok: 'check', tick: 'check', checkmark: 'check',
+  back: 'chevron-left', previous: 'chevron-left', prev: 'chevron-left', forward: 'chevron-right', next: 'chevron-right',
+  add: 'plus', remove: 'minus', subtract: 'minus', person: 'user', profile: 'user', account: 'user', email: 'mail', envelope: 'mail',
+  alert: 'warning', error: 'warning', favorite: 'heart', like: 'heart', hide: 'eye-slash', show: 'eye', password: 'lock', magnifier: 'search',
+}
 
 /** The Canvas2D calls the icons use (a DOM canvas and `@napi-rs/canvas` both have them; `CanvasLike` types fewer). */
 type Ctx = Pick<CanvasRenderingContext2D,

@@ -41,3 +41,8 @@ function find(n: Node, type: NodeType): Node | null {
   for (const c of n.children) { if (c.type === type) return c; const hit = find(c, type); if (hit) return hit }
   return null
 }
+/** Every node of `type` under `n`, depth-first (`n` itself excluded). */
+export function all(n: Node, type: NodeType, out: Node[] = []): Node[] {
+  for (const c of n.children) { if (c.type === type) out.push(c); all(c, type, out) }
+  return out
+}

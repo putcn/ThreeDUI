@@ -8,7 +8,8 @@ import { useCanvasFactory, useRoot, useScheme } from '../inject'
 import { useLaidOutWidth } from '../layout-width'
 import { drawLineChart, GUTTER, type LineChartDrawing } from '../linechart-draw'
 import { Text } from './Text'
-import { colorOf, cssColor as css } from './tokens'
+import { cssColor as css } from '../colors'
+import { colorOf } from './tokens'
 
 /** The series colours when a series names none, by its index (then again from the first). */
 const DEFAULT_COLORS = ['accent', 'success', 'danger', 'secondaryLabel'] as const

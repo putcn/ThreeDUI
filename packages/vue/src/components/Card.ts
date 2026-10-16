@@ -1,6 +1,7 @@
 import { h, inject, onBeforeUnmount, onMounted, shallowRef, watch } from '@vue/runtime-core'
 import { z } from 'zod'
 import type { Node, Style, UIEvent } from '@glassui/core'
+import { tiltToward } from '../control'
 import { defineGlassComponent } from '../define'
 import { useMotion, useRoot } from '../inject'
 import { BLOCK } from '../spatial/context'
@@ -22,9 +23,6 @@ const CARD: Style = {
   bg: 'glass', radius: 'xl', padding: 24, gap: 12, flexDirection: 'column', glass: { thickness: 12, fillet: 4, filletBottom: 2 },
   transition: { elevation: 'smooth', tilt: 'snappy' },
 }
-
-/** Where `v` falls across `size`, 0..1 (the middle when there is no size). */
-const across = (v: number, size: number): number => size > 0 ? Math.min(1, Math.max(0, v / size)) : 0.5
 
 export const Card = defineGlassComponent({
   name: 'Card',
@@ -51,17 +49,16 @@ export const Card = defineGlassComponent({
 
   /** Back to rest: no tilt, the resting elevation. */
   const settle = (n: Node): void => { hovered = false; n.tilt = { x: 0, y: 0 }; n.elevation = CARD_DEPTH.rest }
-  // up to the hover elevation, tilted so its face turns toward the pointer (the edge under it recedes: +tilt.y takes the
-  // right edge back and −tilt.x the top one, in the render's y-up frame); reduced motion lifts without tilting. Only a
-  // mouse or a pen hovers (core spec §8.3): a finger dragging over a Card leaves it at rest, as the rig's parallax does
+  // up to the hover elevation, tilted so its face turns toward the pointer (`tiltToward`: the edge under it recedes, as
+  // a control's does); reduced motion lifts without tilting. Only a mouse or a pen hovers (core spec §8.3): a finger
+  // dragging over a Card leaves it at rest, as the rig's parallax does
   const onPointermove = (e: UIEvent): void => {
     const n = box.value
     if (!n || (block && !block.focused.value)) return
     if (e.pointerType !== 'mouse' && e.pointerType !== 'pen') return
     hovered = true
     n.elevation = CARD_DEPTH.hover
-    const lx = across(e.localX, n.layout.width), ly = across(e.localY, n.layout.height), t = CARD_DEPTH.tilt
-    n.tilt = root.anim.reducedMotion ? { x: 0, y: 0 } : { x: (ly - 0.5) * 2 * t, y: (lx - 0.5) * 2 * t }
+    n.tilt = root.anim.reducedMotion ? { x: 0, y: 0 } : tiltToward(n, e, CARD_DEPTH.tilt)
   }
   const onPointerleave = (): void => { const n = box.value; if (n && hovered) settle(n) }
   // a Block that loses the focus under a still pointer: its content takes no more pointer events, so no leave comes

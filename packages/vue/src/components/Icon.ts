@@ -1,8 +1,8 @@
-import { h, onScopeDispose, shallowRef } from '@vue/runtime-core'
+import { h } from '@vue/runtime-core'
 import { z } from 'zod'
 import { defineGlassComponent } from '../define'
-import { useCanvasFactory, useRoot, useScheme } from '../inject'
-import { ICON_NAMES, iconCanvas } from '../icons'
+import { useCanvasFactory, useScheme, useTheme } from '../inject'
+import { ICON_ALIASES, ICON_NAMES, iconCanvas } from '../icons'
 import { colorOf } from './tokens'
 
 export const Icon = defineGlassComponent({
@@ -23,20 +23,10 @@ export const Icon = defineGlassComponent({
     { mistake: 'size="20" (a string)', fix: ':size="20"' },
     { mistake: 'name="close"', fix: 'name="x"' },
   ],
-  // names from other icon sets → ours, for the error's suggestion only (an alias is still an invalid name)
-  aliases: {
-    name: {
-      close: 'x', cross: 'x', times: 'x', settings: 'gear', cog: 'gear', ok: 'check', tick: 'check', checkmark: 'check',
-      back: 'chevron-left', previous: 'chevron-left', prev: 'chevron-left', forward: 'chevron-right', next: 'chevron-right',
-      add: 'plus', remove: 'minus', subtract: 'minus', person: 'user', profile: 'user', account: 'user', email: 'mail', envelope: 'mail',
-      alert: 'warning', error: 'warning', favorite: 'heart', like: 'heart', hide: 'eye-slash', show: 'eye', password: 'lock', magnifier: 'search',
-    },
-  },
+  aliases: { name: ICON_ALIASES },
 }, (p) => {
-  const root = useRoot(), scheme = useScheme(), createCanvas = useCanvasFactory()
   // the theme too (a `setTheme` with the same scheme swaps the colours the tokens name)
-  const theme = shallowRef(root.theme)
-  onScopeDispose(root.on('theme', e => { theme.value = e.theme }))
+  const scheme = useScheme(), theme = useTheme(), createCanvas = useCanvasFactory()
   return () => {
     const { name, size, color, weight } = p.value
     const src = iconCanvas(name, size, colorOf('Icon.color', color, theme.value, scheme.value), weight, createCanvas)
