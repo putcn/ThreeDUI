@@ -86,7 +86,7 @@ interface Viewport3DContext {
 }
 surface.focusView: { fovDeg: number; aspect: number; margin: number } | null   // root 每次 tick 写入
 rig.margin: number                                      // 只读：对焦时每边留的边距比例（CameraRigOptions.margin）
-RIG_MARGIN = 0.08                                       // 没有 rig 时用的默认边距
+RIG_MARGIN = 0.08                                       // （internal，经 @glassui/render/internal 导出）没有 rig 时用的默认边距
 ```
 
 - **坐标系**：物体挂在一个锚点 Group 下。原点在节点盒子的中心，z = 0 在它所贴的面上：最近的玻璃祖先（如 Card）的顶面，没有则是内容面；x 向右、y 向上、z 朝外，1 个局部单位 = 1 pt。每次 `tick` 在布局之后按节点的 `worldRect` 更新锚点。
