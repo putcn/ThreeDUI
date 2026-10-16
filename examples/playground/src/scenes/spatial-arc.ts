@@ -54,10 +54,10 @@ export const PLACE_PANEL = {
 
 /**
  * The curved wall round the arc (main.ts): about the arc's centre, `out` units past the Blocks, `height` tall like the
- * plane (a focus pose sees no more than |y| ≈ 4.9: the network Block's at 4:3, the camera farthest back), spanning the
- * Blocks' arc angles plus `margin` on each side: an end Block's focus pose sees up to about 26° past its angle at 16:9
- * and 32° at 21:9, the rig's ±2.5° parallax included (the network's, mid-arc, 33°). test/scene.test.ts checks every
- * Block at four aspects.
+ * plane, spanning the Blocks' arc angles plus `margin` on each side. Seen from a focus pose (the rig's: fit distance,
+ * ±2.5° parallax about the Block's centre), an end Block sees 26° past its angle at 1512 × 808 and 31° at 21:9, and no
+ * view reaches past |y| ≈ 4.6 (the network Block's at 4:3); its pastel repeats along it (createCurvedWall), so every
+ * view is covered at one density. test/scene.test.ts checks every Block at five aspects and every parallax corner.
  */
 export const WALL = { out: 4, height: 11, margin: 34 * Math.PI / 180 } as const
 /** The wall's span (radians, as the arc measures angles) for Blocks at `angles`. */

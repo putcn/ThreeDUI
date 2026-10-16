@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { h, nextTick } from 'vue'
-import { InstancedMesh, LineSegments, Matrix4, Mesh, Vector3, type BufferGeometry, type Object3D } from 'three'
+import { Euler, InstancedMesh, LineSegments, Matrix4, Mesh, Quaternion, Vector3, type BufferGeometry, type Material, type Object3D } from 'three'
 import { absoluteRect, defaultTheme, type Node } from '@glassui/core'
 import { fitDistance } from '@glassui/render/internal'
 import { flush, type FakeRoot, type FakeSurface } from '../../../packages/vue/test/fixtures/fake-root'
@@ -9,7 +9,7 @@ import Spatial from '../src/scenes/Spatial.vue'
 import { bins, heat, kpis, network, orders, stock } from '../src/wms/data'
 import { YAW_LIMIT } from '../src/wms/warehouse'
 import { laneSummary, lanesOf, LIMITS } from '../src/wms/map'
-import { createCurvedWall, MAX_U_LENGTH } from '../src/wall'
+import { arcPastel, createCurvedWall, MAX_U_LENGTH } from '../src/wall'
 import { ARC, BLOCKS, inFrameOf, NETWORK, PANEL, PLACE_PANEL, TWIN, WALL, wallSpan } from '../src/scenes/spatial-arc'
 
 /** pt per world unit (the Blocks' and the panel's). */
@@ -413,39 +413,81 @@ describe('the network Block', () => {
 })
 
 describe('the curved wall', () => {
-  it('covers every Block\'s focus view, at four aspects, the parallax included', async () => {
-    const s = await scene('overview'), blocks = [s.orders, s.overview, s.network, s.twin], names = ['orders', 'overview', 'network', 'twin'], pt = 244
-    const angles = blocks.map(b => -b.restPose.rotation[1]), { from, to } = wallSpan(angles), R = ARC.radius, wall = R + WALL.out
-    const half = 19 * Math.PI / 180, parallax = 2.5 * Math.PI / 180
-    blocks.forEach((b, n) => { for (const aspect of [21 / 9, 16 / 9, 16 / 10, 4 / 3]) {
-      const θ = -b.restPose.rotation[1], { width, height } = b.model, slab = 0.05 * Math.min(width, height) / pt
-      const d = fitDistance(width / pt, height / pt, 38, aspect, 0.08), back = R - (slab + d)    // the camera, this far from the arc's centre
-      expect(back, names[n]).toBeGreaterThan(0)
-      const hh = Math.atan(Math.tan(half) * aspect) + parallax
-      let lo = Infinity, hi = -Infinity, tall = 0
-      for (let i = 0; i <= 40; i++) {
-        const φ = -hh + (2 * hh * i) / 40
-        // the camera at `back` along the Block's direction from the centre, looking out along it (x–z: the arc's plane)
-        const cx = back * Math.sin(θ), cz = -back * Math.cos(θ), dx = Math.sin(θ + φ), dz = -Math.cos(θ + φ)
-        const p = cx * dx + cz * dz, t = -p + Math.sqrt(p * p - (back * back - wall * wall))   // where the ray meets the wall
-        const hx = cx + t * dx, hz = cz + t * dz, a = Math.atan2(hx, -hz)
-        lo = Math.min(lo, a); hi = Math.max(hi, a)
-        tall = Math.max(tall, t * Math.cos(φ) * Math.tan(half + parallax))
+  /** The rig's camera at a Block's focus pose, orbited by the parallax (`yaw`, `pitch`, radians) about its content-plane centre. */
+  function focusCamera(b: FakeSurface, aspect: number, yaw: number, pitch: number): { eye: Vector3; turn: Quaternion } {
+    const pt = 244, { width, height } = b.model, slab = 0.05 * Math.min(width, height) / pt
+    const turn = new Quaternion().setFromEuler(new Euler(...b.restPose.rotation, 'XYZ')), normal = new Vector3(0, 0, 1).applyQuaternion(turn)
+    const centre = new Vector3(...b.restPose.position).addScaledVector(normal, slab)
+    const d = fitDistance(width / pt, height / pt, 38, aspect, 0.08)
+    // the parallax: yaw about the target's up axis, pitch about its right one, both about its centre
+    const up = new Vector3(0, 1, 0).applyQuaternion(turn), right = new Vector3(1, 0, 0).applyQuaternion(turn)
+    const orbit = new Quaternion().setFromAxisAngle(up, yaw).multiply(new Quaternion().setFromAxisAngle(right, -pitch))
+    return { eye: centre.clone().add(normal.multiplyScalar(d).applyQuaternion(orbit)), turn: orbit.multiply(turn) }
+  }
+  /** u along the wall at arc angle `a`, read off the mesh's own uvs (its top row), interpolated. */
+  function uAt(wall: Mesh, a: number): number {
+    const g = wall.geometry as BufferGeometry, pos = g.getAttribute('position'), uv = g.getAttribute('uv'), row: [number, number][] = []
+    for (let i = 0; i < pos.count; i++) if (pos.getY(i) > 0) row.push([Math.atan2(pos.getX(i), -pos.getZ(i)), uv.getX(i)])
+    row.sort((p, q) => p[0] - q[0])
+    for (let i = 1; i < row.length; i++) {
+      const [a0, u0] = row[i - 1]!, [a1, u1] = row[i]!
+      if (a >= a0 && a <= a1) return u0 + (u1 - u0) * (a - a0) / (a1 - a0 || 1)
+    }
+    return Number.NaN
+  }
+  const ASPECTS = [1512 / 808, 21 / 9, 16 / 9, 16 / 10, 4 / 3]
+
+  it('every Block\'s focus view, at five aspects and every corner of the ±2.5° parallax, sees nothing but the wall, and wall the pastel covers at its full density', async () => {
+    const s = await scene('overview'), blocks = [s.orders, s.overview, s.network, s.twin], names = ['orders', 'overview', 'network', 'twin']
+    const angles = blocks.map(b => -b.restPose.rotation[1]), span = wallSpan(angles), R = ARC.radius, r = R + WALL.out
+    const wall = createCurvedWall({ center: [0, 0, R], radius: r, ...span, height: WALL.height })
+    const periodic = (wall.material as Material).userData.periodicU === true
+    const half = Math.tan(19 * Math.PI / 180), par = 2.5 * Math.PI / 180
+    blocks.forEach((b, n) => {
+      for (const aspect of ASPECTS) for (const yaw of [-par, 0, par]) for (const pitch of [-par, 0, par]) {
+        const { eye, turn } = focusCamera(b, aspect, yaw, pitch)
+        let lo = Infinity, hi = -Infinity, tall = 0, u0 = Infinity, u1 = -Infinity
+        // rays through the frustum's border, every tenth of each edge
+        for (let i = 0; i <= 20; i++) for (const [x, y] of [[-1 + i / 10, -1], [-1 + i / 10, 1], [-1, -1 + i / 10], [1, -1 + i / 10]] as const) {
+          const dir = new Vector3(x * half * aspect, y * half, -1).applyQuaternion(turn).normalize()
+          // where it meets the wall's cylinder (axis vertical through (0, ·, R)), going out
+          const ox = eye.x, oz = eye.z - R, A = dir.x * dir.x + dir.z * dir.z, B = 2 * (ox * dir.x + oz * dir.z), C = ox * ox + oz * oz - r * r
+          const t = (-B + Math.sqrt(B * B - 4 * A * C)) / (2 * A), hx = ox + t * dir.x, hz = oz + t * dir.z, hy = eye.y + t * dir.y
+          const a = Math.atan2(hx, -hz), u = uAt(wall, a)
+          lo = Math.min(lo, a); hi = Math.max(hi, a); tall = Math.max(tall, Math.abs(hy)); u0 = Math.min(u0, u); u1 = Math.max(u1, u)
+        }
+        const at = `${names[n]} @ ${aspect.toFixed(2)}, parallax ${(yaw / par).toFixed(0)},${(pitch / par).toFixed(0)}`
+        expect(lo, at).toBeGreaterThan(span.from); expect(hi, at).toBeLessThan(span.to)
+        expect(tall, at).toBeLessThan(WALL.height / 2)
+        if (!periodic) { expect(u0, at).toBeGreaterThanOrEqual(0); expect(u1, at).toBeLessThanOrEqual(1) }
       }
-      expect(lo, `${names[n]} ${aspect}`).toBeGreaterThan(from); expect(hi, `${names[n]} ${aspect}`).toBeLessThan(to)
-      expect(tall, `${names[n]} ${aspect}`).toBeLessThan(WALL.height / 2)
-    } })
+    })
   })
 
-  it('keeps its colour\'s density on a long arc: u spans 0–1 over at most 32 units, past them by as much at either end', () => {
+  it('its colour has the density behind the overview everywhere: u runs one a 32 units along it, and the arc\'s pastel repeats seamlessly in u', () => {
     const angles = [0, 0.5, 1.14, 1.75], { from, to } = wallSpan(angles), radius = ARC.radius + WALL.out
     const long = createCurvedWall({ center: [0, 0, ARC.radius], radius, from, to, height: WALL.height })
     const span = (m: Mesh): [number, number] => { const u = (m.geometry as BufferGeometry).getAttribute('uv'); let a = Infinity, b = -Infinity; for (let i = 0; i < u.count; i++) { a = Math.min(a, u.getX(i)); b = Math.max(b, u.getX(i)) } return [a, b] }
     const [a, b] = span(long), length = radius * (to - from)
-    expect(length).toBeGreaterThan(MAX_U_LENGTH)
-    expect(b - a).toBeCloseTo(length / MAX_U_LENGTH, 6); expect((a + b) / 2).toBeCloseTo(0.5, 6)
-    const short = createCurvedWall({ center: [0, 0, 7], radius: 11, from: -0.6, to: 1.2, height: 11 })
-    expect(span(short)).toEqual([0, 1])
+    expect(b - a).toBeCloseTo(length / MAX_U_LENGTH, 6)
+    expect((long.material as Material).userData.periodicU).toBe(true)
+  })
+
+  it('the arc\'s pastel repeats seamlessly (period 1 in u) and has no grey: bright everywhere a view can see, with colour in it', () => {
+    let low = Infinity, chroma = 0
+    for (let u = -1; u <= 2; u += 0.01) for (let v = 0.1; v <= 0.9; v += 0.02) {
+      const c = arcPastel(u, v), next = arcPastel(u + 1, v)
+      for (let i = 0; i < 3; i++) expect(next[i]).toBeCloseTo(c[i]!, 9)
+      low = Math.min(low, 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2])
+      chroma = Math.max(chroma, Math.max(...c) - Math.min(...c))
+    }
+    // the plane's dark side went to about 0.35 under the orders Block: the arc stays light, and coloured
+    expect(low).toBeGreaterThan(0.65); expect(chroma).toBeGreaterThan(0.12)
+    // continuous across the wrap (no seam): neighbours a hair apart either side of u = 0 and of every blob's wrap
+    for (const v of [0.15, 0.5, 0.85]) for (const u of [0, 0.18 + 0.5, 0.86 - 0.5, 0.78 - 0.5, 0.55 + 0.5]) {
+      const a = arcPastel(u - 1e-6, v), b = arcPastel(u + 1e-6, v)
+      for (let i = 0; i < 3; i++) expect(Math.abs(a[i]! - b[i]!)).toBeLessThan(1e-4)
+    }
   })
 })
 

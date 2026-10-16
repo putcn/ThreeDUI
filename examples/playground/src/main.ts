@@ -181,8 +181,8 @@ async function start(): Promise<UIRoot> {
  * The spatial scene's backdrop: a curved wall about the arc's centre (0, 0, ARC.radius), `WALL.out` past the arc,
  * spanning the Blocks' arc angles (read off their rest poses, the network's and the twin's explicit ones included: they
  * stand on the arc too, so they follow a retuned arc) plus `WALL.margin` on each side (spatial-arc.ts). At the WMS arc
- * (radius 10, four Blocks) that is −34° to 134°: an arc of about 41 units (the plane is 16; createCurvedWall keeps its
- * colour at the density of 32).
+ * (radius 10, four Blocks) that is −34° to 134°: an arc of about 41 units, its pastel repeating along it at one
+ * density (createCurvedWall: u one every 32 units, seamless), so no view sees the colour run out.
  */
 function spatialWall(blocks: readonly Surface[]): Mesh {
   return createCurvedWall({ center: [0, 0, ARC.radius], radius: ARC.radius + WALL.out, ...wallSpan(blocks.map(s => -s.restPose.rotation[1])), height: WALL.height })
