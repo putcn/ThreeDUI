@@ -1,10 +1,11 @@
-import { computed, h, onBeforeUnmount, onMounted, onUpdated, shallowRef, watch, watchEffect, type VNode } from '@vue/runtime-core'
+import { computed, h, onBeforeUnmount, shallowRef, watch, watchEffect, type VNode } from '@vue/runtime-core'
 import { z } from 'zod'
 import type { Node, UIEvent } from '@glassui/core'
 import type { Surface, Viewport3DContext } from '@glassui/render'
 import { formatValue, niceMax } from '../chart'
 import { defineGlassComponent } from '../define'
 import { useRoot, useScheme, useSurfaceRef } from '../inject'
+import { useLaidOutWidth } from '../layout-width'
 import { isHeld } from '../renderer'
 import { Text } from './Text'
 import { colorOf } from './tokens'
@@ -80,16 +81,9 @@ export const BarChart3D = defineGlassComponent({
     onClick: (e: UIEvent) => { select(e.object) },
   }
 
-  // the chart box's laid-out width, read once the frame after a mount or a re-render has laid it out (0 until then:
-  // no tag); the label row and the tag restate the render chart's columns: n equal ones, bar i centred on its own
-  const box = shallowRef<Node | null>(null), width = shallowRef(0)
-  let waiting = false
-  const measure = (): void => {
-    if (waiting) return
-    waiting = true
-    void root.afterTick().then(() => { waiting = false; width.value = box.value?.layout.width ?? 0 })
-  }
-  onMounted(measure); onUpdated(measure)
+  // the chart box's laid-out width, kept current every tick (0 until the first one: no tag); the label row and the tag
+  // restate the render chart's columns: n equal ones, bar i centred on its own
+  const box = shallowRef<Node | null>(null), width = useLaidOutWidth(root, box)
   /** The value tag over bar `i`: centred on its column, 8 pt above its top. */
   const tag = (x: Props, i: number): VNode | null => {
     const d = x.data[i], w = width.value

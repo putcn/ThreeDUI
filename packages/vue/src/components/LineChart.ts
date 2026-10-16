@@ -1,10 +1,11 @@
-import { computed, h, onMounted, onScopeDispose, onUpdated, shallowRef, watch, type VNode } from '@vue/runtime-core'
+import { computed, h, onScopeDispose, shallowRef, watch, type VNode } from '@vue/runtime-core'
 import { z } from 'zod'
 import type { Node, RGBA, UIEvent } from '@glassui/core'
 import type { CanvasLike } from '@glassui/text'
 import { formatValue, niceTicks } from '../chart'
 import { defineGlassComponent } from '../define'
 import { useCanvasFactory, useRoot, useScheme } from '../inject'
+import { useLaidOutWidth } from '../layout-width'
 import { drawLineChart, GUTTER, type LineChartDrawing } from '../linechart-draw'
 import { Text } from './Text'
 import { colorOf } from './tokens'
@@ -70,16 +71,8 @@ export const LineChart = defineGlassComponent({
   /** The last valid props (the render reports invalid ones). */
   const v = computed<Props | null>(prev => { try { return p.value } catch { return prev ?? null } })
 
-  // the chart box's laid-out width, read once the frame after a mount or a re-render has laid it out (0 until then:
-  // nothing drawn yet)
-  const box = shallowRef<Node | null>(null), width = shallowRef(0)
-  let waiting = false
-  const measure = (): void => {
-    if (waiting) return
-    waiting = true
-    void root.afterTick().then(() => { waiting = false; width.value = box.value?.layout.width ?? 0 })
-  }
-  onMounted(measure); onUpdated(measure)
+  // the chart box's laid-out width, kept current every tick (0 until the first one: nothing drawn yet)
+  const box = shallowRef<Node | null>(null), width = useLaidOutWidth(root, box)
 
   const hovered = shallowRef<number | null>(null)
   const setHover = (i: number | null): void => {
@@ -91,7 +84,10 @@ export const LineChart = defineGlassComponent({
   }
   // a hovered point the data no longer has (or no chart at all) is hovered no more
   watch(() => { const x = v.value; return x && x.series.length ? x.labels.length : 0 }, n => { const i = hovered.value; if (i !== null && i >= n) setHover(null) })
+  // no hover by touch (core spec §8.3): a finger dragging across the Block would scrub the chart, redrawing it at each
+  // point. Only touch is refused, so an event that names no pointer type still hovers
   const onPointermove = (e: UIEvent): void => {
+    if (e.pointerType === 'touch') return
     const x = v.value, w = box.value?.layout.width ?? 0
     if (!x || x.series.length === 0 || w <= GUTTER.left) return
     const n = x.labels.length

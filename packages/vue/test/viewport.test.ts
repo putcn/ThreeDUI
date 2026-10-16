@@ -68,6 +68,18 @@ it('BarChart3D: one label column per bar; hover shows the formatted value over i
   s.pointer.move(-999, -999, 'mouse'); await nextTick(); expect(root.charts[0]!.hover).toHaveBeenLastCalledWith(null)
   expect(JSON.stringify(tree(s.root))).not.toContain('2 次')
 })
+it('BarChart3D: resizing its Block alone (the same props) moves the hovered value tag', async () => {
+  const root = createFakeRoot(), w = ref(488), props = { data: [{ label: 'A', value: 1 }, { label: 'B', value: 2 }] }
+  mountGlass(() => h(Space, { camera: false }, () => [h(Block, { name: 'a', width: w.value, height: 488 }, () => [h(BarChart3D, props)])]), { root })
+  await flush(); root.tick(); await flush()
+  const s = root.surfacesMade[0]!, vp = s.attached[0]!.node, box = vp.parent!
+  s.pointer.move(-999, -999, 'mouse', { node: vp, object: { isObject3D: true, userData: { index: 1 } } }); await nextTick(); root.tick(); await flush()
+  const tag = () => box.children.find(c => c !== vp && c.type === 'box')!
+  const before = box.layout.width
+  expect(tag().style.left).toBe(before / 2 * 1.5 - 40)
+  w.value = 588; await nextTick(); root.tick(); await flush()
+  expect(box.layout.width).toBe(before + 100); expect(tag().style.left).toBe((before + 100) / 2 * 1.5 - 40)
+})
 it('BarChart3D: a hovered bar the data drops is hovered no more', async () => {
   const root = createFakeRoot(), two = [{ label: 'A', value: 1 }, { label: 'B', value: 2 }], data = ref(two)
   mountGlass(() => inBlock(() => h(BarChart3D, { data: data.value })), { root }); await flush(); root.tick()

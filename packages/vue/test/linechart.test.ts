@@ -83,6 +83,16 @@ it('niceTicks: 3–6 evenly stepped, exact ticks covering any range; niceMax is 
   }
   expect([0, 0.3, 5, 17, 101, 236, 186].map(niceMax)).toEqual([1, 0.3, 5, 20, 150, 250, 200])
 })
+it('niceTicks: a range the doubles cannot step through ends at once, in 3–6 finite ticks; a swapped range starts at the smaller', () => {
+  for (const [a, b] of [[-1.7e308, 1.7e308], [-Number.MAX_VALUE, Number.MAX_VALUE], [0, 1.7e308], [1.7e308, 1.7e308]] as const) {
+    const t = niceTicks(a, b)
+    expect(t.length, `${a}..${b}`).toBeGreaterThanOrEqual(3); expect(t.length, `${a}..${b}`).toBeLessThanOrEqual(6)
+    expect(t.every(Number.isFinite), `${a}..${b}: ${t}`).toBe(true)
+    expect(t[0]).toBeLessThanOrEqual(a); expect(t.at(-1)).toBeGreaterThanOrEqual(b)
+  }
+  expect(niceTicks(-1.7e308, 1.7e308)).toEqual([-1.7e308, 0, 1.7e308])
+  expect(niceTicks(5, 3)).toEqual([3, 4, 5, 6])                                          // 3..3 + |3|
+})
 it('drawLineChart: under the curve an area fades from 0.22 of the series colour to nothing; above it is clear', () => {
   const c = createCanvas(400, 200), ctx = c.getContext('2d') as unknown as CanvasRenderingContext2D
   drawLineChart(ctx, { ...base, labels: ['a', 'b'], series: [{ color: [1, 0, 0, 1], data: [50, 50] }], ticks: [0, 50, 100] })
@@ -218,6 +228,32 @@ it('LineChart redraws only when what it draws changes', async () => {
   expect(img.props.src).toBe(before)                                                       // equal props, a new array: the same drawing
   d.value = [3, 2, 1]; await nextTick()
   expect(img.props.src).not.toBe(before)
+})
+it('LineChart redraws when only its box is resized: no new props, a 600 px canvas at 300 pt', async () => {
+  const root = createFakeRoot(), w = ref(400), labels = ['一', '二', '三'], series = [{ name: '入库', data: [1, 3, 2] }]
+  const c = await laidOut(root, () => h(Box, { style: { width: w.value } }, () => [h(LineChart, { labels, series })]))
+  const img = first(c, 'image')
+  expect((img.props.src as Canvas).width).toBe(800)
+  w.value = 300; await nextTick(); root.tick(); await flush()
+  expect((img.props.src as Canvas).width).toBe(600); expect((img.props.src as Canvas).height).toBe(400)
+})
+it('the width loop ends once the root has no Surfaces: a disposed root, whose afterTick resolves at once, does not spin', async () => {
+  const root = createFakeRoot()
+  mountGlass(() => h(LineChart, { labels: ['一', '二'], series: [{ name: 'a', data: [1, 2] }] }), { root })   // no Surface at all
+  let calls = 0
+  // as a disposed root's afterTick (bounded here, so a spin fails the test instead of hanging it)
+  root.afterTick = () => ++calls > 50 ? new Promise<void>(() => {}) : Promise.resolve()
+  root.tick(); for (let i = 0; i < 10; i++) await flush()
+  expect(calls).toBe(0)
+})
+it('LineChart: a touch does not hover (core spec §8.3); a mouse does', async () => {
+  const root = createFakeRoot(), seen: unknown[] = []
+  const c = await laidOut(root, () => h(Box, { style: { width: 400 } }, () => [h(LineChart, { labels: ['一', '二', '三'], series: [{ name: '入库', data: [1, 3, 2] }], onHover: (e: unknown) => seen.push(e) })]))
+  const img = first(c, 'image'), box = img.parent!, src = img.props.src
+  box.handlers.get('pointermove')!({ localX: 222, localY: 50, pointerType: 'touch' } as never); await nextTick()
+  expect(seen).toEqual([]); expect(box.children.some(isPanel)).toBe(false); expect(img.props.src).toBe(src)
+  box.handlers.get('pointermove')!({ localX: 222, localY: 50, pointerType: 'mouse' } as never); await nextTick()
+  expect(seen).toEqual([{ index: 1, label: '二', values: [3] }]); expect(box.children.some(isPanel)).toBe(true)
 })
 it('LineChart errors name the prop', () => {
   const err = (props: Record<string, unknown>) => mountGlass(() => h(LineChart, props)).errors[0]
