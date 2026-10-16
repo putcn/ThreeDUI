@@ -376,7 +376,8 @@ describe('PointerBridge.handle', () => {
     bridge.handle('pointerdown', { clientX: 600, clientY: 500, pointerId: 2, pointerType: 'touch', isPrimary: false })
     bridge.handle('pointermove', { clientX: 600, clientY: 500, pointerId: 2, pointerType: 'touch', isPrimary: false })
     bridge.handle('pointerup', { clientX: 600, clientY: 500, pointerId: 2, pointerType: 'touch', isPrimary: false })
-    expect(btn.state.pressed).toBe(true); expect(btn.state.hover).toBe(true)
+    // adjusted (Task 10 M2): a touch hovers no node's state (spec §8.3), so the primary's hover is the tracker's
+    expect(btn.state.pressed).toBe(true); expect(s.pointer.hovered).toBe(btn); expect(btn.state.hover).toBe(false)
     bridge.handle('pointerup', { clientX: 200, clientY: 140, pointerId: 1, pointerType: 'touch', button: 0, isPrimary: true })
     expect(click).toHaveBeenCalledTimes(1); expect(click.mock.calls[0]![0].pointerType).toBe('touch')
   })

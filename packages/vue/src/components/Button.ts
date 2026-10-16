@@ -1,7 +1,7 @@
 import { computed, h, onBeforeUnmount, ref, shallowRef, watch, type VNodeChild } from '@vue/runtime-core'
 import { z } from 'zod'
 import { GlassUIError, type ColorScheme, type Node, type Style, type Theme } from '@glassui/core'
-import { glowingTint, withAlpha } from '../colors'
+import { glowingTint, towardWhite, withAlpha } from '../colors'
 import { controlStyle, useGlassControl } from '../control'
 import { defineGlassComponent } from '../define'
 import { ICON_ALIASES, ICON_NAMES, type IconName } from '../icons'
@@ -38,13 +38,24 @@ const LOOKS: Record<Variant, { host: 'glass' | 'box'; ink: string; weight: numbe
   plain: { host: 'box', ink: 'accent', weight: 600, pressed: { opacity: 0.55 } },
 }
 
-/** A variant's fill: glowing glass's glow and tint, a box's background; the clear glass and plain have none. */
-function fill(variant: Variant, theme: Theme, scheme: ColorScheme): Style {
+/** The press, lift, tilt and glint every control shares. */
+const CONTROL = controlStyle()
+/** A box host's springs: the control's, and its fill and opacity, which its hover and press change. */
+const BOX_TRANSITION: Style['transition'] = { ...CONTROL.transition, bg: 'snappy', opacity: 'snappy' }
+
+/**
+ * A variant's fill (glowing glass's glow and tint, a box's background; the clear glass and plain have none) and its
+ * hover (spec §8.3). Glass glints up (`controlStyle`'s hover) as it lifts and tilts. A box host on the Surface is drawn
+ * flat in the content pass, where its lift and tilt do not show, so it hovers by its fill: filled 12 % lighter, tinted
+ * at 0.24 rather than 0.15, plain fainter.
+ */
+function paint(variant: Variant, theme: Theme, scheme: ColorScheme): { fill: Style; hover: Style['hover'] } {
   switch (variant) {
-    case 'glassProminent': return { glass: { glow: { color: 'accent', strength: 1.1 }, tint: glowingTint(theme, scheme), absorption: 1.4 } }
-    case 'filled': return { bg: 'accent' }
-    case 'tinted': return { bg: withAlpha('accent', 0.15, theme, scheme) }
-    default: return {}
+    case 'glass': return { fill: {}, hover: CONTROL.hover }
+    case 'glassProminent': return { fill: { glass: { glow: { color: 'accent', strength: 1.1 }, tint: glowingTint(theme, scheme), absorption: 1.4 } }, hover: CONTROL.hover }
+    case 'filled': return { fill: { bg: 'accent' }, hover: { bg: towardWhite('accent', 0.12, theme, scheme) } }
+    case 'tinted': return { fill: { bg: withAlpha('accent', 0.15, theme, scheme) }, hover: { bg: withAlpha('accent', 0.24, theme, scheme) } }
+    case 'plain': return { fill: {}, hover: { opacity: 0.7 } }
   }
 }
 
@@ -54,12 +65,10 @@ const ICON_WEIGHT = 0.12
 const DOT = { size: 6, gap: 5, stepMs: 300, dim: 0.35 } as const
 /** The dots' row: over the whole Button, centred. */
 const DOTS: Style = { position: 'absolute', inset: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: DOT.gap }
-/** The press, lift, tilt and glint every control shares. */
-const CONTROL = controlStyle()
 
 export const Button = defineGlassComponent({
   name: 'Button',
-  description: '按钮（Liquid Glass 控件）。variant 决定外观：glass 清玻璃（次要操作，默认）；glassProminent 带强调色发光的玻璃，白色粗体文字（主操作，每屏通常只有一个）；filled 实心强调色、tinted 淡强调色底、plain 无底的强调色文字（这三种不是玻璃）。size：small 高 36、regular 高 52、large 高 80（参考稿主按钮的尺寸）；文字、图标、左右留白随尺寸。shape：capsule 胶囊（默认）、roundedRectangle 圆角矩形（圆角为高的 23%）、circle 正圆（只放图标：用 leadingIcon 或默认插槽，不能有 label）。内容是前置图标 + 文字 + 后置图标，居中成一组，宽度随内容；fullWidth 让它在交叉轴拉满父容器。注意父容器纵向且 align 为 stretch（Stack、Box 的默认）时子项本来就会被拉宽：要按内容宽度就给父容器 align="start" 或 "center"。鼠标、触控笔悬停时上浮 6 pt、朝指针倾斜（最多 3°）、玻璃高光增强，按下缩到 0.96；触屏没有悬停效果，减少动态效果时不倾斜。点击、Enter、空格（按下时显示按压，松开时触发）都发出 press；可以用 Tab 聚焦，键盘聚焦时显示焦点环。loading 时内容换成三个轮流变亮的点（宽度不变），按钮不响应；disabled 时变淡、不响应、不在 Tab 顺序里。放在 Card 里按嵌套玻璃绘制。',
+  description: '按钮（Liquid Glass 控件）。variant 决定外观：glass 清玻璃（次要操作，默认）；glassProminent 带强调色发光的玻璃，白色粗体文字（主操作，每屏通常只有一个）；filled 实心强调色、tinted 淡强调色底、plain 无底的强调色文字（这三种不是玻璃）。size：small 高 36、regular 高 52、large 高 80（参考稿主按钮的尺寸）；文字、图标、左右留白随尺寸。shape：capsule 胶囊（默认）、roundedRectangle 圆角矩形（圆角为高的 23%）、circle 正圆（只放图标：用 leadingIcon 或默认插槽，不能有 label）。内容是前置图标 + 文字 + 后置图标，居中成一组，宽度随内容；fullWidth 让它在交叉轴拉满父容器。注意父容器纵向且 align 为 stretch（Stack、Box 的默认）时子项本来就会被拉宽：要按内容宽度就给父容器 align="start" 或 "center"。鼠标、触控笔悬停时上浮 6 pt、朝指针倾斜（最多 3°）：玻璃按钮高光增强；filled 底色变亮、tinted 底色加深、plain 变淡（这三种画在平面上，上浮与倾斜只在玻璃上——如 Card 里——才看得出）。按下缩到 0.96（filled、plain 同时变淡）；触屏没有悬停效果，减少动态效果时不倾斜。点击、Enter、空格（按下时显示按压，松开时触发）都发出 press；可以用 Tab 聚焦，键盘聚焦时显示焦点环。loading 时内容换成三个轮流变亮的点（宽度不变），按钮不响应；disabled 时变淡、不响应、不在 Tab 顺序里。放在 Card 里按嵌套玻璃绘制。',
   props: z.object({
     variant: z.enum(VARIANTS).default('glass').describe('外观：glass 清玻璃（默认，次要操作）、glassProminent 发光玻璃（主操作）、filled 实心强调色、tinted 淡强调色底、plain 无底强调色文字'),
     size: z.enum(['small', 'regular', 'large']).default('regular').describe('尺寸：small 高 36、regular 高 52（默认）、large 高 80'),
@@ -70,7 +79,7 @@ export const Button = defineGlassComponent({
     loading: z.boolean().default(false).describe('加载中：内容换成三个轮流变亮的点，宽度不变，按钮不响应'),
     disabled: z.boolean().default(false).describe('禁用：变淡（不透明度 0.4），不响应指针和键盘，不在 Tab 顺序里'),
     fullWidth: z.boolean().default(false).describe('在父容器的交叉轴上拉满（纵向容器里即占满整行宽度）'),
-    glassId: z.string().optional().describe('玻璃形变标识：同一 glassId 的按钮从一处换到另一处时，从旧位置形变过去（GlassContainer 的形变过渡）'),
+    glassId: z.string().optional().describe('玻璃形变标识，只在 GlassContainer 里生效（GlassContainer 尚未提供，Task 17 起；现在设置它没有效果）：同一 glassId 的按钮从一处换到另一处时，从旧位置形变过去'),
   }),
   events: { press: { payload: "{ pointerType: 'mouse' | 'touch' | 'pen' | 'xr' | 'keyboard' }", description: '按钮被触发：点击（带指针类型）、Enter 键，或空格键松开（keyboard）；禁用或加载中时不发' } },
   slots: { default: '代替 label 的内容', leading: '代替 leadingIcon 的前置内容', trailing: '代替 trailingIcon 的后置内容' },
@@ -85,6 +94,7 @@ export const Button = defineGlassComponent({
     { mistake: '<Button variant="primary" />', fix: '主操作用 variant="glassProminent"，次要操作用默认的 glass' },
     { mistake: '<Button><Text value="保存" /></Button>', fix: '<Button label="保存" />：label 按尺寸取字号，按 variant 取颜色与字重' },
     { mistake: '<Stack><Button label="确定" /></Stack>（以为按钮按内容宽度）', fix: '纵向 Stack 默认 align stretch，会把按钮拉满整行：按内容宽度用 <Stack align="start">（或 center）；要拉满就明写 full-width' },
+    { mistake: '<Button :variant="saved ? \'filled\' : \'glass\'" />（运行时在玻璃与非玻璃外观之间切换）', fix: 'glass、glassProminent 是玻璃节点，filled、tinted、plain 是普通 box：两组之间切换会重建按钮节点，焦点和进行中的动画（上浮、倾斜、按压）都会丢失；运行时切换外观就在同一组里切（glass ↔ glassProminent，或 filled ↔ tinted ↔ plain）' },
   ],
   // names from other UI kits and icon sets → ours, for the error's suggestion only
   aliases: {
@@ -120,14 +130,15 @@ export const Button = defineGlassComponent({
   return () => {
     const v = p.value, t = theme.value, look = LOOKS[v.variant], size = sizeOf(v.size, t), circle = v.shape === 'circle'
     if (circle && v.label !== undefined) throw new GlassUIError('Button.shape', 'circle 只能放图标（去掉 label 或改 shape）')
+    const { fill, hover } = paint(v.variant, t, scheme.value)
     const style: Style = {
       height: size.height, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
       paddingX: circle ? 0 : size.padX, radius: v.shape === 'roundedRectangle' ? Math.round(size.height * 0.23) : 'capsule',
       ...(circle ? { width: size.height } : {}), ...(v.fullWidth ? { alignSelf: 'stretch' } : {}),
-      ...fill(v.variant, t, scheme.value),
-      transition: CONTROL.transition,
-      // an inert Button shows no hover or press (the pointer tracker still sets those states on it)
-      ...(v.disabled || v.loading ? {} : { hover: CONTROL.hover, pressed: { ...CONTROL.pressed, ...look.pressed } }),
+      ...fill,
+      transition: look.host === 'box' ? BOX_TRANSITION : CONTROL.transition,
+      // an inert Button shows no hover or press (the pointer tracker still presses it)
+      ...(inert.value ? {} : { hover, pressed: { ...CONTROL.pressed, ...look.pressed } }),
       disabled: { opacity: 0.4 },
     }
     const icon = (name: IconName): VNodeChild => h(Icon, { name, size: size.icon, color: look.ink, weight: ICON_WEIGHT })

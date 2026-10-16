@@ -80,7 +80,8 @@ export function useGlassControl(el: Readonly<Ref<Node | null | undefined>>, opts
       const n = el.value
       if (!n || !hovers(e)) return
       n.elevation = lift
-      if (opts.tilt !== false && !root.anim.reducedMotion) n.tilt = tiltToward(n, e, CONTROL_TILT)
+      // reduced motion (which may have turned on mid-hover) or no tilt: level, as a Card is
+      n.tilt = opts.tilt === false || root.anim.reducedMotion ? { x: 0, y: 0 } : tiltToward(n, e, CONTROL_TILT)
     },
     onPointerleave() { settle(); pressing.value = spaceDown },
     onPointerdown() { if (!opts.disabled.value) pressing.value = true },

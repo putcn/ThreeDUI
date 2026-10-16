@@ -8,7 +8,7 @@ import { Text } from '../src/components/Text'
 import { Icon } from '../src/components/Icon'
 import { Surface } from '../src/components/Surface'
 import { controlStyle, tiltToward, useGlassControl } from '../src/control'
-import { glowingTint, withAlpha } from '../src/colors'
+import { glowingTint, towardWhite, withAlpha } from '../src/colors'
 import { iconCanvas } from '../src/icons'
 import { createFakeRoot, flush } from './fixtures/fake-root'
 import { all, first, mountGlass, napiCanvas } from './fixtures/mount'
@@ -238,6 +238,44 @@ it('an unknown variant suggests the one meant; the glassId reaches the host', ()
   expect(mountGlass(() => h(Button, { leadingIcon: 'close' })).errors[0]).toMatch(/\[Button\.leadingIcon\] 非法取值 "close".*你可能想要：x$/)   // Icon's aliases
   expect(first(mountGlass(() => h(Button, { label: 'Go', glassId: 'go' })).c, 'glass').props.glassId).toBe('go')
   expect(first(mountGlass(() => h(Button, { label: 'Go' })).c, 'glass').props).not.toHaveProperty('glassId')
+})
+// ── fix round 1 ──
+
+it('M1: reduced motion, or tilt: false, levels a tilted control on its next move rather than keeping the tilt', () => {
+  const root = createFakeRoot()
+  const { c } = mountGlass(() => h(Button, { label: 'Go' }), { root })
+  const b = first(c, 'glass'); b.layout = { x: 0, y: 0, width: 200, height: 52 }
+  fire(b, 'pointermove', { localX: 200, localY: 0 }); expect(b.tilt.y).toBeGreaterThan(0.05)
+  root.anim.reducedMotion = true
+  fire(b, 'pointermove', { localX: 180, localY: 10 }); expect(b.tilt).toEqual({ x: 0, y: 0 }); expect(b.elevation).toBe(6)
+  const Probe = defineComponent(() => {
+    const el = shallowRef<Node>()
+    const { handlers } = useGlassControl(el, { disabled: ref(false), onActivate: () => {}, tilt: false })
+    return () => h('glass', { ref: el, ...handlers })
+  })
+  const g = first(mountGlass(() => h(Probe)).c, 'glass'); g.layout = { x: 0, y: 0, width: 100, height: 40 }
+  g.tilt = { x: 0.1, y: 0.1 }
+  fire(g, 'pointermove', { localX: 100 }); expect(g.tilt).toEqual({ x: 0, y: 0 })
+})
+it('M3: the box variants hover by their fill (their lift and tilt are flat in the content pass): filled lighter, tinted stronger, plain fainter', () => {
+  expect(towardWhite('accent', 0.12, defaultTheme, 'light')).toBe('#7d76f6')
+  expect(glowingTint(defaultTheme, 'light')).toBe(towardWhite('accent', 0.15, defaultTheme, 'light'))
+  const { c } = mountGlass(() => h(Stack, () => (['filled', 'tinted', 'plain', 'glass', 'glassProminent'] as const).map(v => h(Button, { variant: v, label: v }))))
+  const [f, t, p] = all(c, 'box').filter(n => n.props.tabIndex !== undefined), [g, gp] = all(c, 'glass')
+  expect(f!.style.hover).toEqual({ bg: '#7d76f6' })
+  expect(t!.style.hover).toEqual({ bg: 'rgba(107, 99, 245, 0.24)' })
+  expect(p!.style.hover).toEqual({ opacity: 0.7 })
+  for (const b of [f, t, p]) expect(b!.style.transition).toEqual({ scale: 'snappy', elevation: 'snappy', tilt: 'snappy', bg: 'snappy', opacity: 'snappy' })
+  // the glass ones glint, as before
+  for (const b of [g, gp]) { expect(b!.style.hover).toEqual({ glass: { specularIntensity: 1.35, edgeGlow: 1.1 } }); expect(b!.style.transition).toEqual(controlStyle().transition) }
+  // inert: no hover look on any of them
+  const d = mountGlass(() => h(Button, { variant: 'filled', label: 'x', loading: true })).c
+  expect(all(d, 'box').find(n => n.props.tabIndex !== undefined)!.style.hover).toBeUndefined()
+})
+it('M6, M7: the manifest says glassId waits for GlassContainer, and that switching between glass and box variants remounts', () => {
+  const m = glassComponents().find(g => g.glass.name === 'Button')!.glass
+  expect((m.props.shape.glassId as { description?: string }).description).toMatch(/GlassContainer.*现在设置它没有效果/)
+  expect(JSON.stringify(m.mistakes)).toMatch(/重建.*焦点.*动画/)
 })
 it('Button is registered with complete manifest metadata', () => {
   const m = glassComponents().find(g => g.glass.name === 'Button')!.glass

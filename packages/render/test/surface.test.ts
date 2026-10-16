@@ -1457,6 +1457,24 @@ describe('Surface: panels on glass ride the glass (spatial §11.8)', () => {
     card.removeChild(chip); s.root.appendChild(chip); s.tick(1 / 60)
     expect(s.foregroundPanels.buffer.count).toBe(0); expect(s.panels.buffer.count).toBe(2)
   })
+  it('Task 10 V1: a focused glass control\'s ring rides its own top face, with its elevation, tilt and press scale (registered with its rim)', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, ctx)
+    const btn = new Node('glass', 'btn')
+    btn.setStyle({ position: 'absolute', left: 40, top: 40, width: 200, height: 52, radius: 'capsule', scale: 0.96, glass: { thickness: 10 } })
+    btn.elevation = 6; btn.tilt = { x: -0.04, y: 0.05 }
+    btn.setProp('tabIndex', 0); btn.setState({ focused: true, focusVisible: true })
+    s.root.appendChild(btn); s.tick(1 / 60)
+    expect(s.panels.buffer.count).toBe(0)                                          // no longer flat in the content pass
+    expect(s.foregroundPanels.buffer.count).toBe(1); expect(s.rims.buffer.count).toBe(1)
+    const ring = (a: string) => s.foregroundPanels.buffer.get(0, a), rim = (a: string) => s.rims.buffer.get(0, a)
+    const accent = resolveColor('accent', theme, 'light')
+    expect(ring('iBorder')).toEqual([...accent.slice(0, 3).map(srgbToLinear), 1].map(Math.fround))
+    // the rim's centre, tilt and press scale (the matrix's linear part), on the glass's top face: 6 + 10 pt up
+    expect(ring('iRect').slice(0, 2)).toEqual(rim('iRect').slice(0, 2))
+    for (const row of ['iMat0', 'iMat1', 'iMat2']) expect(ring(row).slice(0, 3)).toEqual(rim(row).slice(0, 3))
+    expect(ring('iMat0')[0]).not.toBeCloseTo(0.96, 3)                              // the tilt is in there (cos·scale)
+    expect(ring('iMat2')[3]).toBeCloseTo(0.16, 6)
+  })
   it('dispose frees the foreground panels\' geometry and material', () => {
     const { s } = carded()
     const mesh = meshes(s).find(m => m.geometry === s.foregroundPanels.geometry)!

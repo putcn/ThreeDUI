@@ -279,6 +279,19 @@ describe('PointerTracker semantics', () => {
     expect(log).toEqual(['leave:btn:btn'])
     expect(chain.map(n => n.state.hover)).toEqual([true, true, false])
   })
+  it('a touch enters and leaves (the events) but never hovers: hover is a pointer device\'s (spec §8.3); a mouse or pen over the same path does', () => {
+    const s = scene(); const d = new EventDispatcher(); const log: string[] = []
+    d.on(s.btn, 'pointerenter', e => log.push(`enter:${e.pointerType}:${s.btn.state.hover}`))
+    d.on(s.btn, 'pointerleave', e => log.push(`leave:${e.pointerType}`))
+    const p = new PointerTracker(s.root, d)
+    p.down(100, 80, 'touch'); expect([s.btn.state.hover, s.root.state.hover, s.btn.state.pressed]).toEqual([false, false, true])
+    p.up(100, 80, 'touch'); expect([s.btn.state.hover, s.btn.state.pressed]).toEqual([false, false])
+    p.move(100, 80, 'mouse'); expect([s.btn.state.hover, s.panel.state.hover, s.root.state.hover]).toEqual([true, true, true])   // same path, no enter
+    p.move(100, 80, 'touch'); expect([s.btn.state.hover, s.root.state.hover]).toEqual([false, false])
+    p.move(100, 80, 'pen'); expect(s.btn.state.hover).toBe(true)
+    p.move(10, 10, 'touch'); expect([s.btn.state.hover, s.root.state.hover]).toEqual([false, false])
+    expect(log).toEqual(['enter:touch:false', 'leave:touch'])
+  })
   it('emits no synthetic move on down, cancel resets press and hover, and a lost up does not leave a node pressed', () => {
     const s = scene(); const d = new EventDispatcher(); const log: string[] = []
     for (const t of ['pointermove', 'pointerdown', 'pointercancel', 'pointerleave'] as const) d.on(s.btn, t, () => log.push(t))

@@ -66,7 +66,8 @@ const SHADOW_Z_BELOW_POOL = 0.05
 
 /**
  * The focus-visible ring (spec §7.2): a border `width` pt wide, `offset` pt outside the node's shape (its radius grown
- * by as much), in the `color` token; drawn as a panel in the node's pool layer (content layer, under its glass edge).
+ * by as much), in the `color` token; drawn as a panel sorted in the node's pool layer (under its children). The
+ * render package draws a glass node's ring on that glass's top face, with its rim.
  */
 export const FOCUS_RING = { width: 2.5, offset: 3, color: 'accent' } as const
 

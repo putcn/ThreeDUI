@@ -122,7 +122,8 @@ const DBLCLICK = { ms: 500, pt: 4 } as const
 
 /**
  * Turns one pointer's move/down/up/cancel (Surface pt) into node events and `state.hover/pressed`.
- * Like CSS `:hover`/`:active`, hover and press cover the hit node and all its ancestors up to `root`;
+ * Like CSS `:hover`/`:active`, hover and press cover the hit node and all its ancestors up to `root`; only a mouse or
+ * a pen hovers (a touch still enters and leaves);
  * `pointerenter`/`pointerleave` go to each node entered (outermost first) or left (innermost first).
  * As in the DOM, `click` fires on up at the nearest common ancestor of the down and up targets (none when the up
  * misses the tree, or the pressed node has since left it); a `click` on the node the previous one hit, within
@@ -247,8 +248,11 @@ export class PointerTracker {
     const left = prev.filter(n => !next.includes(n))                // innermost first
     const entered = next.filter(n => !prev.includes(n)).reverse()   // outermost first
     this.hoverPath = next
+    // hover is a pointer device's (spec §8.3): a finger enters and leaves nodes (the events) without hovering them. The
+    // whole path re-decides on each call, so a node a mouse hovers loses it under a touch and regains it under the mouse
+    const hovers = this.last.pointerType === 'mouse' || this.last.pointerType === 'pen'
     for (const n of left) n.setState({ hover: false })
-    for (const n of entered) n.setState({ hover: true })
+    for (const n of next) n.setState({ hover: hovers })
     for (const n of left) this.d.dispatch(n, 'pointerleave', this.last)
     for (const n of entered) this.d.dispatch(n, 'pointerenter', this.last)
   }

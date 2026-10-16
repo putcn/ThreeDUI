@@ -189,7 +189,8 @@ onBeforeUnmount(() => clearTimeout(saveTimer))
         <!-- every variant in every size: glass right on the wall, no panel behind it -->
         <Stack :gap="16">
           <Stack v-for="v in variants" :key="v.variant" direction="horizontal" :gap="16" align="center">
-            <Text :value="v.caption" :size="12" :weight="600" color="secondaryLabel" :style="{ width: 176, letterSpacing: 1 }" />
+            <!-- one line each: the longest, GLASS PROMINENT · 主操作, is ≈ 190 pt -->
+            <Text :value="v.caption" :size="12" :weight="600" color="secondaryLabel" :wrap="false" :style="{ width: 224, flexShrink: 0, letterSpacing: 1 }" />
             <Button v-for="(s, i) in sizes" :key="s" :variant="v.variant" :size="s" :label="v.labels[i]" />
           </Stack>
         </Stack>
