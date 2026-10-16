@@ -1,0 +1,137 @@
+import { describe, it, expect } from 'vitest'
+import { Box3, Color, InstancedMesh, Matrix4, Mesh, Vector3, type BufferGeometry, type Object3D } from 'three'
+import { defaultTheme } from '@glassui/core'
+import type { Viewport3DContext } from '@glassui/render'
+import { alerts, bins, createWmsData, flow30d, kpis, mulberry32, orders, SEED, zones } from '../src/wms/data'
+import { AGV_SPEED, binLevel, createWarehouse, HOVER_LIFT, YAW_LIMIT } from '../src/wms/warehouse'
+
+const ctx = (o: Partial<Viewport3DContext> = {}): Viewport3DContext => ({ width: 1200, height: 680, reducedMotion: false, theme: defaultTheme, scheme: 'light', ...o })
+const named = (root: Object3D, name: string): Object3D => { const o = root.getObjectByName(name); if (!o) throw new Error(`no ${name}`); return o }
+/** The model's lowest point off the plate (z, pt): the floor slab's lowest vertex. */
+function lowestZ(group: Object3D): number {
+  group.updateMatrixWorld(true)
+  const floor = named(group, 'floor') as Mesh, pos = (floor.geometry as BufferGeometry).getAttribute('position'), p = new Vector3()
+  let low = Infinity
+  for (let i = 0; i < pos.count; i++) low = Math.min(low, p.fromBufferAttribute(pos, i).applyMatrix4(floor.matrixWorld).z)
+  return low
+}
+
+describe('wms data', () => {
+  it('mulberry32 is a seeded uniform PRNG: the same seed, the same sequence', () => {
+    const a = mulberry32(7), b = mulberry32(7), c = mulberry32(8)
+    const xs = Array.from({ length: 100 }, a), ys = Array.from({ length: 100 }, b), zs = Array.from({ length: 100 }, c)
+    expect(xs).toEqual(ys); expect(xs).not.toEqual(zs)
+    expect(xs.every(x => x >= 0 && x < 1)).toBe(true)
+    expect(Math.abs(xs.reduce((s, x) => s + x, 0) / xs.length - 0.5)).toBeLessThan(0.1)
+  })
+  it('is deterministic: the exports are the fixed seed\'s data, made again the same; another seed differs', () => {
+    expect(createWmsData(SEED)).toEqual({ kpis, flow30d, zones, bins, orders, alerts })
+    expect(createWmsData(SEED)).toEqual(createWmsData(SEED))
+    expect(createWmsData(SEED + 1).bins).not.toEqual(bins)
+  })
+  it('the 30 days end on 2026-10-15, in the hundreds to low thousands; today\'s outbound is the KPI', () => {
+    expect(flow30d.labels).toHaveLength(30); expect(flow30d.labels[0]).toBe('09-16'); expect(flow30d.labels.at(-1)).toBe('10-15')
+    for (const s of [flow30d.inbound, flow30d.outbound]) { expect(s).toHaveLength(30); expect(s.every(v => Number.isInteger(v) && v >= 100 && v < 5000)).toBe(true) }
+    expect(kpis.map(k => k.label)).toEqual(['库存 SKU', '今日出库单', '准时发货率', '库位利用率'])
+    expect(kpis[1]).toEqual({ label: '今日出库单', value: '1,932', unit: '单', delta: 8.4 })
+    expect('unit' in kpis[0]!).toBe(false)                                       // absent, not undefined
+  })
+  it('240 bins with unique ids, row A–F × bay 01–10 × level 1–4, occupancy = qty / cap', () => {
+    expect(bins).toHaveLength(6 * 10 * 4)
+    expect(new Set(bins.map(b => b.id)).size).toBe(bins.length)
+    for (const b of bins) {
+      expect(b.id).toBe(`${'ABCDEF'[b.row]}-${String(b.bay + 1).padStart(2, '0')}-${b.level + 1}`)
+      expect(b.qty).toBeGreaterThanOrEqual(0); expect(b.qty).toBeLessThanOrEqual(b.cap); expect(b.occupancy).toBeCloseTo(b.qty / b.cap, 12)
+    }
+    // every band shows in the twin
+    expect(new Set(bins.map(b => binLevel(b.occupancy).key))).toEqual(new Set(['free', 'normal', 'busy', 'full']))
+  })
+  it('the zones are their rows\' stock, in the thousands; the utilisation KPI is the bins\' mean occupancy', () => {
+    expect(zones.map(z => z.label)).toEqual(['A 区', 'B 区', 'C 区', 'D 区', 'E 区', 'F 区'])
+    zones.forEach((z, row) => expect(z.value).toBe(bins.filter(b => b.row === row).reduce((s, b) => s + b.qty, 0)))
+    expect(zones.every(z => z.value >= 1000 && z.value < 5000)).toBe(true)
+    const mean = bins.reduce((s, b) => s + b.occupancy, 0) / bins.length
+    expect(kpis[3]!.value).toBe((mean * 100).toFixed(1))
+  })
+  it('8 orders, newest first, every status shown; 2–3 alerts, one naming the order in 异常 and its bin', () => {
+    expect(orders).toHaveLength(8)
+    expect(new Set(orders.map(o => o.status))).toEqual(new Set(['待拣货', '拣货中', '已发货', '异常']))
+    expect([...orders.map(o => o.time)].sort().reverse()).toEqual(orders.map(o => o.time))
+    expect(alerts.length).toBeGreaterThanOrEqual(2); expect(alerts.length).toBeLessThanOrEqual(3)
+    const odd = orders.find(o => o.status === '异常')!
+    expect(alerts.some(a => a.title.includes(odd.no))).toBe(true)
+    expect(bins.find(b => b.id === 'B-04-2')!.qty).toBe(6)
+  })
+})
+
+describe('warehouse model', () => {
+  it('draws the bins as one InstancedMesh of 6 × 10 × 4, coloured by occupancy band; binAt maps an instance to its bin', () => {
+    const w = createWarehouse({ bins })
+    expect(w.bins).toBeInstanceOf(InstancedMesh); expect(w.bins.count).toBe(240)
+    const c = new Color()
+    for (const i of [0, 57, 239]) expect(w.bins.getColorAt(i, c).getHexString()).toBe(new Color(binLevel(bins[i]!.occupancy).color).getHexString())
+    expect(w.binAt(57)).toBe(bins[57]); expect(() => w.binAt(240)).toThrow(/240/)
+    // instanced frames and lines too: a handful of draw calls, not hundreds
+    let draws = 0
+    w.group.traverse(o => { if (o instanceof Mesh) draws++ })
+    expect(draws).toBeLessThanOrEqual(9)
+    expect(named(w.group, 'frames')).toBeInstanceOf(InstancedMesh)
+  })
+  it('hover lightens exactly one bin at once and raises it 6 pt; hover(null) puts it back', () => {
+    const w = createWarehouse({ bins }), c = new Color()
+    const colours = (): string[] => Array.from({ length: 240 }, (_, i) => w.bins.getColorAt(i, c).getHexString())
+    const y = (i: number): number => { const m = new Matrix4(); w.bins.getMatrixAt(i, m); return new Vector3().setFromMatrixPosition(m).y }
+    const before = colours(), rest = y(57)
+    w.hover(57)
+    const after = colours()
+    expect(after.filter((h, i) => h !== before[i])).toHaveLength(1); expect(after[57]).not.toBe(before[57])
+    const lit = new Color(`#${after[57]}`), base = new Color(`#${before[57]}`)
+    expect(lit.r + lit.g + lit.b).toBeGreaterThan(base.r + base.g + base.b)
+    w.update(1 / 60, ctx({ reducedMotion: true }))
+    expect(y(57)).toBeCloseTo(rest + HOVER_LIFT, 6)
+    w.hover(null); w.update(1 / 60, ctx({ reducedMotion: true }))
+    expect(colours()).toEqual(before); expect(y(57)).toBeCloseTo(rest, 6)
+    expect(() => w.hover(240)).toThrow(/240/)
+  })
+  it('fits its box, stands on the glass and never behind it, at every yaw; rotateBy clamps to ±0.8', () => {
+    const w = createWarehouse({ bins }), c = ctx({ reducedMotion: true }), yaw = named(w.group, 'yaw')
+    for (const dx of [0, -5, 10]) {
+      w.rotateBy(dx); w.update(1 / 60, c)
+      expect(Math.abs(yaw.rotation.y)).toBeLessThanOrEqual(YAW_LIMIT)
+      const low = lowestZ(w.group)
+      expect(low).toBeGreaterThanOrEqual(0.99); expect(low).toBeLessThan(3)
+    }
+    expect(yaw.rotation.y).toBeCloseTo(YAW_LIMIT, 9)
+    w.rotateBy(-YAW_LIMIT); w.update(1 / 60, c)
+    const box = new Box3().setFromObject(w.group)
+    expect(box.max.x - box.min.x).toBeLessThanOrEqual(c.width); expect(box.max.y - box.min.y).toBeLessThanOrEqual(c.height)
+    expect(box.max.x - box.min.x).toBeGreaterThan(c.width * 0.6)                 // fills it, give or take the margins
+    expect(Math.abs(box.max.y + box.min.y)).toBeLessThan(c.height * 0.1)
+  })
+  it('the yaw eases; the AGV drives at 120 pt/s, and parks under reduced motion', () => {
+    const w = createWarehouse({ bins }), agv = named(w.group, 'agv'), yaw = named(w.group, 'yaw')
+    w.update(0, ctx())
+    const x0 = agv.position.x
+    expect(w.update(0.25, ctx())).toBe(true)
+    expect(agv.position.x - x0).toBeCloseTo(AGV_SPEED * 0.25, 6)               // along the front lane, facing +x
+    w.rotateBy(0.5); w.update(1 / 60, ctx())
+    expect(yaw.rotation.y).toBeGreaterThan(0); expect(yaw.rotation.y).toBeLessThan(0.5)
+    const parked = agv.position.clone()
+    for (let i = 0; i < 10; i++) w.update(0.1, ctx({ reducedMotion: true }))
+    expect(agv.position).toEqual(parked); expect(yaw.rotation.y).toBe(0.5)
+    expect(w.update(0.1, ctx({ reducedMotion: true }))).toBe(false)
+  })
+  it('dispose frees every geometry and material', () => {
+    const w = createWarehouse({ bins }), freed = new Set<unknown>(), owned = new Set<{ addEventListener(t: 'dispose', f: () => void): void }>()
+    w.group.traverse(o => {
+      if (!(o instanceof Mesh)) return
+      owned.add(o.geometry as BufferGeometry)
+      for (const m of [o.material].flat()) owned.add(m)
+    })
+    for (const x of owned) x.addEventListener('dispose', () => { freed.add(x) })
+    expect(owned.size).toBeGreaterThanOrEqual(8)
+    w.dispose()
+    expect(freed.size).toBe(owned.size)
+    expect(w.group.children).toHaveLength(0)
+  })
+})
