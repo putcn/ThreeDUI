@@ -1,9 +1,11 @@
 // GlassUI playground: the sign-up form (a screen-layer Surface) and a world-layer Surface over a host three.js scene,
-// and the @glassui/vue component gallery (a screen-layer column, with a world-layer panel beside it).
-//   ?scene=signup|world|both|gallery  (default both)   ?quality=high|medium|low|minimal  (default auto)   ?webgl  (force WebGL2)
+// the @glassui/vue component gallery (a screen-layer column, with a world-layer panel beside it), and the spatial scene
+// (glass Blocks on an arc, the camera springing to the focused one).
+//   ?scene=signup|world|both|gallery|spatial  (default both)   ?focus=<Block name>  (spatial: the first focus)   ?quality=high|medium|low|minimal  (default auto)   ?webgl  (force WebGL2)
 //   ?hud=0  (no HUD: the visual harness's screenshots must not hold the live fps text; an error still shows)
-//   ?motion=frozen|live  (default live; frozen: the gallery's transitions complete at once, for screenshots)
-// Drag the background to orbit (world and both only); the form stays put, the world Surface moves with the scene.
+//   ?motion=frozen|live  (default live; frozen: transitions, Block flights and the camera complete at once, no parallax: for screenshots)
+// Drag the background to orbit (world and both only); the form stays put, the world Surface moves with the scene. The
+// spatial scene's Space drives the camera itself (no orbit there); click an unfocused Block to focus it.
 
 import { Color, PerspectiveCamera, Raycaster, Scene, Vector2 } from 'three'
 import { WebGPURenderer } from 'three/webgpu'
@@ -14,6 +16,7 @@ import { createUIRoot, QUALITY, type QualityTier, type Surface, type UIRoot } fr
 import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
 import Gallery from './gallery/Gallery.vue'
+import Spatial from './scenes/Spatial.vue'
 import { createHostLights, createWall } from './wall'
 import { buildSignup, SIGNUP } from './signup'
 import { buildWorld } from './world'
@@ -29,7 +32,7 @@ export interface NodeRect extends Rect { cx: number; cy: number }
 export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURenderer; root?: UIRoot; surfaces?: Surface[]; rectOf(id: string): NodeRect | null }
 declare global { interface Window { __glassui?: PlaygroundHandle } }
 
-const SCENES = ['signup', 'world', 'both', 'gallery'] as const
+const SCENES = ['signup', 'world', 'both', 'gallery', 'spatial'] as const
 /**
  * The gallery's column width in CSS px: 68 % of the viewport, but on wide viewports no more than half the width plus
  * 0.3 × the height (where the world panel's left edge lands, which scales with the height); Gallery.vue's world panel
@@ -60,7 +63,8 @@ hostScene.background = new Color(0xd9d4d2)   // only seen past the wall's edges 
 const camera = new PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 50)
 camera.position.set(0, 0.55, 7.3)
 camera.lookAt(0, -0.05, 0)
-hostScene.add(createWall(), ...createHostLights())
+// the spatial scene's camera swings round the arc to face each Block: a wall 2.5× the size and further back fills its views
+hostScene.add(createWall(mode === 'spatial' ? { scale: 2.5, z: -4 } : {}), ...createHostLights())
 
 const orbit = mode === 'world' || mode === 'both'
 const controls = new OrbitControls(camera, renderer.domElement)
@@ -110,6 +114,11 @@ async function start(): Promise<UIRoot> {
     createGlassApp(Gallery, { root, motion }).mount(page)
     addEventListener('resize', () => page.setSize(...column()))
     surfaces.push(page, ...root.surfaces.filter(s => s !== page))   // and the Surfaces the gallery made (its world panel)
+  }
+  if (mode === 'spatial') {
+    // detached: everything teleports into the Blocks' own Surfaces
+    createGlassApp(Spatial, { root, motion }, { initialFocus: params.get('focus') ?? undefined }).mount()
+    surfaces.push(...root.surfaces)
   }
   handle.root = root
   handle.surfaces = surfaces

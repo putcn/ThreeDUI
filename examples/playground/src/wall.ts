@@ -6,10 +6,11 @@ type ColorNode = Node<'vec3'>
 
 /**
  * The backdrop wall (ported from `spikes/glass3d/main.ts`): a soft pastel gradient with colour blobs, a diagonal light
- * beam (so refraction has gradients to bend) and a vignette. 16 × 11 units at z = −2.5; it neither casts nor receives
- * shadows. It lives in the host scene, so it is lit by `createHostLights`, not by the UI's lights.
+ * beam (so refraction has gradients to bend) and a vignette. 16 × 11 units (times `scale`, default 1) at z = `z`
+ * (default −2.5); it neither casts nor receives shadows. It lives in the host scene, so it is lit by `createHostLights`,
+ * not by the UI's lights.
  */
-export function createWall(): Mesh {
+export function createWall(opts: { scale?: number; z?: number } = {}): Mesh {
   const material = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 })
   material.colorNode = Fn(() => {
     const q = uv()
@@ -30,9 +31,10 @@ export function createWall(): Mesh {
     const vignette = float(1).sub(smoothstep(0.4, 1.0, length(q.sub(vec2(0.45, 0.62))).mul(0.9)))
     return c.mul(0.95).mul(float(0.8).add(vignette.mul(0.25)))
   })()
-  const wall = new Mesh(new PlaneGeometry(16, 11), material)
+  const k = opts.scale ?? 1
+  const wall = new Mesh(new PlaneGeometry(16 * k, 11 * k), material)
   wall.name = 'wall'
-  wall.position.z = -2.5
+  wall.position.z = opts.z ?? -2.5
   wall.castShadow = false
   wall.receiveShadow = false
   return wall

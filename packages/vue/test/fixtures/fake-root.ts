@@ -3,7 +3,7 @@ import {
   AnimationRuntime, createSurface as createModel, createYogaLayout, defaultTheme, EventDispatcher, FocusManager, PointerTracker, resolveTextStyle,
   type ColorScheme, type MeasureFn, type Node, type SurfaceModel, type Theme,
 } from '@glassui/core'
-import type { BarChart, BarChartData, CameraRig, CreateSurfaceOptions, Surface, UIRootEventMap, Viewport3DContext } from '@glassui/render'
+import type { BarChart, BarChartData, CameraRig, CreateSurfaceOptions, PoseSpring, Surface, SurfacePose, UIRootEventMap, Viewport3DContext } from '@glassui/render'
 import type { GlassRoot } from '../../src/root'
 import { createFakeText } from './fake-text'
 
@@ -14,6 +14,14 @@ export interface FakeVec3 { x: number; y: number; z: number; set(x: number, y: n
 const vec3 = (x: number, y: number, z: number): FakeVec3 => {
   const v: FakeVec3 = { x, y, z, set(a, b, c) { v.x = a; v.y = b; v.z = c; return v }, setScalar: s => v.set(s, s, s) }
   return v
+}
+
+type Triple = [number, number, number]
+/** One `animateTo` call on a `FakeSurface`: its target and options, and the pose it started from. */
+export interface FakeAnimation {
+  target: SurfacePose
+  opts: { spring?: PoseSpring; immediate?: boolean }
+  from: { position: Triple; scale: Triple; opacity: number }
 }
 
 /** A Surface event, as a render `Surface` (an Object3D) dispatches it. */
@@ -28,6 +36,17 @@ export interface FakeSurface {
   readonly events: EventDispatcher; readonly pointer: PointerTracker; readonly focus: FocusManager
   readonly position: FakeVec3; readonly rotation: FakeVec3; readonly scale: FakeVec3
   billboard: boolean; trapFocus: boolean; interactive: boolean
+  /** The whole Surface's opacity (default 1); `animateTo` sets it at once. */
+  opacity: number
+  /** The current pose (`animateTo` applies its target at once, so it is also where the animation ends). */
+  readonly restPose: { position: Triple; rotation: Triple; scale: Triple; opacity: number }
+  /**
+   * Records the call in `animations` (with the pose it starts from), applies `target` at once, and resolves at the next
+   * root `tick`: true, or false when the Surface has been disposed by then.
+   */
+  animateTo(target: SurfacePose, opts?: { spring?: PoseSpring; immediate?: boolean }): Promise<boolean>
+  /** Every `animateTo` call, in order. */
+  readonly animations: FakeAnimation[]
   setSize(width: number, height: number): void
   dispose(): void
   readonly disposed: boolean
@@ -63,7 +82,7 @@ export interface FakeChart {
 }
 
 export interface FakeRoot extends GlassRoot {
-  /** Lays out every live Surface, runs the animation runtime, then resolves the `afterTick` waiters; dt in seconds. */
+  /** Lays out every live Surface, runs the animation runtime, then resolves the `afterTick` waiters and the pending `animateTo` promises; dt in seconds. */
   tick(dt?: number): void
   /** Emits a root event to the `on` listeners. */
   emit<K extends keyof UIRootEventMap>(type: K, e: UIRootEventMap[K]): void
@@ -100,10 +119,22 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     const events = new EventDispatcher(), listeners = new Map<string, Set<FakeListener>>()
     const dispatch = (e: FakeSurfaceEvent): void => { for (const fn of [...listeners.get(e.type) ?? []]) fn(e) }
     let disposed = false, error: Error | null = null
+    const xyz = (v: FakeVec3): Triple => [v.x, v.y, v.z]
     const s: FakeSurface = {
       model, root: model.root, created: { ...o }, events, pointer: new PointerTracker(model.root, events, theme), focus: new FocusManager(model.root, events),
       position: vec3(0, 0, 0), rotation: vec3(0, 0, 0), scale: vec3(1, 1, 1),
       billboard: billboard ?? false, trapFocus: false, interactive: interactive ?? true,
+      opacity: 1, animations: [],
+      get restPose() { return { position: xyz(s.position), rotation: xyz(s.rotation), scale: xyz(s.scale), opacity: s.opacity } },
+      animateTo(target, opts = {}) {
+        s.animations.push({ target, opts, from: { position: xyz(s.position), scale: xyz(s.scale), opacity: s.opacity } })
+        const { position, rotation, scale, opacity } = target
+        if (position) s.position.set(...position)
+        if (rotation) s.rotation.set(...rotation)
+        if (scale !== undefined) { if (typeof scale === 'number') s.scale.setScalar(scale); else s.scale.set(...scale) }
+        if (opacity !== undefined) s.opacity = opacity
+        return new Promise<boolean>(resolve => { waiters.push(() => { resolve(!disposed) }) })
+      },
       setSize(w, h) { if (disposed) return; model.width = w; model.height = h; model.root.setStyle({ width: w, height: h }) },
       dispose() {
         if (disposed) return

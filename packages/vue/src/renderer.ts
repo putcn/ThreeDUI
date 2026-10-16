@@ -83,6 +83,20 @@ export function setStyleLayer(node: Node, layer: StyleLayer, style: Style | null
   compose(node)
 }
 
+/** Nodes whose subtrees `nodeOps.remove` leaves in place (`holdContent`). */
+const held = new WeakSet<Node>()
+/**
+ * Holds `n`'s subtree where it is: from now on the renderer's `remove` skips `n` and every node under it, so Vue still
+ * unmounts the components there (their hooks run) while their nodes stay on screen. A Block holds its Surface's root as
+ * it leaves, so its content flies away with it; the nodes go when the held Surface is disposed with them.
+ */
+export function holdContent(n: Node): void { held.add(toRaw(n)) }
+/** Whether `n` or an ancestor of it is held (`holdContent`). */
+export function isHeld(n: Node): boolean {
+  for (let x: Node | null = toRaw(n); x; x = x.parent) if (held.has(x)) return true
+  return false
+}
+
 /** Layout-neutral: Vue's anchors (comments) and empty text nodes take no space and no flex gap. */
 const EMPTY: Style = { position: 'absolute', width: 0, height: 0 }
 const EVENT_PROPS = UI_EVENT_TYPES.map(t => `on${t[0]!.toUpperCase()}${t.slice(1)}`)
@@ -147,7 +161,7 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
     // raw nodes only, whatever Vue hands over: a Teleport target held in a deep `ref` arrives as a reactive proxy, and a
     // proxy stored as a parent (or child) breaks the core's identity checks (`PointerTracker`'s `p === this.root`)
     insert(c, p, a) { toRaw(p).insertBefore(toRaw(c), a ? toRaw(a) : null) },
-    remove(c) { toRaw(c).remove() },
+    remove(c) { const n = toRaw(c); if (!isHeld(n)) n.remove() },   // held content stays until its Surface goes
     parentNode: n => toRaw(n).parent,
     nextSibling(n) { const r = toRaw(n), p = r.parent; return p ? p.children[p.children.indexOf(r) + 1] ?? null : null },
     querySelector: teleportTarget,

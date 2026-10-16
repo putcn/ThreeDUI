@@ -1,9 +1,9 @@
 import { describe, it, expect, vi } from 'vitest'
-import { h, isProxy, nextTick, onMounted, reactive, ref, Teleport, Fragment, defineComponent } from '@vue/runtime-core'
+import { h, isProxy, nextTick, onMounted, onUnmounted, reactive, ref, Teleport, Fragment, defineComponent } from '@vue/runtime-core'
 import { Node } from '@glassui/core'
-import { createGlassRenderer, setStyleLayer } from '../src/renderer'
+import { createGlassRenderer, holdContent, isHeld, setStyleLayer } from '../src/renderer'
 import { createFakeRoot } from './fixtures/fake-root'
-import { tree } from './fixtures/tree'
+import { byId, tree } from './fixtures/tree'
 
 /** Mounts `comp` with a bare renderer; `errors` collects what the app's error handler and the renderer's `onError` get. */
 const mount = (comp: unknown, root = createFakeRoot()) => {
@@ -160,6 +160,18 @@ describe('nodeOps', () => {
     const app = createGlassRenderer({ root }).createApp(() => h(Teleport, { to: '#dest' }, [h('box', { id: 'moved' })]))
     app.mount(new Node('box'))
     expect(dest.children.map(n => n.id)).toContain('moved')
+  })
+  it('held content stays: a node under a held node is not removed, while its components unmount; the rest is', async () => {
+    const target = new Node('box', 'held'), show = ref(true), unmounted: string[] = []
+    const Kid = defineComponent((p: { id: string }) => { onUnmounted(() => { unmounted.push(p.id) }); return () => h('box', { id: p.id }, [h('text', { id: `${p.id}-t` }, p.id)]) }, { props: ['id'] })
+    const { container } = mount(() => show.value ? [h(Teleport, { to: target }, [h(Kid, { id: 'in' })]), h(Kid, { id: 'out' })] : null)
+    holdContent(target)
+    expect(isHeld(byId(target, 'in-t')!)).toBe(true); expect(isHeld(target)).toBe(true); expect(isHeld(byId(container, 'out')!)).toBe(false)
+    show.value = false; await nextTick()
+    expect(unmounted.sort()).toEqual(['in', 'out'])
+    expect(tree(target).children!.map(c => c.id)).toEqual(['in'])                // held: the node and its subtree stay put
+    expect(byId(target, 'in-t')!.props.value).toBe('in')
+    expect(byId(container, 'out')).toBeNull()                                      // not held: removed as usual
   })
   it('a Teleport target held in a deep ref arrives as a proxy; the tree keeps raw nodes, so identity checks hold', async () => {
     const root = createFakeRoot(), s = root.createSurface({ width: 100, height: 100 })
