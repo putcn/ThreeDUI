@@ -31,6 +31,9 @@ export interface TextPlaneOptions {
   createCanvas: CanvasFactory
 }
 
+/** pt: the height of a `textPlane` of font size `size`, whatever its text (its canvas, `TEXT_PLANE.lineHeight` × size, in whole canvas px). */
+export const textPlaneHeight = (size: number): number => Math.max(1, Math.ceil(size * TEXT_PLANE.lineHeight * TEXT_PLANE.scale)) / TEXT_PLANE.scale
+
 /** A label: a plane in its x–y, facing +z, 1 unit = 1 pt; `userData.text` its text, `userData.ink` its advance width (pt). */
 export type TextPlane = Mesh<PlaneGeometry, MeshBasicNodeMaterial>
 
@@ -52,7 +55,7 @@ export function textPlane(text: string, opts: TextPlaneOptions): TextPlane {
   const probe = createCanvas(1, 1).getContext('2d')
   probe.font = font
   const ink = probe.measureText(text).width / S, pad = TEXT_PLANE.pad * size
-  const cw = Math.max(1, Math.ceil((ink + 2 * pad) * S)), ch = Math.max(1, Math.ceil(size * TEXT_PLANE.lineHeight * S))
+  const cw = Math.max(1, Math.ceil((ink + 2 * pad) * S)), ch = Math.round(textPlaneHeight(size) * S)
   const canvas = createCanvas(cw, ch), g = canvas.getContext('2d')
   g.font = font; g.textBaseline = 'middle'; g.fillStyle = '#ffffff'
   g.fillText(text, pad * S, ch / 2)

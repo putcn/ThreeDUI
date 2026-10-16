@@ -95,13 +95,15 @@ export interface FakeChart {
 
 /**
  * The fake root's `SurfaceChart`: every method a spy (`update` returns false: nothing moves). `cellAt` reads a point
- * `[col, row, z]` as that cell (rounded), and a negative col or row as off the grid (null).
+ * `[col, row, z]` as that cell (rounded), and a negative col or row as off the grid (null); `riseFor(w, h)` is a
+ * stand-in, min(w, h) + 40.
  */
 export interface FakeSurfaceChart {
   set: Mock<(data: SurfaceChartData) => void>
   labels: Mock<(l: SurfaceChartLabels) => void>
   hover: Mock<(cell: SurfaceCell | null) => void>
   cellAt: Mock<(point: readonly [number, number, number]) => SurfaceCell | null>
+  riseFor: Mock<(width: number, height: number) => number>
   update: Mock<(dt: number, ctx: Viewport3DContext) => boolean>
   dispose: Mock<() => void>
 }
@@ -213,7 +215,8 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     },
     createSurfaceChart() {
       const cellAt = vi.fn(([col, row]: readonly [number, number, number]): SurfaceCell | null => (col < 0 || row < 0 ? null : { row: Math.round(row), col: Math.round(col) }))
-      const chart: FakeSurfaceChart = { set: vi.fn(), labels: vi.fn(), hover: vi.fn(), cellAt, update: vi.fn(() => false), dispose: vi.fn() }
+      const riseFor = vi.fn((w: number, h: number) => Math.min(w, h) + 40)
+      const chart: FakeSurfaceChart = { set: vi.fn(), labels: vi.fn(), hover: vi.fn(), cellAt, riseFor, update: vi.fn(() => false), dispose: vi.fn() }
       surfaceCharts.push(chart)
       return chart as unknown as SurfaceChart
     },

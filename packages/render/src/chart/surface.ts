@@ -4,11 +4,12 @@ import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.j
 import { GlassUIError, resolveColor, Spring, type RGBA } from '@glassui/core'
 import type { CanvasFactory } from '@glassui/text'
 import type { Viewport3DContext } from '../viewport'
-import { disposeTextPlane, recolorTextPlane, textPlane, type TextPlane } from './labels'
+import { disposeTextPlane, recolorTextPlane, textPlane, textPlaneHeight, type TextPlane } from './labels'
 
 /**
  * `SurfaceChart.set`'s data: `values` rows × cols (each row as long, at least 2 × 2, every value finite and ≥ 0),
- * `max` (> 0, finite) the value that stands at the full height, `ramp` 2–6 colours (sRGB, low → high; alpha ignored).
+ * `max` (> 0, finite) the value that stands at the full height (a larger one is capped there), `ramp` 2–6 colours
+ * (sRGB, low → high; alpha ignored).
  */
 export interface SurfaceChartData { values: readonly (readonly number[])[]; max: number; ramp: readonly RGBA[] }
 /**
@@ -67,6 +68,25 @@ interface Parts {
 /** The grid as laid out: `cols` columns from x = `x0`, `px` apart; `rows` rows from y = `y0` (row 0, the back), `py` apart toward −y. */
 interface Grid { rows: number; cols: number; x0: number; px: number; y0: number; py: number; zMax: number }
 
+/** pt: the centre line of the x labels, under the front row (`y0`: the grid's half depth), in the grid's frame. */
+const xLabelY = (y0: number): number => -y0 - SURFACE.label.gap - SURFACE.label.size / 2
+
+const COS = Math.cos(SURFACE.tilt), SIN = Math.sin(SURFACE.tilt)
+/**
+ * Where the tilted frame goes for its outline `pts` ((y, z) in the grid's frame: the extremes of its parts): `y`
+ * centres them up and down the box, `z` seats the lowest `SURFACE.seat` over the glass; `top` is then the highest one's
+ * z, pt off the glass.
+ */
+function tiltFit(pts: readonly (readonly [number, number])[]): { y: number; z: number; top: number } {
+  let lo = Infinity, hi = -Infinity, near = Infinity, far = -Infinity
+  for (const [y, z] of pts) {
+    const yy = y * COS - z * SIN, zz = y * SIN + z * COS
+    lo = Math.min(lo, yy); hi = Math.max(hi, yy); near = Math.min(near, zz); far = Math.max(far, zz)
+  }
+  const z = SURFACE.seat - near
+  return { y: -(lo + hi) / 2, z, top: far + z }
+}
+
 /** `ramp` (sRGB, low → high) at `t` (clamped to 0..1), mixed in sRGB between its two nearest stops, into `out` (linear). */
 function rampAt(ramp: readonly RGBA[], t: number, out: Color): Color {
   const n = ramp.length - 1, x = Math.min(1, Math.max(0, t)) * n, k = Math.min(n - 1, Math.floor(x)), u = x - k
@@ -89,7 +109,8 @@ const tmp = new Color(), v3 = new Vector3(), m4 = new Matrix4()
  *
  * Built in `inner`'s frame: the grid spans `SURFACE.width` × the box width along x (column c at `x0 + c·px`) and
  * `SURFACE.depth` × its height along y (row 0 at the back, +y, the last row at the front); a value stands along z,
- * `max` at `SURFACE.height` × the box's shorter side. `inner` is tilted `SURFACE.tilt` about x, so the grid lies back
+ * `max` at `SURFACE.height` × the box's shorter side (a larger value is capped there: nothing rises past the top tick
+ * or `riseFor`). `inner` is tilted `SURFACE.tilt` about x, so the grid lies back
  * like a tabletop and the heights rise toward the viewer and up, then seated on the glass (its lowest point
  * `SURFACE.seat` over it: nothing sinks behind the face it stands on) and centred in the box.
  *
@@ -186,6 +207,26 @@ export class SurfaceChart extends Group {
   hover(cell: SurfaceCell | null): void {
     this.hovered = cell ? { row: cell.row, col: cell.col } : null
     this.posed = false
+  }
+
+  /**
+   * pt: the most this chart, laid out in a box `width` × `height`, rises off the glass it is seated on (its plate,
+   * surface, labels and hover marks), rounded up, whatever its data and labels: the plate as deep as lying labels can
+   * make it, the ticks up to the full height, the hover ring on the front row's full height. For
+   * `Attach3DOptions.depth`. It grows with the width only while the width is under the height (the full height is
+   * `SURFACE.height` × the shorter side), so `riseFor(h, h)` bounds a box `h` high at any width.
+   */
+  riseFor(width: number, height: number): number {
+    const { label: L, tick: T, plate: P } = SURFACE
+    const y0 = SURFACE.depth * height / 2, zMax = SURFACE.height * Math.min(width, height), t = P.thickness
+    const hL = textPlaneHeight(L.size), hT = textPlaneHeight(T.size), half = L.gap / 2
+    // the plate's edges as far as the lying labels push them (`layoutPlate`): the x labels under the front row, the
+    // y labels on the first and last rows
+    const front = Math.min(-y0 - P.margin, xLabelY(y0) - hL / 2 - half, -y0 - hL / 2 - half)
+    const back = Math.max(y0 + P.margin, y0 + hL / 2 + half)
+    const fit = tiltFit([[front, -t], [back, -t], [front, 0], [back, 0], [-y0, zMax], [y0, zMax], [y0, -hT / 2], [y0, zMax + hT / 2]])
+    const ring = -y0 * SIN + zMax * COS + fit.z + SURFACE.ring / 2
+    return Math.ceil(Math.max(fit.top, ring))
   }
 
   /**
@@ -322,7 +363,7 @@ export class SurfaceChart extends Group {
     for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
       const i = r * cols + c
       pos.setXY(i, g.x0 + c * g.px, g.y0 - r * g.py)
-      this.springs[i]!.set(d.values[r]![c]! / d.max)
+      this.springs[i]!.set(Math.min(1, d.values[r]![c]! / d.max))   // capped at the full height
     }
 
     this.layoutLabels(g)
@@ -355,7 +396,7 @@ export class SurfaceChart extends Group {
     }
     thin(this.planes.x, g.cols, m => (m.userData.ink as number) + gap, g.px)
     thin(this.planes.y, g.rows, () => L.size + gap / 2, g.py)
-    this.planes.x.forEach((m, c) => { m.position.set(g.x0 + c * g.px, -g.y0 - gap - L.size / 2, L.lift); m.rotation.set(0, 0, 0) })
+    this.planes.x.forEach((m, c) => { m.position.set(g.x0 + c * g.px, xLabelY(g.y0), L.lift); m.rotation.set(0, 0, 0) })
     this.planes.y.forEach((m, r) => { m.position.set(g.x0 - gap, g.y0 - r * g.py, L.lift); m.rotation.set(0, 0, 0) })
     const n = this.planes.ticks.length
     this.planes.ticks.forEach((m, k) => {
@@ -416,10 +457,8 @@ export class SurfaceChart extends Group {
       pts.push([g.y0, m.position.z + b.min.y], [g.y0, m.position.z + b.max.y])   // standing: the plane's y is the height
       x0 = Math.min(x0, m.position.x + b.min.x)
     }
-    const c = Math.cos(SURFACE.tilt), s = Math.sin(SURFACE.tilt)
-    let lo = Infinity, hi = -Infinity, near = Infinity
-    for (const [y, z] of pts) { const yy = y * c - z * s, zz = y * s + z * c; lo = Math.min(lo, yy); hi = Math.max(hi, yy); near = Math.min(near, zz) }
-    this.inner.position.set(-(x0 + x1) / 2, -(lo + hi) / 2, SURFACE.seat - near)
+    const fit = tiltFit(pts)
+    this.inner.position.set(-(x0 + x1) / 2, fit.y, fit.z)
   }
 
   /** The surface's heights and colours from the springs, its normals and bounds; the hover marks on their vertex. */

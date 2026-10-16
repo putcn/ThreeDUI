@@ -178,6 +178,36 @@ describe('SurfaceChart (spatial spec §12.1)', () => {
     expect([...order].sort((a, b) => a - b)).toEqual(order); expect(new Set(order).size).toBe(order.length)
     expect((c.guide.material as Material).depthTest).toBe(false); expect((c.dot.material as Material).depthTest).toBe(false)
   })
+  it('a value above max is capped at the full height (and the ramp\'s last colour)', () => {
+    const c = make({ values: [[0, 2, 4], [1, 3, 20]] }); run(c, 3)
+    expect(vertex(c, 1, 2).z).toBeCloseTo(Z_MAX, 3)
+    const top = colorAt(c, 1, 2), want = linear(RAMP[3]!)
+    expect(top.r).toBeCloseTo(want.r, 4); expect(top.b).toBeCloseTo(want.b, 4)
+  })
+  it('riseFor bounds how far the seated chart rises off the glass, labels, plate and hover ring included, at any size', () => {
+    const labels = { x: ['00', '01', '02', '03'], y: ['10-14', '10-15', '10-16'], ticks: ['0', '50', '100', '150'] }
+    for (const [W, H] of [[640, 280], [300, 400], [500, 60], [80, 60], [1000, 120], [240, 240]] as const) {
+      const c = make({ values: [[150, 150, 150, 150], [150, 150, 150, 150], [150, 150, 150, 150]], max: 150 })
+      c.labels(labels); c.hover({ row: 2, col: 1 })                                        // the front row, at the full height
+      for (let t = 0; t < 3; t += 1 / 60) c.update(1 / 60, ctx3({ width: W, height: H }))
+      c.updateMatrixWorld(true)
+      const top = new Box3().setFromObject(c, true).max.z, rise = c.riseFor(W, H)
+      expect(top, `${W} × ${H}`).toBeLessThanOrEqual(rise)
+      expect(rise - top, `${W} × ${H}: a close bound`).toBeLessThan(2)
+      expect(rise).toBeLessThanOrEqual(c.riseFor(H, H))                                    // no width rises it past one as wide as high
+      expect(c.riseFor(W * 3, H)).toBe(c.riseFor(Math.max(W, H), H))
+      // fewer labels and lower data rise less: still bounded
+      const bare = make({ values: [[0, 1], [2, 3]], max: 3 }); run(bare, 3, { width: W, height: H }); bare.updateMatrixWorld(true)
+      expect(new Box3().setFromObject(bare, true).max.z).toBeLessThanOrEqual(bare.riseFor(W, H))
+    }
+  })
+  it('after dispose, a set grows in again from the plate, row by row', () => {
+    const c = make(); run(c, 3)
+    c.dispose(); c.set(data()); c.update(0, ctx3())
+    expect(vertex(c, 1, 2).z).toBe(0)
+    c.update(1 / 60, ctx3()); expect(vertex(c, 0, 2).z).toBeGreaterThan(0); expect(vertex(c, 1, 2).z).toBe(0)
+    run(c, 3); expect(vertex(c, 1, 2).z).toBeCloseTo(Z_MAX, 3)
+  })
   it('rejects bad data, changing nothing', () => {
     const c = make()
     expect(() => c.set(data({ max: 0 }))).toThrow(/\[SurfaceChart\.set\].*max/)

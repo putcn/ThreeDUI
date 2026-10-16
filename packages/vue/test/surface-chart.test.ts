@@ -22,6 +22,12 @@ async function mounted(root: FakeRoot, props: Record<string, unknown>) {
   await flush(); root.tick(); await flush(); root.tick(); await flush()
   return root.surfacesMade[0]!
 }
+/** The first text node under `n` whose value is `value`. */
+function byText(n: Node, value: string): Node | undefined {
+  if (n.type === 'text' && n.props.value === value) return n
+  for (const c of n.children) { const hit = byText(c, value); if (hit) return hit }
+  return undefined
+}
 /** The readout row's text, its runs joined (no-break spaces as spaces). */
 function readout(vp: Node): string {
   const row = vp.parent!.children[1]!, out: string[] = []
@@ -48,12 +54,12 @@ it('SurfaceChart3D: an explicit max and ramp are used; a max no nice step reache
   await mounted(odd, { xLabels: X, yLabels: Y, values: V, max: 245 })
   expect(odd.surfaceCharts[0]!.labels).toHaveBeenLastCalledWith({ x: X, y: Y, ticks: ['0', '122.5', '245'] })
 })
-it('SurfaceChart3D attaches the chart to a box of its height; depth covers the tilted tabletop; update is the chart\'s', async () => {
+it('SurfaceChart3D attaches the chart to a box of its height; depth is the chart\'s own rise at any width; update is the chart\'s', async () => {
   const root = createFakeRoot()
   const s = await mounted(root, { xLabels: X, yLabels: Y, values: V, height: 300 })
   const a = s.attached[0]!, chart = root.surfaceCharts[0]!
   expect(a.object).toBe(chart); expect(a.node.layout.height).toBe(300)
-  expect(a.opts.depth).toBe(0.6 * 300 + 0.45 * 300 + 20)
+  expect(chart.riseFor).toHaveBeenLastCalledWith(300, 300); expect(a.opts.depth).toBe(300 + 40)   // the fake's min(w, h) + 40
   const c = { width: 600, height: 300, reducedMotion: false, theme: defaultTheme, scheme: 'light' as const }
   a.opts.update!(1 / 60, c); expect(chart.update).toHaveBeenLastCalledWith(1 / 60, c)
 })
@@ -98,11 +104,27 @@ it('SurfaceChart3D: a hovered cell the data drops is hovered no more; one it kee
   props.value = { xLabels: ['00', '01'], yLabels: Y, values: [[1, 2], [4, 5]] }; await nextTick(); root.tick(); await flush()
   expect(chart.hover).toHaveBeenLastCalledWith(null); expect(seen.at(-1)).toBeNull(); expect(readout(vp)).toBe('指向曲面查看数值')
 })
-it('SurfaceChart3D: empty values say so and set nothing', async () => {
+it('SurfaceChart3D: empty values say so and set nothing, as tall as the chart with its readout', async () => {
   const root = createFakeRoot()
-  mountGlass(() => inBlock(() => h(SurfaceChart3D, { xLabels: X, yLabels: Y, values: [] })), { root }); await flush()
-  expect(JSON.stringify(tree(root.surfacesMade[0]!.root))).toContain('暂无数据'); expect(root.surfacesMade[0]!.attached).toEqual([])
+  mountGlass(() => inBlock(() => h(SurfaceChart3D, { xLabels: X, yLabels: Y, values: [], height: 240 })), { root }); await flush(); root.tick()
+  const s = root.surfacesMade[0]!
+  expect(JSON.stringify(tree(s.root))).toContain('暂无数据'); expect(s.attached).toEqual([])
   expect(root.surfaceCharts[0]!.set).not.toHaveBeenCalled()
+  const empty = byText(s.root, '暂无数据')!.parent!
+  const full = createFakeRoot(), f = await mounted(full, { xLabels: X, yLabels: Y, values: V, height: 240 })
+  expect(empty.layout.height).toBe(f.attached[0]!.node.parent!.layout.height); expect(empty.layout.height).toBe(240 + 10 + 20)
+})
+it('SurfaceChart3D: values coming back after empty grow in again (the chart lets go of its drawing), not from stale heights', async () => {
+  const root = createFakeRoot(), values = ref<number[][]>(V)
+  mountGlass(() => inBlock(() => h(SurfaceChart3D, { xLabels: X, yLabels: Y, values: values.value })), { root }); await flush(); root.tick()
+  const chart = root.surfaceCharts[0]!
+  expect(chart.set).toHaveBeenCalledTimes(1); expect(chart.dispose).not.toHaveBeenCalled()
+  values.value = []; await nextTick()
+  expect(chart.dispose).toHaveBeenCalledTimes(1); expect(root.surfacesMade[0]!.attached).toEqual([])
+  values.value = V; await nextTick(); await flush()
+  expect(chart.set).toHaveBeenCalledTimes(2)
+  expect(chart.dispose.mock.invocationCallOrder[0]!).toBeLessThan(chart.set.mock.invocationCallOrder[1]!)
+  expect(root.surfacesMade[0]!.attached.map(a => a.object)).toEqual([chart])
 })
 it('SurfaceChart3D errors name the prop', () => {
   const err = (props: Record<string, unknown>) => mountGlass(() => inBlock(() => h(SurfaceChart3D, props))).errors[0]
@@ -118,6 +140,7 @@ it('SurfaceChart3D is registered with complete manifest metadata', () => {
   expect(c).toBeDefined()
   expect(c.glass.description.length).toBeGreaterThan(40); expect(c.glass.examples.length).toBeGreaterThanOrEqual(2); expect(c.glass.examples.length).toBeLessThanOrEqual(3)
   for (const [k, s] of Object.entries(c.glass.props.shape)) expect((s as { description?: string }).description, `SurfaceChart3D.${k}`).toMatch(/[一-鿿]/)
+  expect((c.glass.props.shape.max as { description?: string }).description).toMatch(/封顶/)
   for (const e of c.glass.examples) expect(e).toMatch(/^<Space\b[^]*<SurfaceChart3D\b[^]*<\/Space>$/)
   expect(c.glass.mistakes!.length).toBeGreaterThanOrEqual(2)
   expect(c.glass.mistakes!.map(m => m.mistake).join('\n')).toMatch(/values/)

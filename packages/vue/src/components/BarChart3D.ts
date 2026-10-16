@@ -1,12 +1,12 @@
-import { computed, h, onBeforeUnmount, shallowRef, watch, watchEffect, type VNode } from '@vue/runtime-core'
+import { computed, h, shallowRef, watch, watchEffect, type VNode } from '@vue/runtime-core'
 import { z } from 'zod'
 import type { Node, UIEvent } from '@glassui/core'
-import type { Surface, Viewport3DContext } from '@glassui/render'
+import type { Viewport3DContext } from '@glassui/render'
 import { formatValue, niceMax } from '../chart'
 import { defineGlassComponent } from '../define'
-import { useRoot, useScheme, useSurfaceRef } from '../inject'
+import { useRoot, useScheme } from '../inject'
 import { useLaidOutWidth } from '../layout-width'
-import { isHeld } from '../renderer'
+import { useOwned3D } from '../owned3d'
 import { Text } from './Text'
 import { colorOf } from './tokens'
 import { Viewport3D } from './Viewport3D'
@@ -50,7 +50,7 @@ export const BarChart3D = defineGlassComponent({
     { mistake: '把 BarChart3D 放进可滚动的 scroll 里', fix: '本期不支持裁剪 3D 物体：放在 scroll 外，Block 的高度给够（图表区 200 pt 加标签行）' },
   ],
 }, (p, { emit }) => {
-  const root = useRoot(), scheme = useScheme(), surface = useSurfaceRef()
+  const root = useRoot(), scheme = useScheme()
   const chart = root.createBarChart()
   // made once: a new function each render would re-attach the chart
   const update = (dt: number, c: Viewport3DContext): boolean => chart.update(dt, c)
@@ -95,13 +95,7 @@ export const BarChart3D = defineGlassComponent({
   }
 
   // the chart is ours to dispose; in a leaving Block it flies out attached, so it goes with the Surface instead
-  let home: Surface | null = null
-  watch(surface, s => { if (s) home = s }, { immediate: true })
-  onBeforeUnmount(() => {
-    const n = box.value, s = home
-    if (n && s && isHeld(n)) s.addEventListener('dispose', () => { chart.dispose() })
-    else chart.dispose()
-  })
+  useOwned3D(chart, box)
 
   return () => {
     const x = p.value
