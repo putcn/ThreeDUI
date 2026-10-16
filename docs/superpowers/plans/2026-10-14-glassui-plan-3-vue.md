@@ -3966,7 +3966,9 @@ Spatial spec §12.4, §12.5, and §4 as amended (the demo moves to Xuzhou).
   - The moves that follow carry `buttons & 2`.
 
 - **`fetch-geo.mjs`** (run by the implementer with network access; the output is committed).
-  - Districts: `https://geo.datav.aliyun.com/areas_bound/geojson?code=320300_full`. Keep each district's name, centre and rings, rounded to 5 decimals.
+  - Districts: `https://geo.datav.aliyun.com/areas_v3/bound/320300_full.json` (verified 200, 82 KB). Keep each district's name, centre and rings, rounded to 5 decimals.
+  - Overpass: `https://overpass-api.de/api/interpreter` (POST `data=`). It needs a User-Agent header; use a generic one such as `glassui-playground/0.1`, never any personal name or email.
+  - Run the fetch with Bash `allowed_domains: ["geo.datav.aliyun.com", "overpass-api.de"]`.
   - Roads and water: Overpass, for the Xuzhou bbox.
     - Roads: `highway` in motorway, trunk, primary, secondary, plus their `_link`s. Water: `waterway=river`, plus `natural=water` polygons above a minimum area.
     - Simplify with Douglas–Peucker at ~25 m.
