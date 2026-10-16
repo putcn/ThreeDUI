@@ -20,6 +20,13 @@ export const FRAME = {
   plate: { thickness: 3, margin: 12, opacity: 0.55, radius: 1.2 },
   /** The labels lying on the plate: font size, gap from the grid, how far over the plate they lie. */
   label: { size: 15, gap: 8, lift: 0.4 },
+  /**
+   * Seen from its box's focus-pose eye (`Viewport3DContext.eye`), the chart stays this far inside its box on every
+   * side (pt), centred in it; it may shrink for that, never grow past its own size.
+   */
+  margin: 16,
+  /** The eye moving less than this share of its distance (a Card rising on hover) does not refit the chart: no breathing. */
+  eyeTolerance: 0.02,
 } as const
 
 /**
@@ -109,16 +116,65 @@ export function fitPlate(plate: Plate, grid: { x0: number; x1: number; y0: numbe
   }
 }
 
+/** Where a chart is seen from, and its box (pt): what `seatFrame` fits it to (`Viewport3DContext`'s `eye`, `width`, `height`). */
+export interface FrameView { eye: readonly [number, number, number]; width: number; height: number }
+
 /**
- * Places the tilted frame `inner`: its lowest point (of the plate's outline and the chart's `pts`, (y, z) in the grid's
- * frame) `FRAME.seat` over the glass, centred up and down the box, and across it on the plate (widened left to
- * `left` when the chart reaches past it).
+ * Places the tilted frame `inner` for its outline, the plate's box and the chart's own `pts` ((x, y, z) in the grid's
+ * frame: the corners of what it draws at its tallest): the lowest point `FRAME.seat` over the glass, centred up and down
+ * the box and across it.
+ *
+ * With a `view`, the centring is as the eye sees it: what stands toward the eye looks bigger and further from the
+ * eye's foot, so a chart in a box off the view's centre would spill past its side. The outline is projected from the
+ * eye onto the glass; the frame is moved so that projection is centred in the box and scaled (never past 1) so it, and
+ * `reach` (points it reaches only now and then, such as a hovered bar's lift: kept inside, not centred on), keep
+ * `FRAME.margin` inside every edge, seated as above. A few rounds settle it (the seat, and so each point's
+ * magnification, depends on the scale).
  */
-export function seatFrame(inner: Group, plate: Plate, pts: readonly (readonly [number, number])[], left = Infinity): void {
+export function seatFrame(inner: Group, plate: Plate, pts: readonly (readonly [number, number, number])[], view?: FrameView, reach: readonly (readonly [number, number, number])[] = []): void {
   plate.geometry.computeBoundingBox()
   const b = plate.geometry.boundingBox!
-  const fit = tiltFit([[b.min.y, b.min.z], [b.max.y, b.min.z], [b.min.y, b.max.z], [b.max.y, b.max.z], ...pts])
-  inner.position.set(-(Math.min(b.min.x, left) + b.max.x) / 2, fit.y, fit.z)
+  const all: (readonly [number, number, number])[] = [...pts]
+  for (const x of [b.min.x, b.max.x]) for (const y of [b.min.y, b.max.y]) for (const z of [b.min.z, b.max.z]) all.push([x, y, z])
+  const fit = tiltFit(all.map(([, y, z]) => [y, z] as const))
+  const xs = all.map(p => p[0]), x0 = Math.min(...xs), x1 = Math.max(...xs)
+  inner.scale.setScalar(1)
+  inner.position.set(-(x0 + x1) / 2, fit.y, fit.z)
+  if (!view) return
+  // the outline and the reach, tilted (unscaled, unmoved)
+  const tilt = ([x, y, z]: readonly [number, number, number]) => [x, y * COS - z * SIN, y * SIN + z * COS] as const
+  const outline = all.map(tilt), extra = [...outline, ...reach.map(tilt)]
+  const [ex, ey, ez] = view.eye, M = FRAME.margin, hw = Math.max(0.5, view.width / 2 - M), hh = Math.max(0.5, view.height / 2 - M)
+  const low = Math.min(...extra.map(q => q[2]))
+  let k = 1, tx = inner.position.x, ty = inner.position.y
+  /** Where `q` shows on the glass, at this round's scale and place. */
+  const show = ([qx, qy, qz]: readonly [number, number, number], tz: number): [number, number, number] => {
+    const m = ez / Math.max(1e-3, ez - (k * qz + tz))
+    return [ex + (k * qx + tx - ex) * m, ey + (k * qy + ty - ey) * m, m]
+  }
+  for (let round = 0; round < 24; round++) {
+    const tz = FRAME.seat - k * low
+    // re-centre the outline as seen (undoing an average magnification) …
+    let sx0 = Infinity, sx1 = -Infinity, sy0 = Infinity, sy1 = -Infinity, mean = 0
+    for (const q of outline) {
+      const [sx, sy, m] = show(q, tz)
+      sx0 = Math.min(sx0, sx); sx1 = Math.max(sx1, sx); sy0 = Math.min(sy0, sy); sy1 = Math.max(sy1, sy); mean += m / outline.length
+    }
+    tx -= (sx0 + sx1) / 2 / mean; ty -= (sy0 + sy1) / 2 / mean
+    // … and rescale so everything, the reach included, keeps the margin from the box's edges
+    let ax = 0, ay = 0
+    for (const q of extra) { const [sx, sy] = show(q, tz); ax = Math.max(ax, Math.abs(sx)); ay = Math.max(ay, Math.abs(sy)) }
+    k = Math.min(1, k * Math.min(hw / ax, hh / ay))
+  }
+  inner.scale.setScalar(k)
+  inner.position.set(tx, ty, FRAME.seat - k * low)
+}
+
+/** Whether a chart laid out for `was` must fit itself again for `now`: one has an eye the other lacks, or it moved past `FRAME.eyeTolerance`. */
+export function eyeMoved(now: readonly [number, number, number] | undefined, was: readonly [number, number, number] | undefined): boolean {
+  if (!now || !was) return now !== was
+  const tol = FRAME.eyeTolerance * Math.max(1, Math.abs(was[2]))
+  return Math.abs(now[0] - was[0]) > tol || Math.abs(now[1] - was[1]) > tol || Math.abs(now[2] - was[2]) > tol
 }
 
 /** A label for the frame: a `textPlane` named `name`, in the labels' draw order, casting no shadow, letting the pointer through. */
@@ -140,11 +196,14 @@ export function syncPlanes(planes: TextPlane[], texts: readonly string[], make: 
   })
 }
 
-/** Shows every `step`-th of the first `count` planes, where `step` keeps neighbours `room` pt apart at `pitch`; hides the rest. */
-export function thinPlanes(planes: readonly TextPlane[], count: number, room: (m: TextPlane) => number, pitch: number): void {
+/**
+ * Shows every `step`-th of the first `count` planes, where `step` keeps neighbours `room` pt apart at `pitch`, counting
+ * from the first (or, `from: 'last'`, from the last: it is always shown); hides the rest.
+ */
+export function thinPlanes(planes: readonly TextPlane[], count: number, room: (m: TextPlane) => number, pitch: number, from: 'first' | 'last' = 'first'): void {
   const need = Math.max(0, ...planes.slice(0, count).map(room))
   const step = Math.max(1, Math.ceil(need / pitch))
-  planes.forEach((m, i) => { m.visible = i < count && i % step === 0 })
+  planes.forEach((m, i) => { m.visible = i < count && (from === 'first' ? i : count - 1 - i) % step === 0 })
 }
 
 /** The frame's theme colours in `ctx`: the labels' (`secondaryLabel`) and the plate's (`fill`), sRGB. */
@@ -189,6 +248,8 @@ export abstract class FrameChart extends Group {
   protected readonly createCanvas: CanvasFactory
   /** The last `update`'s context: the box, the motion preference and the theme. */
   protected ctx: Viewport3DContext | null = null
+  /** The eye the chart was last laid out for (`Viewport3DContext.eye`): it refits only when that moves far enough (`eyeMoved`). */
+  private fittedEye: readonly [number, number, number] | undefined = undefined
   /** Something the layout depends on changed since the last one (data, labels). */
   protected dirty = true
 
@@ -215,17 +276,24 @@ export abstract class FrameChart extends Group {
 
   /**
    * The start of every `update` in `ctx`'s box: keeps `ctx`, hides `inner` in a box with no area, follows the theme's
-   * colours and lays out again when the box, the data or the labels changed. False when there is nothing to draw (no
-   * data, an empty box): `update` then returns false.
+   * colours and lays out again when the box, the data, the labels or the eye (past its tolerance) changed. False when
+   * there is nothing to draw (no data, an empty box): `update` then returns false.
    */
   protected prepare(ctx: Viewport3DContext): boolean {
     const resized = ctx.width !== this.ctx?.width || ctx.height !== this.ctx?.height
-    this.ctx = ctx
+    // the eye it is fitted for: kept until it moves far enough, so a Card's hover lift does not refit (breathe)
+    const refit = eyeMoved(ctx.eye, this.fittedEye)
+    this.ctx = refit || !this.ctx ? ctx : { ...ctx, ...(this.fittedEye ? { eye: this.fittedEye } : {}) }
     if (!this.hasData()) return false
     this.inner.visible = ctx.width > 0 && ctx.height > 0
     if (!this.inner.visible) return false
     this.paint(ctx)
-    if (resized || this.dirty) this.layout(ctx)
+    if (resized || refit || this.dirty) { this.fittedEye = ctx.eye; this.layout(this.ctx) }
     return true
+  }
+
+  /** The view a layout in `ctx` fits the frame to (`seatFrame`): its eye and box, when it has an eye. */
+  protected viewOf(ctx: Viewport3DContext): FrameView | undefined {
+    return ctx.eye ? { eye: ctx.eye, width: ctx.width, height: ctx.height } : undefined
   }
 }

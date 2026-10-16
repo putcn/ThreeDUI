@@ -1,8 +1,14 @@
 import { Group, type Material, type Object3D } from 'three'
 import { absoluteRect, effectiveStyle, type ColorScheme, type GlassInstance, type Node, type Theme } from '@glassui/core'
 
-/** What `Attach3DOptions.update` is told each tick: the node's box size (pt) and the root's preferences. */
-export interface Viewport3DContext { width: number; height: number; reducedMotion: boolean; theme: Theme; scheme: ColorScheme }
+/**
+ * What `Attach3DOptions.update` is told each tick: the node's box size (pt) and the root's preferences; and `eye`, where
+ * the object is seen from when the camera rig focuses its Surface (the focus pose's camera, square in front of the
+ * Surface at its fit distance; spatial spec §2.2), in the anchor's frame (pt: x right, y up, z out of the face the box
+ * stands on), so a model can fit itself to show inside its box from there. It follows the rest pose, not the moving
+ * camera (no parallax, no flight); absent when the root names no view (`Viewport3DStep.focus`).
+ */
+export interface Viewport3DContext { width: number; height: number; reducedMotion: boolean; theme: Theme; scheme: ColorScheme; eye?: readonly [number, number, number] }
 export interface Attach3DOptions {
   /** pt: the most the object rises off the face it stands on, for the shadow-camera fit (`Surface.glassBounds`). Default: the node's width. */
   depth?: number
@@ -18,7 +24,9 @@ export interface Viewport3DStep {
   glass: readonly GlassInstance[]
   /** The Surface's opacity (`Surface.opacity`). */
   opacity: number
-  context: Omit<Viewport3DContext, 'width' | 'height'>
+  context: Omit<Viewport3DContext, 'width' | 'height' | 'eye'>
+  /** pt: how far in front of the content plane the camera stands at the Surface's focus pose (absent: no view known). */
+  focus?: number
 }
 
 /** A drawable's or a Group's own values before an attachment adopted it; `users`: the attachments holding it. */
@@ -155,7 +163,9 @@ export class Viewport3DAttachment {
       this.face = faceUnder(this.node, s.glass)
       this.anchor.position.set((rect.x + rect.width / 2 - W / 2) / ppu, (H / 2 - rect.y - rect.height / 2) / ppu, this.face / ppu)
       this.anchor.scale.setScalar(1 / ppu)
-      more = this.opts.update?.(dt, { width: rect.width, height: rect.height, ...s.context }) === true
+      // the focus pose's camera, on the Surface's axis: from the anchor (the box centre on its face) back to the centre and out
+      const eye = s.focus === undefined ? {} : { eye: [W / 2 - rect.x - rect.width / 2, rect.y + rect.height / 2 - H / 2, s.focus - this.face] as const }
+      more = this.opts.update?.(dt, { width: rect.width, height: rect.height, ...s.context, ...eye }) === true
       // `update` may have detached this attachment: then it has restored everything, and must not adopt again
       if (this.disposed) return more
     }

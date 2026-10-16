@@ -26,6 +26,7 @@ import { liftFor, partition, splitNested, type Partition } from './partition'
 import { StackPass } from './stack'
 import { toColor } from '../color'
 import { Viewport3DAttachment, type Attach3DOptions } from '../viewport'
+import { fitDistance } from '../rig'
 
 export interface SurfaceOptions {
   id?: string; width: number; height: number; ptPerUnit?: number; placement?: 'screen' | 'world'; background?: 'none' | 'glass' | string; cornerRadius?: number; interactive?: boolean
@@ -819,10 +820,20 @@ export class Surface extends Object3D<SurfaceEventMap> {
     } catch (e) { this.markFailed(e) }
   }
 
+  /**
+   * The view the root's camera rig frames this Surface with (`focusPose`): the camera's vertical fov (degrees), the
+   * viewport's aspect and the rig's margin. The root sets it every tick (`UIRoot.tick`); the attachments are told where
+   * the focus pose's camera stands (`Viewport3DContext.eye`). Null: none known (no eye).
+   */
+  focusView: { fovDeg: number; aspect: number; margin: number } | null = null
+
   /** Places, fades and updates every attachment from the current list (`Viewport3DAttachment.step`); after layout. */
   private stepViewports(dt: number, list: RenderList): void {
-    const { theme, scheme, anim } = this.ctx
-    const step = { root: this.root, surface: this.model, glass: list.glass, opacity: this.fade, context: { reducedMotion: anim.reducedMotion, theme, scheme } }
+    const { theme, scheme, anim } = this.ctx, v = this.focusView, { width: W, height: H, ptPerUnit: ppu } = this.model
+    // the focus pose's distance from the content plane in this Surface's own pt: the fit at its rest size, over its scale
+    const [sx, sy, sz] = this.restPose.scale
+    const focus = v ? fitDistance(W / ppu * Math.abs(sx), H / ppu * Math.abs(sy), v.fovDeg, v.aspect, v.margin) / Math.abs(sz || 1) * ppu : undefined
+    const step = { root: this.root, surface: this.model, glass: list.glass, opacity: this.fade, context: { reducedMotion: anim.reducedMotion, theme, scheme }, ...(focus !== undefined && Number.isFinite(focus) ? { focus } : {}) }
     for (const a of this.attachments.values()) if (a.step(dt, step)) this.needsFrame = true
   }
 

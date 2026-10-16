@@ -92,8 +92,9 @@ const tmp = new Color(), v3 = new Vector3(), m4 = new Matrix4()
  * - `grid`: lines on the plate along every column and row; on the back edge, a value axis with a tick mark and a guide
  *   line across at each tick (the theme's `secondaryLabel`).
  * - labels (`textPlane`s, `secondaryLabel`): `x` under the front edge, centred on their columns, `y` left of the grid,
- *   ending at it, both lying on the plate (thinned to every n-th when they would overlap); `ticks` standing at the
- *   back-left corner at their heights, facing the front.
+ *   ending at it, both lying on the plate (thinned to every n-th when they would overlap: `y` two lines apart, counted
+ *   from the front row, the back row's left out where the ticks stand); `ticks` standing at the back-left corner at
+ *   their heights, facing the front.
  * - `guide`, `ring`, `dot`: the hovered vertex: a line from the plate up to it and a `SURFACE.dot` dot in the ramp's
  *   last colour on a ring in the theme's `fill`, drawn over the surface (no depth test).
  *
@@ -309,7 +310,7 @@ export class SurfaceChart extends FrameChart {
     this.layoutLabels(g)
     this.layoutLines(g)
     fitPlate(p.plate, { x0: g.x0, x1: -g.x0, y0: -g.y0, y1: g.y0 }, [...this.planes.x, ...this.planes.y])
-    this.seat(g)
+    this.seat(g, ctx)
     this.dirty = false; this.posed = false
   }
 
@@ -324,7 +325,11 @@ export class SurfaceChart extends FrameChart {
       })
     }
     thinPlanes(this.planes.x, g.cols, m => (m.userData.ink as number) + gap, g.px)
-    thinPlanes(this.planes.y, g.rows, () => L.size + gap / 2, g.py)
+    // lying back, the rows' labels are foreshortened onto each other: two lines' room apart, counted from the front row
+    // (the latest, always shown); the back row's gives way to the value axis's 0, which stands there
+    thinPlanes(this.planes.y, g.rows, () => 2 * L.size, g.py, 'last')
+    const back = this.planes.y[0]
+    if (back && this.texts.ticks.length > 0 && g.rows > 1) back.visible = false
     this.planes.x.forEach((m, c) => { m.position.set(g.x0 + c * g.px, xLabelY(g.y0), L.lift); m.rotation.set(0, 0, 0) })
     this.planes.y.forEach((m, r) => { m.position.set(g.x0 - gap, g.y0 - r * g.py, L.lift); m.rotation.set(0, 0, 0) })
     const n = this.planes.ticks.length
@@ -353,18 +358,19 @@ export class SurfaceChart extends FrameChart {
 
   /**
    * Places the tilted frame (`seatFrame`): its lowest point (the plate's back edge, a tick label) `SURFACE.seat` over
-   * the glass, and the chart (the plate, the full height, the standing ticks) centred across and up the box.
+   * the glass, and the chart (the plate, the full height, the standing ticks) centred across and up the box; with an
+   * eye in `ctx`, fitted inside the box as seen from it.
    */
-  private seat(g: Grid): void {
-    const pts: [number, number][] = [[-g.y0, g.zMax], [g.y0, g.zMax]]
-    let left = Infinity
+  private seat(g: Grid, ctx: Viewport3DContext): void {
+    // the surface at the full height on its four corners, and the standing ticks' planes (their y is the height)
+    const x1 = g.x0 + (g.cols - 1) * g.px, pts: [number, number, number][] = []
+    for (const x of [g.x0, x1]) for (const y of [-g.y0, g.y0]) pts.push([x, y, g.zMax])
     for (const m of this.planes.ticks) {
       m.geometry.computeBoundingBox()
       const b = m.geometry.boundingBox!
-      pts.push([g.y0, m.position.z + b.min.y], [g.y0, m.position.z + b.max.y])   // standing: the plane's y is the height
-      left = Math.min(left, m.position.x + b.min.x)
+      for (const x of [m.position.x + b.min.x, m.position.x + b.max.x]) for (const z of [m.position.z + b.min.y, m.position.z + b.max.y]) pts.push([x, g.y0, z])
     }
-    seatFrame(this.inner, this.built.plate, pts, left)
+    seatFrame(this.inner, this.built.plate, pts, this.viewOf(ctx))
   }
 
   /** The surface's heights and colours from the springs, its normals and bounds; the hover marks on their vertex. */

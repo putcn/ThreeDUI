@@ -724,6 +724,18 @@ describe('the root API for the Vue layer', () => {
     const o = base(); const ortho = await createUIRoot({ ...o, camera: new OrthographicCamera() })
     expect(() => ortho.createCameraRig()).toThrow(/PerspectiveCamera/)
   })
+  it('tick tells world Surfaces the view a rig frames them with (fov, aspect, margin): the rig\'s margin, else the default; an orthographic camera none (Task 9P V2)', async () => {
+    const { root, camera } = await createRoot()
+    const s = root.createSurface({ layer: 'world', width: 244, height: 244 }), screen = root.createSurface({ width: 100, height: 100 })
+    root.tick(0)
+    expect(s.focusView).toEqual({ fovDeg: camera.getEffectiveFOV(), aspect: 800 / 600, margin: 0.08 })
+    expect(screen.focusView).toBeNull()
+    root.createCameraRig({ margin: 0.2 }); root.tick(0)
+    expect(s.focusView!.margin).toBe(0.2)
+    const ortho = await createUIRoot({ ...base(), camera: new OrthographicCamera() })
+    const w = ortho.createSurface({ layer: 'world', width: 244, height: 244 }); ortho.tick(0)
+    expect(w.focusView).toBeNull()
+  })
   it('the rig moves the camera before the screen layer and the lights follow it; root.dispose disposes the rig', async () => {
     const { root, camera } = await createRoot()
     const rig = root.createCameraRig()

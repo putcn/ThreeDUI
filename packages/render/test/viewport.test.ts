@@ -4,6 +4,8 @@ import { BoxGeometry, Group, Mesh, MeshStandardMaterial } from 'three'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
 import { Surface, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
+import { fitDistance } from '../src/rig'
+import type { Viewport3DContext } from '../src/viewport'
 import { AtlasPages } from '../src/text/pages'
 import { createMeasureFn } from '../src/text/measure'
 
@@ -45,6 +47,19 @@ describe('Surface.attach3D', () => {
     expect(update).toHaveBeenCalledWith(1 / 60, expect.objectContaining({ width: 100, height: 80, reducedMotion: false, scheme: 'light' }))
     expect(s.needsFrame).toBe(true)
     update.mockImplementation(() => { throw new Error('boom') }); s.tick(1 / 60); expect(s.error?.message).toBe('boom')
+  })
+  it('tells update where the focus pose\'s camera stands, in the anchor\'s frame (pt): back to the Surface\'s axis, out by the fit distance less the face; none without a view (Task 9P V2)', () => {
+    const { s, vp, mesh } = make(), update = vi.fn((_dt: number, _c: Viewport3DContext) => false)
+    s.attach3D(vp, mesh, { update }); s.tick(1 / 60)
+    expect(update.mock.lastCall![1]).not.toHaveProperty('eye')
+    s.focusView = { fovDeg: 38, aspect: 16 / 9, margin: 0.08 }; s.tick(1 / 60)
+    // the box's centre (110, 100) of the 400 × 300 Surface: 90 pt left of its axis, 50 pt above; on the card's 12 pt glass
+    const d = fitDistance(4, 3, 38, 16 / 9, 0.08) * 100
+    const eye = update.mock.lastCall![1].eye!
+    expect(eye[0]).toBeCloseTo(90, 9); expect(eye[1]).toBeCloseTo(-50, 9); expect(eye[2]).toBeCloseTo(d - 12, 9)
+    // a Surface resting at half scale is framed from half as far, which in its own pt is as far
+    s.scale.setScalar(0.5); s.tick(1 / 60)
+    expect(update.mock.lastCall![1].eye![2]).toBeCloseTo(d - 12, 6)
   })
   it('hides the anchor while the node is out of the tree; glassBounds covers depth', () => {
     const { s, card, vp, mesh } = make(); s.attach3D(vp, mesh, { depth: 50 }); s.tick(1 / 60)

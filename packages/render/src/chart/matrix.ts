@@ -27,13 +27,14 @@ export const MATRIX = {
   height: 0.45,
   /** Seconds: on the first `set` of a shape, cell (r, c) starts growing `(r + c) × stagger` after cell (0, 0). */
   stagger: 0.025,
-  /** The hovered bar's colour multiplier (linear). */
-  hoverBrightness: 1.2,
+  /** The hovered bar's light, springing 0 → 1: its colour lifted toward white by `lift`, and glowing with `glow` of it. */
+  hover: { lift: 0.32, glow: 0.4 },
   /** The hovered bar's height, of its resting height. */
   hoverDepth: 1.08,
 } as const
 
 type BarMesh = Mesh<RoundedBoxGeometry, MeshStandardNodeMaterial>
+const WHITE = new Color(1, 1, 1)
 /** One cell's bar: its mesh, its colour and its springs. */
 interface Bar {
   mesh: BarMesh
@@ -43,7 +44,7 @@ interface Bar {
   height: Spring
   /** Of its resting height: springs to 1, or `MATRIX.hoverDepth` while hovered. */
   lift: Spring
-  /** The colour's multiplier: springs to 1, or `MATRIX.hoverBrightness` while hovered. */
+  /** How lit it is: springs to 0, or 1 while hovered (`MATRIX.hover`). */
   brightness: Spring
   /** Seconds before its height starts growing (the diagonal stagger). */
   wait: number
@@ -82,7 +83,7 @@ function standingBar(width: number, depth: number, height: number): RoundedBoxGe
  * current height / that, floored at 1e-4, so a new target rebuilds the geometry without a jump on screen. Heights spring
  * (the theme's `smooth`, as of the bar's creation) as a fraction of the full height: on the first `set` of a shape, cell
  * (r, c) waits `(r + c) × MATRIX.stagger` s, then grows from 0; a later `set` springs from where the heights are;
- * reduced motion puts them there at once. The hovered bar springs brighter (`MATRIX.hoverBrightness`) and taller
+ * reduced motion puts them there at once. The hovered bar springs lit (`MATRIX.hover`: toward white, glowing) and taller
  * (`MATRIX.hoverDepth` of its height). A new box size lays the matrix out again at once. Theme colours follow `ctx`.
  */
 export class BarMatrix extends FrameChart {
@@ -140,7 +141,7 @@ export class BarMatrix extends FrameChart {
     this.invalidate()
   }
 
-  /** Springs `cell`'s bar brighter and taller (`MATRIX.hoverBrightness`, `MATRIX.hoverDepth`), the others back; null, or a cell the data lacks: none. */
+  /** Springs `cell`'s bar lit and taller (`MATRIX.hover`, `MATRIX.hoverDepth`), the others back; null, or a cell the data lacks: none. */
   hover(cell: GridCell | null): void { this.hovered = cell ? { row: cell.row, col: cell.col } : null }
 
   /**
@@ -166,7 +167,7 @@ export class BarMatrix extends FrameChart {
     let moving = false
     for (const b of this.list) {
       const on = h !== null && b.mesh.userData.row === h.row && b.mesh.userData.col === h.col
-      b.lift.set(on ? MATRIX.hoverDepth : 1); b.brightness.set(on ? MATRIX.hoverBrightness : 1)
+      b.lift.set(on ? MATRIX.hoverDepth : 1); b.brightness.set(on ? 1 : 0)
       // the stagger holds back the growth only: a hover answers at once
       const grow = stepSprings([b.height], b.wait, dt, reduced), mark = stepSprings([b.lift, b.brightness], 0, dt, reduced)
       b.wait = grow.wait
@@ -222,7 +223,7 @@ export class BarMatrix extends FrameChart {
       if (!b) {
         const mesh: BarMesh = new Mesh(standingBar(w, depth, h), barMaterial())
         mesh.name = `bar-${r}-${c}`; mesh.userData = { row: r, col: c }
-        b = { mesh, base: new Color(), height: new Spring(0, cfg), lift: new Spring(1, cfg), brightness: new Spring(1, cfg), wait: (r + c) * MATRIX.stagger }
+        b = { mesh, base: new Color(), height: new Spring(0, cfg), lift: new Spring(1, cfg), brightness: new Spring(0, cfg), wait: (r + c) * MATRIX.stagger }
         this.list.push(b); this.inner.add(mesh)
       } else {
         const p = b.mesh.geometry.parameters
@@ -236,9 +237,11 @@ export class BarMatrix extends FrameChart {
 
     this.layoutLabels(g)
     fitPlate(plate, { x0: g.x0, x1: -g.x0, y0: -g.y0, y1: g.y0 }, [...this.planes.rows, ...this.planes.cols])
-    // seated for the bars at the full height (their front and back faces), whatever the data: new data never moves it
-    const inset = (g.cd - depth) / 2
-    seatFrame(this.inner, plate, [[-g.y0 + inset, g.zMax], [g.y0 - inset, g.zMax]])
+    // seated (and, with an eye, fitted) for the bars at the full height, hovered (their front and back faces), whatever
+    // the data: new data never moves it
+    const inset = (g.cd - depth) / 2, xIn = g.x0 + (g.cw - w) / 2, corners: [number, number, number][] = [], lifted: [number, number, number][] = []
+    for (const x of [xIn, -xIn]) for (const y of [-g.y0 + inset, g.y0 - inset]) { corners.push([x, y, g.zMax]); lifted.push([x, y, g.zMax * MATRIX.hoverDepth]) }
+    seatFrame(this.inner, plate, corners, this.viewOf(ctx), lifted)
     this.zMax = g.zMax; this.dirty = false
     this.pose()
   }
@@ -259,13 +262,14 @@ export class BarMatrix extends FrameChart {
     this.planes.rows.forEach((m, r) => { m.position.set(g.x0 - L.gap, g.y0 - (r + 0.5) * g.cd, L.lift) })
   }
 
-  /** Each bar's height (its springs, of the full height), visibility and colour. */
+  /** Each bar's height (its springs, of the full height), visibility and colour (lifted toward white and glowing as it is lit). */
   private pose(): void {
     for (const b of this.list) {
-      const m = b.mesh, rest = b.height.value * this.zMax
+      const m = b.mesh, rest = b.height.value * this.zMax, t = Math.max(0, b.brightness.value)
       m.scale.z = Math.max(rest * b.lift.value / m.geometry.parameters.height, MIN_SCALE)
       m.visible = rest > 0
-      m.material.color.copy(b.base).multiplyScalar(b.brightness.value)
+      m.material.color.copy(b.base).lerp(WHITE, MATRIX.hover.lift * t)
+      m.material.emissive.copy(b.base).multiplyScalar(MATRIX.hover.glow * t)
     }
   }
 

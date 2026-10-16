@@ -11,7 +11,7 @@ import { PointerBridge, type CanvasLike } from './pointer'
 import { checkQualityTier, defaultTier, QUALITY, QualityController, type QualityProfile, type QualityTier } from './quality'
 import { FrameSampler, FrameScheduler } from './scheduler'
 import { projectPolygon } from './project'
-import { CameraRig, type CameraRigOptions } from './rig'
+import { CameraRig, RIG_MARGIN, type CameraRigOptions } from './rig'
 import { BarChart } from './chart/bar'
 import { SurfaceChart } from './chart/surface'
 import { BarMatrix } from './chart/matrix'
@@ -545,6 +545,11 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
         if (s.error || !s.layer.visible) continue
         s.setLightDirection(local.copy(toKey).applyQuaternion(s.getWorldQuaternion(qSurface).invert()))
       }
+      // the view a rig frames a Surface with: what its 3D attachments are fitted to be seen from (`Viewport3DContext.eye`);
+      // none for an orthographic camera (no perspective to fit for)
+      const persp = (camera as PerspectiveCamera).isPerspectiveCamera === true ? camera as PerspectiveCamera : null
+      const view = persp && { fovDeg: persp.getEffectiveFOV(), aspect: size.x / Math.max(1, size.y), margin: rig && !rig.disposed ? rig.margin : RIG_MARGIN }
+      for (const s of surfaces) if (s.model.placement === 'world') s.focusView = view
       const epoch = text.atlas.epoch
       each(s => s.tick(dt))
       // the pages are shared: a later Surface's glyphs may have evicted an earlier one's this tick

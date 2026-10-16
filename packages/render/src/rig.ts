@@ -30,6 +30,8 @@ export interface RigEnvironment {
 }
 
 const DEFAULTS = { response: 0.8, margin: 0.08, parallax: 2.5, parallaxResponse: 0.4, lightResponse: 1.2 } as const
+/** The rig's default `margin`: what a Surface's focus pose is framed with when no rig names one. */
+export const RIG_MARGIN = DEFAULTS.margin
 /** Each option's lower bound (`> 0` or `≥ 0`) and unit, for the error. */
 const LIMITS = [['response', true, '秒'], ['parallaxResponse', true, '秒'], ['lightResponse', true, '秒'], ['margin', false, '每边占 Surface 尺寸的比例'], ['parallax', false, '度']] as const
 
@@ -179,7 +181,8 @@ export class CameraRig {
   /** Pointer parallax (default true); false springs the camera back to the plain focus pose. */
   parallax = true
   private readonly env: RigEnvironment
-  private readonly margin: number
+  /** The empty band the fit leaves round the target, of its size (`CameraRigOptions.margin`). */
+  readonly margin: number
   /** Radians: the `parallax` option, converted once. */
   private readonly amplitude: number
   /** The camera's world pose without the parallax: the focus pose followed at `response`. */

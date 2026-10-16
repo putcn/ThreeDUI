@@ -126,6 +126,7 @@ describe('SurfaceChart (spatial spec §12.1)', () => {
     expect([x.length, y.length, ticks.length]).toEqual([3, 2, 3])
     x.forEach((m, k) => { expect(m.position.x).toBeCloseTo(-240 + k * 240, 6); expect(m.position.y).toBeLessThan(-84); expect(m.rotation.x).toBe(0) })
     y.forEach((m, r) => { expect(m.position.x).toBeLessThan(-240); expect(m.position.y).toBeCloseTo(r === 0 ? 84 : -84, 6) })
+    expect(y.map(m => m.visible)).toEqual([false, true])                          // the back row's gives way to the ticks' 0
     ticks.forEach((m, k) => { expect(m.position.z).toBeCloseTo(k / 2 * Z_MAX, 6); expect(m.position.y).toBeCloseTo(84, 6); expect(m.rotation.x).toBeCloseTo(Math.PI / 2, 6) })
     const want = linear(resolveColor('secondaryLabel', defaultTheme, 'light')), got = (x[0]!.material as MeshBasicNodeMaterial).color
     expect(got.r).toBeCloseTo(want.r, 5); expect(got.g).toBeCloseTo(want.g, 5)
@@ -144,6 +145,17 @@ describe('SurfaceChart (spatial spec §12.1)', () => {
       const a = shown[k - 1]!, b = shown[k]!
       expect(b.position.x - a.position.x).toBeGreaterThanOrEqual((a.userData.ink as number) / 2 + (b.userData.ink as number) / 2)
     }
+  })
+  it('row labels are thinned two lines apart from the front row (the latest, always shown); the back row\'s gives way to the value axis (Task 9P V7)', () => {
+    const rows = 14, days = Array.from({ length: rows }, (_, d) => `10-${String(d + 1).padStart(2, '0')}`)
+    const c = make({ values: days.map(() => [1, 2, 3]), max: 4 }); c.labels({ x: ['a', 'b', 'c'], y: days, ticks: ['0', '4'] })
+    c.update(1 / 60, ctx3({ height: 420 }))
+    const shown = c.labelPlanes.y.map((m, r) => (m.visible ? r : -1)).filter(r => r >= 0)
+    expect(shown).toEqual([1, 3, 5, 7, 9, 11, 13])
+    for (let k = 1; k < shown.length; k++) expect(c.labelPlanes.y[shown[k - 1]!]!.position.y - c.labelPlanes.y[shown[k]!]!.position.y).toBeGreaterThanOrEqual(2 * 15)
+    // with no ticks the back row keeps its label (if the thinning gives it one)
+    c.labels({ x: ['a', 'b', 'c'], y: days.slice(0, 13), ticks: [] }); c.set({ values: days.slice(0, 13).map(() => [1, 2, 3]), max: 4, ramp: [[0, 0, 0, 1], [1, 1, 1, 1]] }); c.update(1 / 60, ctx3({ height: 420 }))
+    expect(c.labelPlanes.y[0]!.visible).toBe(true); expect(c.labelPlanes.y[12]!.visible).toBe(true)
   })
   it('a scheme change recolours the labels without new textures; a changed text makes only its own plane again', () => {
     const c = make(); c.labels({ x: ['00', '01', '02'], y: ['a', 'b'], ticks: ['0', '8'] }); run(c, 1)
@@ -193,7 +205,8 @@ describe('SurfaceChart (spatial spec §12.1)', () => {
       c.updateMatrixWorld(true)
       const top = new Box3().setFromObject(c, true).max.z, rise = c.riseFor(W, H)
       expect(top, `${W} × ${H}`).toBeLessThanOrEqual(rise)
-      expect(rise - top, `${W} × ${H}: a close bound`).toBeLessThan(2)
+      // close: within 4.5 pt (the bound allows for a label on the back row, which gives way to the ticks)
+      expect(rise - top, `${W} × ${H}: a close bound`).toBeLessThan(4.5)
       expect(rise).toBeLessThanOrEqual(c.riseFor(H, H))                                    // no width rises it past one as wide as high
       expect(c.riseFor(W * 3, H)).toBe(c.riseFor(Math.max(W, H), H))
       // fewer labels and lower data rise less: still bounded

@@ -104,18 +104,25 @@ describe('BarMatrix (spatial spec §12.2)', () => {
     }
     expect([...hits].every(o => c.bars.includes(o as Mesh))).toBe(true)
   })
-  it('hover springs the bar brighter (× 1.2) and taller (× 1.08); another hover or null springs it back', () => {
+  it('hover springs the bar visibly lit (lifted toward white, glowing) and taller (× 1.08); another hover or null springs it back', () => {
     const c = make(); run(c, 3)
-    expect([MATRIX.hoverBrightness, MATRIX.hoverDepth]).toEqual([1.2, 1.08])
+    expect([MATRIX.hover.lift, MATRIX.hover.glow, MATRIX.hoverDepth]).toEqual([0.32, 0.4, 1.08])
+    const glowOf = (m: Mesh): Color => (m.material as MeshStandardNodeMaterial).emissive
+    /** What the bar gives off, lit or not: its colour plus its glow, summed over the channels. */
+    const light = (m: Mesh): number => { const a = colorOf(m), e = glowOf(m); return a.r + a.g + a.b + e.r + e.g + e.b }
+    const rest = light(bar(c, 1, 2))
     c.hover({ row: 1, col: 2 }); c.update(1 / 60, ctx3())
-    const k = colorOf(bar(c, 1, 2)).r / linear(COLORS[1]![2]!).r
-    expect(k).toBeGreaterThan(1); expect(k).toBeLessThan(1.2)                   // a spring, not a jump
+    const early = light(bar(c, 1, 2))
+    expect(early).toBeGreaterThan(rest); expect(early).toBeLessThan(rest * 1.5)  // a spring, not a jump
     run(c, 3)
-    expectColor(colorOf(bar(c, 1, 2)), linear(COLORS[1]![2]!), 1.2); expect(top(c, 1, 2)).toBeCloseTo(Z_MAX * 1.08, 3)
+    const base = linear(COLORS[1]![2]!), lit = base.clone().lerp(new Color(1, 1, 1), 0.32)
+    expectColor(colorOf(bar(c, 1, 2)), lit); expectColor(glowOf(bar(c, 1, 2)), base, 0.4)
+    expect(light(bar(c, 1, 2))).toBeGreaterThan(rest * 1.6)                      // plainly brighter
+    expect(top(c, 1, 2)).toBeCloseTo(Z_MAX * 1.08, 3)
     expectColor(colorOf(bar(c, 0, 1)), linear(COLORS[0]![1]!)); expect(top(c, 0, 1)).toBeCloseTo(2 / 8 * Z_MAX, 3)
     c.hover({ row: 0, col: 1 }); run(c, 3)
     expect(top(c, 0, 1)).toBeCloseTo(2 / 8 * Z_MAX * 1.08, 3); expect(top(c, 1, 2)).toBeCloseTo(Z_MAX, 3)
-    expectColor(colorOf(bar(c, 1, 2)), linear(COLORS[1]![2]!))
+    expectColor(colorOf(bar(c, 1, 2)), linear(COLORS[1]![2]!)); expectColor(glowOf(bar(c, 1, 2)), new Color(0, 0, 0))
     c.hover({ row: 5, col: 0 }); run(c, 3)                                       // not a cell of the data: none
     expect(top(c, 0, 1)).toBeCloseTo(2 / 8 * Z_MAX, 3)
     c.hover({ row: 0, col: 2 }); run(c, 3); c.hover(null); run(c, 3)
@@ -128,7 +135,7 @@ describe('BarMatrix (spatial spec §12.2)', () => {
     expect(top(c, 1, 2)).toBeCloseTo(Z_MAX, 6); expect(top(c, 0, 1)).toBeCloseTo(2 / 8 * Z_MAX, 6)
     c.hover({ row: 0, col: 2 })
     expect(c.update(1 / 60, ctx3({ reducedMotion: true }))).toBe(false)
-    expect(top(c, 0, 2)).toBeCloseTo(4 / 8 * Z_MAX * 1.08, 6); expectColor(colorOf(bar(c, 0, 2)), linear(COLORS[0]![2]!), 1.2)
+    expect(top(c, 0, 2)).toBeCloseTo(4 / 8 * Z_MAX * 1.08, 6); expectColor(colorOf(bar(c, 0, 2)), linear(COLORS[0]![2]!).lerp(new Color(1, 1, 1), MATRIX.hover.lift))
   })
   it('a later set springs from the current heights (no stagger), rebuilding a bar at its new height; a reshaped one grows in anew', () => {
     const c = make(); run(c, 3)
