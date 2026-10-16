@@ -1,4 +1,4 @@
-import { AddEquation, Box3, Color, CustomBlending, Euler, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Quaternion, Vector2, Vector3, type Camera, type Material, type Object3DEventMap, type Texture } from 'three'
+import { AddEquation, AlwaysDepth, Box3, Color, CustomBlending, Euler, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Quaternion, Vector2, Vector3, type Camera, type Material, type Object3DEventMap, type Texture } from 'three'
 import { MeshBasicNodeMaterial, MeshStandardNodeMaterial, type UniformNode } from 'three/webgpu'
 import { bool, float, screenUV, texture, uniform, uv, vec2 } from 'three/tsl'
 import {
@@ -73,11 +73,12 @@ export interface SurfaceEventMap extends Object3DEventMap {
 
 /**
  * `renderOrder` of each draw inside a Surface's `layer`; images take [images, images + ½) in z order (`ImageSet`);
+ * `floor`: a screen Surface's first draw, resetting the depth over its rect (`createScreenFloor`);
  * `innerGlass*`: nested glass (spatial spec §2.4), after the outer glass, which it sees in the stacked RT instead;
  * `panels`: the panels riding on glass (spatial spec §11.8), after all the glass, under its rims and what else rides it;
  * `viewport`: the 3D objects attached to its nodes (`Surface.attach3D`), over the rims and under what rides on glass.
  */
-export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, panels: 2.75, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 } as const
+export const SURFACE_ORDER = { floor: -2, slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, panels: 2.75, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 } as const
 export { SLAB_FROST } from '../glass/frost'
 /** `renderOrder` of each draw inside the content RT's scene. */
 export const CONTENT_ORDER = { panels: 0, shadows: 0.5, pools: 1, images: 1.5, glyphs: 2 } as const
@@ -181,6 +182,29 @@ function createCaptureProbe(capture: ScreenCapture): Mesh<PlaneGeometry, MeshBas
   probe.renderOrder = SURFACE_ORDER.slab; probe.frustumCulled = false
   probe.name = 'capture-probe'
   return probe
+}
+
+/** How far behind a screen Surface's own z = 0 (the bottom of its slab) its floor lies, pt. */
+const FLOOR_DEPTH = 1
+
+/**
+ * A screen Surface's first draw (`SURFACE_ORDER.floor`): a quad over its rect, `FLOOR_DEPTH` behind everything it draws
+ * (its slab's bottom is its z = 0), writing that depth whatever is there (`depthFunc` always) and no colour. Every screen
+ * Surface's content plane lies on the one screen-layer plane, its slab behind it; so without the floor, the depth an
+ * earlier screen Surface's content quad wrote there hides a later one's slab (a Dialog's glass panel over its scrim:
+ * only the panel's content showed). With it, each screen Surface stacks above the ones drawn before it (lower
+ * `drawOrder`) as a whole: over its rect, its own draws test depth only against each other. World Surfaces have none:
+ * they occlude each other by depth, as the scene does. three's WebGL backend leaves `colorMask` as the last draw set it
+ * when it clears: the slab or content quad after it in the same group (always there) restores it, as for the probe.
+ */
+function createScreenFloor(): Mesh<PlaneGeometry, MeshBasicNodeMaterial> {
+  const m = new MeshBasicNodeMaterial()
+  // depthTest stays on: with it off, WebGL writes no depth either; `AlwaysDepth` passes every fragment
+  m.colorWrite = false; m.depthWrite = true; m.depthTest = true; m.depthFunc = AlwaysDepth; m.transparent = true; m.toneMapped = false
+  const floor = new Mesh(new PlaneGeometry(1, 1), m)
+  floor.renderOrder = SURFACE_ORDER.floor; floor.frustumCulled = false
+  floor.name = 'screen-floor'
+  return floor
 }
 
 /**
@@ -313,6 +337,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
    */
   private behindCapture: ScreenCapture | null = null
   private captureProbe: Mesh<PlaneGeometry, MeshBasicNodeMaterial> | null = null
+  /** A screen Surface's depth floor (`createScreenFloor`); null on the world layer. */
+  private readonly floor: Mesh<PlaneGeometry, MeshBasicNodeMaterial> | null = null
   /** A glass Surface's depth capture for `depthReject`, shared by the slab's faces and the element glass (one depth copy per render); made on first use. */
   private depth: DepthCapture | null = null
   /** The content RT's blur pyramid on the 'kawase' tier (null otherwise), redrawn with it while there is glass to sample it. */
@@ -358,6 +384,12 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.seenEpoch = ctx.text.atlas.epoch
 
     this.add(this.layer)
+    if (this.model.placement === 'screen') {
+      this.floor = createScreenFloor()
+      this.own(this.floor.material)
+      this.floor.position.z = -FLOOR_DEPTH / this.model.ptPerUnit
+      this.layer.add(this.floor)
+    }
     const bg = this.model.background
     if (bg === 'glass') {
       // one framebuffer capture, kept across quality rebuilds. The slab is this Surface's first draw and samples it, so
@@ -658,6 +690,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     const w = width / ptPerUnit, h = height / ptPerUnit
     this.su.size.value.set(w, h)
     this.contentMesh.scale.set(w, h, 1)
+    this.floor?.scale.set(w, h, 1)
     if (this.backgroundGlass) {
       const thickness = Math.max(1, Math.min(width, height) * 0.05)   // pt; never 0 (the refraction divides by it)
       this.plane.position.z = thickness / ptPerUnit
@@ -1059,7 +1092,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       for (const gm of this.glassMaterials) gm.dispose()
       for (const m of this.materials) m.dispose()
       this.screen?.dispose(); this.depth?.dispose(); this.dropBehind()
-      this.contentMesh.geometry.dispose()
+      this.contentMesh.geometry.dispose(); this.floor?.geometry.dispose()
     } finally {
       this.removeFromParent()
       try { this.dispatchEvent({ type: 'dispose' }) } catch (le) { console.error('[glassui] a "dispose" listener threw:', le) }

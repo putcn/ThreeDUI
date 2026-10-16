@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { Box3, OrthographicCamera, PerspectiveCamera, Quaternion, RenderTarget, Scene, Texture, Vector2, Vector3, VSMShadowMap, type DirectionalLight } from 'three'
+import { AlwaysDepth, Box3, Mesh, OrthographicCamera, PerspectiveCamera, Quaternion, RenderTarget, Scene, Texture, Vector2, Vector3, VSMShadowMap, type DirectionalLight, type Material } from 'three'
 import type { WebGPURenderer } from 'three/webgpu'
 import { defaultTheme, GlassUIError, Node, resolveColor, type Theme } from '@glassui/core'
 import { createUIRoot, type UIRenderer, type UIRootOptions } from '../src/root'
-import { fillColors, type Surface } from '../src/surface/surface'
+import { fillColors, SURFACE_ORDER, type Surface } from '../src/surface/surface'
 import { toColor } from '../src/color'
 import type { QualityTier } from '../src/quality'
 import { BarChart } from '../src/chart/bar'
@@ -584,6 +584,45 @@ describe('the root API for the Vue layer', () => {
     void root.afterTick().then(() => { done = true })
     await Promise.resolve(); expect(done).toBe(false)
     root.tick(0); await Promise.resolve(); expect(done).toBe(true)
+  })
+  it('a screen Surface made later stacks above the earlier ones as a whole: their content quads\' depth never hides its slab (a Dialog\'s panel over its scrim, over a world scene)', async () => {
+    const { root, camera } = await createRoot()
+    const world = root.createSurface({ layer: 'world', width: 400, height: 300, background: 'glass' })
+    world.position.set(0, 0, -3); world.root.setStyle({ bg: '#ffffff' })        // a Block in the scene: its quad writes depth
+    const backdrop = root.createSurface({ fill: true, width: 1, height: 1, background: 'none' })
+    backdrop.root.setStyle({ bg: '#00000047' })                                  // the scrim: a full-screen quad that writes depth
+    const panel = root.createSurface({ center: true, width: 480, height: 300, background: 'glass', cornerRadius: 32 })
+    root.tick(0)
+    expect(world.drawOrder).toBeLessThan(backdrop.drawOrder); expect(backdrop.drawOrder).toBeLessThan(panel.drawOrder)
+    // three's transparent queue (every UI draw is transparent): by group order (the Surface's layer), then renderOrder
+    const draws: { mesh: Mesh; s: Surface }[] = []
+    for (const s of [world, backdrop, panel]) s.layer.traverseVisible(o => { if (o instanceof Mesh) draws.push({ mesh: o, s }) })
+    draws.sort((a, b) => a.s.layer.renderOrder - b.s.layer.renderOrder || a.mesh.renderOrder - b.mesh.renderOrder)
+    // the depth test along the camera axis (both screen Surfaces are centred on it): each draw's fragments there, with
+    // its material's own depth state; the content quads write where they have content (the scrim, the world's fill)
+    camera.updateMatrixWorld()
+    const eye = camera.getWorldPosition(new Vector3()), fwd = camera.getWorldDirection(new Vector3())
+    const depthOf = (s: Surface, z: number) => s.layer.localToWorld(new Vector3(0, 0, z)).sub(eye).dot(fwd)
+    let buffer = Infinity
+    const slabPassed: boolean[] = []
+    for (const { mesh, s } of draws) {
+      if (s === world) { if (mesh === world.contentMesh) buffer = Math.min(buffer, depthOf(world, world.contentPlaneZ)); continue }
+      const m = mesh.material as Material
+      const slab = mesh.renderOrder === SURFACE_ORDER.slab
+      // the slab spans its Surface's z = 0 (bottom) to the content plane (top); a quad lies at its own z
+      const zs = slab ? [0, s.contentPlaneZ] : [s.layer.worldToLocal(mesh.getWorldPosition(new Vector3())).z]
+      for (const z of zs) {
+        const d = depthOf(s, z), pass = m.depthFunc === AlwaysDepth || !m.depthTest || d <= buffer
+        if (slab && s === panel) slabPassed.push(pass)
+        const writes = m.depthWrite && pass && (mesh !== panel.contentMesh)   // the panel's quad is empty at its centre
+        if (writes) buffer = m.depthFunc === AlwaysDepth ? d : Math.min(buffer, d)
+      }
+    }
+    expect(slabPassed.length).toBeGreaterThan(0); expect(slabPassed.every(Boolean)).toBe(true)
+    // what does it: the panel's first draw is its floor, after all of the backdrop's (`Surface` floor test)
+    const at = (s: Surface) => draws.flatMap(({ mesh, s: x }, i) => x === s ? [{ i, mesh }] : [])
+    expect(at(panel)[0]!.mesh.renderOrder).toBe(SURFACE_ORDER.floor)
+    expect(Math.max(...at(backdrop).map(d => d.i))).toBeLessThan(at(panel)[0]!.i)
   })
   it('afterTick resolves with the tick\'s dt (a spring stepped there moves by it); a dispose resolves with 0', async () => {
     const { root } = await createRoot()

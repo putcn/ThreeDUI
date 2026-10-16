@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
-import { Color, CustomBlending, DataTexture, FramebufferTexture, FrontSide, PerspectiveCamera, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector2, Vector3, type Material, type RenderTarget } from 'three'
+import { AlwaysDepth, Color, CustomBlending, DataTexture, FramebufferTexture, FrontSide, PerspectiveCamera, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector2, Vector3, type Material, type RenderTarget } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial, type MeshBasicNodeMaterial } from 'three/webgpu'
 import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme, resolveColor } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
@@ -225,7 +225,7 @@ describe('Surface', () => {
     expect(localZ(s, s.contentMesh)).toBeCloseTo(s.contentPlaneZ)
     const lifted = meshes(s).filter(m => m.renderOrder >= 0)
     expect(lifted.length).toBeGreaterThan(1); expect(lifted.every(m => Math.abs(localZ(s, m) - s.contentPlaneZ) < 1e-9)).toBe(true)
-    expect(meshes(s).filter(m => m.renderOrder < 0).every(m => localZ(s, m) === 0)).toBe(true)
+    expect(meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab).every(m => localZ(s, m) === 0)).toBe(true)
     expect(localZ(s, s.foregroundImages.container)).toBeCloseTo(s.contentPlaneZ)
     // one write moves the whole plane: everything on it is a child of `plane`
     expect(lifted.every(m => m.parent === s.plane)).toBe(true); expect(s.foregroundImages.container.parent).toBe(s.plane)
@@ -238,7 +238,7 @@ describe('Surface', () => {
   })
   it('the glass background refracts one screen capture with both its faces', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, ctx)
-    const slab = meshes(s).filter(m => m.renderOrder < 0)
+    const slab = meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab)
     expect(slab).toHaveLength(2)
     const bases = new Set(slab.flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode)
       .filter(n => n.constructor.type === 'ViewportTextureNode').map(n => n.getBase!())))
@@ -256,7 +256,7 @@ describe('Surface', () => {
   })
   it('dispose frees the screen capture, including the copies three made per target', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, ctx)
-    const sample = meshes(s).filter(m => m.renderOrder < 0).flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode))
+    const sample = meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.slab).flatMap(m => nodesOf((m.material as MeshPhysicalNodeMaterial).backdropNode))
       .find(n => n.constructor.type === 'ViewportTextureNode') as unknown as { getTextureForReference(ref: object): Texture; getBase(): { value: Texture } }
     const copy = sample.getTextureForReference({})   // what a frame drawn into a target (or the canvas) copies into
     const own = sample.getBase().value
@@ -270,7 +270,7 @@ describe('Surface', () => {
     const { s, btn } = signup()
     s.root.appendChild(image('photo', new Texture(), 300, 30)); btn.appendChild(image('icon', new Texture(), 8, 8, 32, 32))
     s.tick(1 / 60)
-    expect(SURFACE_ORDER).toEqual({ slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, panels: 2.75, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 })
+    expect(SURFACE_ORDER).toEqual({ floor: -2, slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, panels: 2.75, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 })
     expect(CONTENT_ORDER).toEqual({ panels: 0, shadows: 0.5, pools: 1, images: 1.5, glyphs: 2 })
     const fg = meshes(s)
     const quad = fg.filter(m => m.renderOrder === SURFACE_ORDER.content)
@@ -295,6 +295,25 @@ describe('Surface', () => {
     expect(s.contentImages.container.parent).toBe(s.contentPass.scene)
     for (const m of [...fg, ...content]) { expect(m.frustumCulled).toBe(false); expect((m.material as MeshStandardNodeMaterial).toneMapped).toBe(false) }
     expect(s.contentMesh.receiveShadow).toBe(true); expect(s.contentMesh.castShadow).toBe(false)
+  })
+  it('a screen Surface draws its depth floor first: over its rect, behind its slab, depth always, no colour; a world one has none', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 1, placement: 'screen', background: 'glass', cornerRadius: 32 }, ctx)
+    s.tick(1 / 60)
+    const floors = meshes(s).filter(m => m.renderOrder === SURFACE_ORDER.floor)
+    expect(floors).toHaveLength(1)
+    const f = floors[0]!, m = f.material as MeshBasicNodeMaterial
+    expect(f.parent).toBe(s.layer); expect(f.name).toBe('screen-floor')
+    expect(Math.min(...meshes(s).map(x => x.renderOrder))).toBe(SURFACE_ORDER.floor)   // the first draw in the Surface's group
+    expect(m.colorWrite).toBe(false); expect(m.depthWrite).toBe(true); expect(m.depthTest).toBe(true); expect(m.depthFunc).toBe(AlwaysDepth)
+    expect(m.transparent).toBe(true)                                     // sorted with the Surfaces' other draws, by group order
+    expect(localZ(s, f)).toBe(-1)                                        // 1 pt behind the slab's bottom (its z = 0) ...
+    for (const x of meshes(s)) if (x !== f) expect(localZ(s, x)).toBeGreaterThanOrEqual(0)   // ... so behind all it draws
+    expect([f.scale.x, f.scale.y]).toEqual([400, 300]); expect(f.castShadow).toBe(false)
+    s.setSize(480, 220); expect([f.scale.x, f.scale.y]).toEqual([480, 220])
+    const world = new Surface({ width: 400, height: 300, ptPerUnit: 100, placement: 'world', background: 'glass' }, ctx)
+    expect(meshes(world).filter(x => x.renderOrder === SURFACE_ORDER.floor)).toHaveLength(0)
+    const material = vi.spyOn(m, 'dispose'), geometry = vi.spyOn(f.geometry, 'dispose')
+    s.dispose(); expect(material).toHaveBeenCalled(); expect(geometry).toHaveBeenCalled()
   })
   it('keeps every draw in one layer group ordered by drawOrder, with no group below it', () => {
     const s = new Surface({ width: 400, height: 300, ptPerUnit: 100, background: 'glass' }, ctx)
@@ -853,7 +872,8 @@ describe('Surface motion', () => {
     s.tick(1 / 60)
     const fade = (x: Surface) => (x as unknown as { su: { opacity: unknown } }).su.opacity
     const reads = (x: Surface, m: Mesh) => materialGraph(m.material as Material).some(n => n === fade(x))
-    const plane = meshes(s).filter(m => m.name !== 'capture-probe'), content = meshes(s.contentPass.scene)
+    // the probe and the screen floor draw no colour: nothing to fade (the floor resets the depth whatever the opacity)
+    const plane = meshes(s).filter(m => m.name !== 'capture-probe' && m.name !== 'screen-floor'), content = meshes(s.contentPass.scene)
     const { content: quad, glassBack, glassFront, innerGlassBack, innerGlassFront, panels, rims, images, glyphs } = SURFACE_ORDER
     expect(new Set(plane.map(m => m.renderOrder))).toEqual(new Set([quad, glassBack, glassFront, innerGlassBack, innerGlassFront, panels, rims, images, glyphs]))   // the inner glass and the panels riding glass fade too
     for (const m of plane) expect(reads(s, m)).toBe(true)
