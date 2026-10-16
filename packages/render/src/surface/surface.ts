@@ -79,10 +79,10 @@ export { SLAB_FROST } from '../glass/frost'
 export const CONTENT_ORDER = { panels: 0, shadows: 0.5, pools: 1, images: 1.5, glyphs: 2 } as const
 
 /**
- * How far the drop shadows' light direction (pt of offset per pt of elevation) moves before the content RT redraws for
- * it (`Surface.setLightDirection`): 0.5 pt at a 40 pt elevation (a hovering card), per component.
+ * How far (pt, per component) the tallest drop shadow's offset must move before the content RT redraws for a new light
+ * direction (spatial spec §11.7; `Surface.setLightDirection`).
  */
-const SHADOW_DIR_STEP = 0.5 / 40
+const SHADOW_REDRAW_PT = 0.5
 /** The drop shadows' alpha in `scheme` (`SHADOW_DECAL`). */
 const shadowAlpha = (scheme: ColorScheme): number => scheme === 'dark' ? SHADOW_DECAL.alphaDark : SHADOW_DECAL.alphaLight
 
@@ -266,11 +266,14 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The content pass's: `su` without the opacity (the RT is faded once, on its quad). */
   private readonly suContent: SurfaceUniforms
   /**
-   * The drop shadows' offset per pt of elevation (pt, y down), shared by all of them: straight in front (none) until
-   * the first `setLightDirection`; and their alpha, the scheme's.
+   * The drop shadows' offset per pt of elevation (pt, y down), shared by all of them, as the content RT was last drawn
+   * (`prepare` copies `lightDir` into it on every redraw): straight in front (none) until the first; and their alpha,
+   * the scheme's.
    */
   private readonly shadowDir = uniform(new Vector2())
   private readonly shadowAlpha: UniformNode<'float', number>
+  /** The latest light direction as a shadow offset per pt of elevation (`setLightDirection`), drawn or not yet. */
+  private readonly lightDir = new Vector2()
   private readonly motion: SurfaceMotion
   /** `opacity` and `culled`. */
   private fade = 1
@@ -697,19 +700,18 @@ export class Surface extends Object3D<SurfaceEventMap> {
   setPointer(pt: [number, number] | null): void { this.pointerPt = pt }
 
   /**
-   * The direction from this Surface toward the key light, in its own frame (x right, y up, z out of its face),
-   * normalised; the root hands it over every tick (spatial spec §11.7). The drop shadows then fall `(−x / z, y / z)` pt
-   * per pt of elevation (y down), z taken as at least 0.1 (a grazing light, or one from behind, stays bounded; the
-   * shader clamps the offset further). The new direction is taken when either component moved more than
-   * `SHADOW_DIR_STEP` from the one last taken, and then the content redraws while the Surface has shadows; a smaller
-   * move is ignored (a slow drift adds up until it passes the step), so a still light, or a camera parallaxing under an
-   * anchored one, redraws nothing.
+   * The key light's direction (toward it) in this Surface's own frame (x right, y up, z out of its face), normalised;
+   * the root hands it over every tick (spatial spec §11.7). The drop shadows fall `(−x / z, y / z)` pt per pt of
+   * elevation (y down), z taken as at least 0.1 (a grazing light, or one from behind, stays bounded; the shader clamps
+   * the offset further). It marks the content dirty when the tallest shadow's offset (`shadows.maxElevation`) would move
+   * more than `SHADOW_REDRAW_PT` in either component from what the content RT was last drawn with; a smaller move waits
+   * (a slow drift adds up against the drawn direction), and any redraw draws the latest one. A Surface without shadows
+   * never redraws for it, nor does a still light, or a camera parallaxing under an anchored one.
    */
   setLightDirection(local: Vector3): void {
-    const z = Math.max(local.z, 0.1), x = -local.x / z, y = local.y / z, dir = this.shadowDir.value
-    if (Math.abs(x - dir.x) <= SHADOW_DIR_STEP && Math.abs(y - dir.y) <= SHADOW_DIR_STEP) return
-    dir.set(x, y)
-    if (this.shadows.buffer.count > 0) this.contentDirty = true
+    const z = Math.max(local.z, 0.1)
+    const want = this.lightDir.set(-local.x / z, local.y / z), drawn = this.shadowDir.value, e = this.shadows.maxElevation
+    if (e > 0 && Math.max(Math.abs(want.x - drawn.x), Math.abs(want.y - drawn.y)) * e > SHADOW_REDRAW_PT) this.contentDirty = true
   }
 
   /** The 3D objects attached to this Surface's nodes (`attach3D`), by node. */
@@ -904,9 +906,10 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * contentScale` texels per CSS px, so never below one texel per CSS px from the quality alone — through `rtTarget`:
    * the first `prepare` takes exactly that, a growth 25 % more, and a shrink waits until `moving` (the root: the camera,
    * its projection, the Surface or its animation moved this tick) has been false for `RT_SETTLE_FRAMES` calls in a row
-   * with no growth among them. Then redraws it when dirty (a resize makes it dirty), and the stacked RT (sized with it)
-   * right after it. Then the pyramid, when the RT changed since it was last drawn and the Surface has glass instances to
-   * sample it (its only input is the content RT; without glass its 9 passes are skipped until glass appears). Then the
+   * with no growth among them. Then redraws it when dirty (a resize makes it dirty; the shadows take the latest light
+   * direction, `setLightDirection`), and the stacked RT (sized with it) right after it. Then the pyramid, when the RT
+   * changed since it was last drawn and the Surface has glass instances to sample it (its only input is the content RT;
+   * without glass its 9 passes are skipped until glass appears). Then the
    * luma (`SurfaceLuma.update`, not in the 'fill' glass mode; the outer glass only), from the content RT's own mips: on
    * a redraw and while its smoothing settles after one; on a glass Surface drawn with `camera` (the root passes its
    * own), every frame, over the slab's screen capture too (frosted as the slab frosts it); likewise on a 'none' Surface
@@ -931,6 +934,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       this.pyramid?.resize(size.width, size.height)
       const redrawn = this.contentDirty
       if (redrawn) {
+        this.shadowDir.value.copy(this.lightDir)   // the shadows follow the latest light whenever the RT redraws
         this.contentPass.setView(this.model)
         this.contentPass.render(renderer, this.contentClear)
         this.stackPass?.render(renderer)   // it starts from the content RT: right after it

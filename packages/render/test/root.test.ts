@@ -8,6 +8,7 @@ import { fillColors, type Surface } from '../src/surface/surface'
 import { toColor } from '../src/color'
 import type { QualityTier } from '../src/quality'
 import { BarChart } from '../src/chart/bar'
+import { UI_KEY } from '../src/lighting/lights'
 
 // Type-level guard (checked by `pnpm typecheck`): the real renderer satisfies the stub-able subset.
 export const asUIRenderer = (r: WebGPURenderer): UIRenderer => r
@@ -743,10 +744,11 @@ describe('the root API for the Vue layer', () => {
     expect(root.lights.group.position.distanceTo(rig.lightPose!.position)).toBeLessThan(1e-9)
     expect(root.lights.group.quaternion.angleTo(rig.lightPose!.quaternion)).toBeLessThan(1e-9)
   })
-  it('every tick hands each shown Surface the direction toward the key light in its own frame (spatial §11.7)', async () => {
+  it('every tick hands each shown Surface the key light\'s direction (a directional light: one for all) in its own frame (spatial §11.7)', async () => {
     const { root, camera } = await createRoot()
     camera.rotation.set(0.1, -0.2, 0)
-    const world = root.createSurface({ layer: 'world', width: 244, height: 244 }); world.position.set(-0.4, 0.2, -3); world.rotation.y = 0.6
+    const near = root.createSurface({ layer: 'world', width: 244, height: 244 }); near.position.set(-0.4, 0.2, -3); near.rotation.y = 0.6
+    const far = root.createSurface({ layer: 'world', width: 244, height: 244 }); far.position.set(1.5, -0.6, -7); far.rotation.y = 0.6
     const hud = root.createSurface({ width: 200, height: 100, left: 40, top: 30 })
     const gone = root.createSurface({ layer: 'world', width: 244, height: 244 }); gone.position.set(0, 0, 5)   // behind the camera: culled
     /** What `s` was handed, copied at the call (the root may reuse its vector). */
@@ -755,20 +757,22 @@ describe('the root API for the Vue layer', () => {
       vi.spyOn(s, 'setLightDirection').mockImplementation(d => { got.push(d.clone()); set(d) })
       return got
     }
-    const [w, h, g] = [record(world), record(hud), record(gone)]
+    const [n, f, h, g] = [record(near), record(far), record(hud), record(gone)]
     root.tick(1 / 60)
-    const key = root.lights.key.getWorldPosition(new Vector3())
-    // the world Surface: from its centre toward the key, rotated into its frame (its rotation undone about y)
-    expect(w).toHaveLength(1)
-    const want = key.clone().sub(world.getWorldPosition(new Vector3())).applyAxisAngle(new Vector3(0, 1, 0), -0.6).normalize()
-    expect(w[0]!.distanceTo(want)).toBeLessThan(1e-9)
-    // the screen Surface: in the camera's frame
+    // the lights ride on the camera (no rig): the key shines from UI_KEY.position toward its target at the group's
+    // origin, so in the world it comes from the camera's rotation of that, whatever a Surface's position
+    const world = new Vector3(...UI_KEY.position).applyQuaternion(camera.getWorldQuaternion(new Quaternion())).normalize()
+    const key = root.lights.key, fromTarget = key.getWorldPosition(new Vector3()).sub(key.target.getWorldPosition(new Vector3())).normalize()
+    expect(fromTarget.distanceTo(world)).toBeLessThan(1e-9)
+    // the world Surfaces, rotated alike at different places: the same direction, the light's rotated into their frame
+    expect(n).toHaveLength(1); expect(f).toHaveLength(1)
+    const want = world.clone().applyAxisAngle(new Vector3(0, 1, 0), -0.6)
+    expect(n[0]!.distanceTo(want)).toBeLessThan(1e-9); expect(f[0]!.distanceTo(want)).toBeLessThan(1e-9)
+    // the screen Surface: in the camera's frame, where the key sits at UI_KEY.position from its target
     expect(h).toHaveLength(1)
-    const cam = camera.getWorldQuaternion(new Quaternion()).invert()
-    const ahead = key.clone().sub(hud.getWorldPosition(new Vector3())).applyQuaternion(cam).normalize()
-    expect(h[0]!.distanceTo(ahead)).toBeLessThan(1e-9)
+    expect(h[0]!.distanceTo(new Vector3(...UI_KEY.position).normalize())).toBeLessThan(1e-9)
     expect(gone.culled).toBe(true); expect(g).toHaveLength(0)
-    expect(world.error).toBeNull(); expect(hud.error).toBeNull()
+    expect(near.error).toBeNull(); expect(far.error).toBeNull(); expect(hud.error).toBeNull()
   })
   it('a moving light refits the shadow map', async () => {
     const { root } = await createRoot()

@@ -397,7 +397,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   }
 
   const size = new Vector2(), v = new Vector3(), camPos = new Vector3(), union = new Box3(), point = new Vector3(), view = new Vector3()
-  const qCam = new Quaternion(), qParent = new Quaternion(), qSurface = new Quaternion(), keyPos = new Vector3(), toKey = new Vector3()
+  const qCam = new Quaternion(), qParent = new Quaternion(), qSurface = new Quaternion(), toKey = new Vector3(), local = new Vector3()
   const lastCamera = new Matrix4(), lastProjection = new Matrix4(), lastLight = new Matrix4(), lastPose = new WeakMap<Surface, Matrix4>()
   /** Each Surface's `matrixWorld` at its last `prepare` (whether it moved since: the content RT's settle count). */
   const lastSeen = new WeakMap<Surface, Matrix4>()
@@ -514,12 +514,13 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
         const culled = !frustum.intersectsBox(s.glassBounds.applyMatrix4(s.matrixWorld))
         if (culled !== s.culled) { s.culled = culled; changed = true }
       }
-      // the drop shadows (spatial §11.7): every shown Surface gets the direction toward the key light in its own frame
-      // (a screen Surface's is the camera's); a hidden one gets it when it shows again, before its content redraws
-      lights.key.getWorldPosition(keyPos)
+      // the drop shadows (spatial §11.7): every shown Surface gets the key light's direction in its own frame (a screen
+      // Surface's is the camera's); a hidden one gets it when it shows again, before its content redraws. The key is a
+      // directional light: one direction for all, from its target toward it (as its shadow map is aimed)
+      lights.key.getWorldPosition(toKey).sub(lights.key.target.getWorldPosition(v)).normalize()
       for (const s of surfaces) {
         if (s.error || !s.layer.visible) continue
-        s.setLightDirection(toKey.subVectors(keyPos, s.getWorldPosition(v)).applyQuaternion(s.getWorldQuaternion(qSurface).invert()).normalize())
+        s.setLightDirection(local.copy(toKey).applyQuaternion(s.getWorldQuaternion(qSurface).invert()))
       }
       const epoch = text.atlas.epoch
       each(s => s.tick(dt))

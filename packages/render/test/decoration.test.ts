@@ -92,6 +92,13 @@ describe('DecorationBatch', () => {
     expect(b.buffer.get(0, 'iMat0')).toEqual(f32([1, 0, 0, -1.4])); expect(b.buffer.get(0, 'iMat1')).toEqual(f32([0, 1, 0, 1.2]))   // no tilt
     for (const other of [new DecorationBatch('rim'), new DecorationBatch('pool')]) { other.update([inst], s); expect(other.buffer.count).toBe(0) }
   })
+  it('keeps the highest elevation it packed (0 when none): the shadows\' redraw step', () => {
+    const b = new DecorationBatch('shadow')
+    expect(b.maxElevation).toBe(0)
+    b.update([{ ...shadow, elevation: 24 }, { ...shadow, elevation: 40, z: 2 }, { ...shadow, elevation: 90, opacity: 0, z: 3 }], s)
+    expect(b.maxElevation).toBe(40)                                                       // the invisible one is not packed
+    b.update([], s); expect(b.maxElevation).toBe(0)
+  })
   it('inflates and lowers the pool rect', () => {
     const pools = new DecorationBatch('pool')
     pools.update([pool], s)

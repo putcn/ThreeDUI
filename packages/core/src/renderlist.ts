@@ -44,8 +44,10 @@ export interface TextInstance extends InstanceTransform { node: Node; rect: Rect
 /**
  * Rides on its glass node: `rim` just above it, `pool` just below it (see `sortKey`), same elevation, transform, opacity
  * and clip; `radius` and `cornerExponent` are the glass's, so the rim's outline follows the glass's silhouette.
- * `shadow` (spatial spec §11.7): raised glass only (its composed `elevation` > 0), black, strength 1, sorted 0.05 under
- * its pool; the render package offsets it along the light by its `elevation`.
+ * `shadow` (spatial spec §11.7): black, strength 1, sorted 0.05 under its pool, for glass that stands above the face it
+ * sits on. Its `elevation` is that height, not the composed one: the composed elevation minus the nearest glass
+ * ancestor's top (that glass's composed elevation + its thickness), or minus 0 (the Surface plane) without one; it is
+ * emitted only when that is above 0. The render package offsets it along the light by it.
  */
 export interface DecorationInstance extends InstanceTransform { node: Node; kind: 'rim' | 'pool' | 'shadow'; rect: Rect; radius: number; cornerExponent: number; color: RGBA; strength: number; z: number; clip?: ClipRect }
 export interface ImageInstance extends InstanceTransform { node: Node; rect: Rect; src: unknown; radius: number; z: number; clip?: ClipRect }
@@ -126,18 +128,19 @@ export function resolveGlass(s: Style, rect: Rect, theme: Theme, scheme: ColorSc
 /**
  * Walks `surface.root` in pre-order and emits its draw data. Each node's effective style (state branches merged)
  * decides what it draws: glass (`type: 'glass'` or `bg: 'glass' | 'glass-clear'`) with a `rim` and a `pool`
- * decoration, and a `shadow` one when its composed elevation is above 0 (nested glass too); a panel for any other `bg`
- * colour or a border; text for `text` nodes (`props.value`); an image for `image` nodes (`props.src`); a `FOCUS_RING`
- * panel for a node with `state.focused && state.focusVisible`, unless `props.focusRing === false` (a component that
- * draws its own). `display: 'none'` skips the subtree. Radii are clamped to half the shorter side; `concentric`
- * resolves against the parent's radius (the root's parent is the surface's `cornerRadius`).
+ * decoration, and a `shadow` one when it stands above the face it sits on (see `DecorationInstance`); a panel for any
+ * other `bg` colour or a border; text for `text` nodes (`props.value`); an image for `image` nodes (`props.src`); a
+ * `FOCUS_RING` panel for a node with `state.focused && state.focusVisible`, unless `props.focusRing === false` (a
+ * component that draws its own). `display: 'none'` skips the subtree. Radii are clamped to half the shorter side;
+ * `concentric` resolves against the parent's radius (the root's parent is the surface's `cornerRadius`).
  * A node's `visual` values, while it animates, replace its layout rect (its children follow the visual rect) and the
  * style targets they cover. Unknown tokens throw `GlassUIError`.
  */
 export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: ColorScheme): RenderList {
   const rl: RenderList = { panels: [], glass: [], text: [], decorations: [], images: [] }
   let z = 0
-  const visit = (n: Node, originX: number, originY: number, clip: ClipRect | undefined, parent: { elevation: number; scale: number; transform: Mat2D; opacity: number; radius: number; w: number; h: number }): void => {
+  /** `parent.face`: the height (pt) of the face the node stands on, its nearest glass ancestor's top, else 0. */
+  const visit = (n: Node, originX: number, originY: number, clip: ClipRect | undefined, parent: { elevation: number; scale: number; transform: Mat2D; opacity: number; radius: number; w: number; h: number; face: number }): void => {
     const s = effectiveStyle(n)
     if (s.display === 'none') return
     const v = n.visual
@@ -154,6 +157,7 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
     const resolved = v?.radius ?? resolveRadius(s.radius, theme, rect.width, rect.height, parent.radius, inset(layout, parent.w, parent.h))
     const radius = Math.max(0, Math.min(resolved, rect.width / 2, rect.height / 2))
     const base = { node: n, rect, elevation, scale, transform, tilt, opacity, ...defined({ clip }) }
+    let face = parent.face
     if (n.type === 'glass' || s.bg === 'glass' || s.bg === 'glass-clear') {
       const params = resolveGlass(s, rect, theme, scheme, v?.glass)
       rl.glass.push({ ...base, radius, z: sortKey(myZ, 'glass'), params })
@@ -161,7 +165,9 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
         { ...base, kind: 'rim', radius, cornerExponent: params.cornerExponent, color: [1, 1, 1, 1], strength: 1, z: sortKey(myZ, 'rim') },
         { ...base, kind: 'pool', radius, cornerExponent: params.cornerExponent, color: params.glow ? params.glow.color : [1, 1, 1, 1], strength: params.glow ? 0.5 : 0.28, z: sortKey(myZ, 'pool') },
       )
-      if (elevation > 0) rl.decorations.push({ ...base, kind: 'shadow', radius, cornerExponent: params.cornerExponent, color: [0, 0, 0, 1], strength: 1, z: sortKey(myZ, 'pool') - SHADOW_Z_BELOW_POOL })
+      const height = elevation - parent.face   // the shadow falls on the face it stands on
+      if (height > 0) rl.decorations.push({ ...base, elevation: height, kind: 'shadow', radius, cornerExponent: params.cornerExponent, color: [0, 0, 0, 1], strength: 1, z: sortKey(myZ, 'pool') - SHADOW_Z_BELOW_POOL })
+      face = elevation + params.thickness
     } else if ((s.bg !== undefined && s.bg !== 'none') || s.border) {
       const color: RGBA = v?.bg ?? (s.bg !== undefined && s.bg !== 'none' ? resolveColor(s.bg, theme, scheme) : [0, 0, 0, 0])
       const border = s.border && { width: s.border.width, color: resolveColor(s.border.color, theme, scheme) }
@@ -186,8 +192,8 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
     if (n.type === 'image') rl.images.push({ ...base, src: n.props.src, radius, z: sortKey(myZ, 'content') })
     const childClip = s.overflow === 'hidden' || s.overflow === 'scroll' || n.type === 'scroll' ? clipTo(clip, rect, radius, transform) : clip
     const o = scrollOffset(n)
-    for (const c of n.children) visit(c, rect.x - o.x, rect.y - o.y, childClip, { elevation, scale, transform, opacity, radius, w: rect.width, h: rect.height })
+    for (const c of n.children) visit(c, rect.x - o.x, rect.y - o.y, childClip, { elevation, scale, transform, opacity, radius, w: rect.width, h: rect.height, face })
   }
-  visit(surface.root, 0, 0, undefined, { elevation: 0, scale: 1, transform: IDENTITY, opacity: 1, radius: surface.cornerRadius, w: surface.width, h: surface.height })
+  visit(surface.root, 0, 0, undefined, { elevation: 0, scale: 1, transform: IDENTITY, opacity: 1, radius: surface.cornerRadius, w: surface.width, h: surface.height, face: 0 })
   return rl
 }

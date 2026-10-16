@@ -1435,46 +1435,70 @@ describe('Surface: drop shadows of raised glass (spatial §11.7)', () => {
     expect(s.shadows.buffer.count).toBe(0)
     expect(s.error).toBeNull()
   })
-  it('the light starts straight in front; setLightDirection sets (−x / z, y / z), z at least 0.1', () => {
-    const { s } = raised(), dir = () => shadowUniforms(s).shadowDir.value
+  /** A Surface with a raised card of glass per elevation (pt), side by side, ticked and drawn once. */
+  function casters(...elevations: number[]) {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, ctx)
+    elevations.forEach((e, i) => {
+      const g = new Node('glass', `c${i}`); g.setStyle({ position: 'absolute', left: 20 + i * 120, top: 40, width: 100, height: 60 }); g.elevation = e
+      s.root.appendChild(g)
+    })
+    s.tick(1 / 60); s.prepare(stubRenderer(), { width: 400, height: 300 }, 1)
+    return s
+  }
+  /** The light whose shadows fall `(dx, dy)` pt per pt of elevation (y down): `setLightDirection` inverted at z = 1. */
+  const lightFor = (dx: number, dy: number) => new Vector3(-dx, dy, 1).normalize()
+  const SIZE = { width: 400, height: 300 }
+
+  it('the light starts straight in front; the content draws its shadows along (−x / z, y / z), z at least 0.1', () => {
+    const { s } = raised(), r = stubRenderer(), dir = () => shadowUniforms(s).shadowDir.value
     expect(dir().toArray()).toEqual([0, 0])
-    const l = new Vector3(-0.3, 0.6, 0.74).normalize()
-    s.setLightDirection(l)
-    expect(dir().x).toBeCloseTo(0.3 / 0.74, 12); expect(dir().y).toBeCloseTo(0.6 / 0.74, 12)
-    s.setLightDirection(new Vector3(0.6, 0.8, 0))                               // grazing: z clamped to 0.1
-    expect(dir().x).toBeCloseTo(-6, 12); expect(dir().y).toBeCloseTo(8, 12)
-    s.setLightDirection(new Vector3(0.6, 0, -0.8))                              // from behind: clamped as well
-    expect(dir().x).toBeCloseTo(-6, 12); expect(dir().y).toBe(0)
+    const drawn = (l: Vector3) => { s.setLightDirection(l); s.prepare(r, SIZE, 1); return dir() }
+    const a = drawn(new Vector3(-0.3, 0.6, 0.74).normalize())
+    expect(a.x).toBeCloseTo(0.3 / 0.74, 12); expect(a.y).toBeCloseTo(0.6 / 0.74, 12)
+    const b = drawn(new Vector3(0.6, 0.8, 0))                                    // grazing: z clamped to 0.1
+    expect(b.x).toBeCloseTo(-6, 12); expect(b.y).toBeCloseTo(8, 12)
+    const c = drawn(new Vector3(0.6, 0, -0.8))                                   // from behind: clamped as well
+    expect(c.x).toBeCloseTo(-6, 12); expect(c.y).toBe(0)
   })
-  it('a light change past 0.5 pt at 40 pt of elevation redraws the content; a negligible one does not', () => {
-    const { s } = raised(), r = stubRenderer()
-    s.setLightDirection(new Vector3(-0.3, 0.6, 0.74).normalize()); s.prepare(r, { width: 400, height: 300 }, 1)
-    expect(s.contentDirty).toBe(false)
-    const at = (dx: number, dy: number) => { const z = 0.74; return new Vector3(-(0.3 / z + dx) * z, (0.6 / z + dy) * z, z).normalize() }
-    s.setLightDirection(at(0.01, -0.01))                                        // under 0.5 / 40 in both components
-    expect(s.contentDirty).toBe(false)
-    s.setLightDirection(at(0, 0.02))                                             // y past it
-    expect(s.contentDirty).toBe(true)
-    s.prepare(r, { width: 400, height: 300 }, 1); expect(s.contentDirty).toBe(false)
-    s.setLightDirection(at(-0.02, 0.02))                                         // x past it (y as it was)
-    expect(s.contentDirty).toBe(true)
+  it('redraws when the tallest shadow\'s offset would move more than 0.5 pt: a 4 pt caster ignores 0.2 pt, a 100 pt one redraws for 1 pt', () => {
+    const moved = (elevations: number[], dx: number, dy: number) => {
+      const s = casters(...elevations)
+      s.setLightDirection(lightFor(0.2, 0.5)); s.prepare(stubRenderer(), SIZE, 1)
+      expect(s.contentDirty).toBe(false)
+      s.setLightDirection(lightFor(0.2 + dx, 0.5 + dy))
+      return s.contentDirty
+    }
+    expect(moved([4], 0, 0.2 / 4)).toBe(false)                                    // its offset moves 0.2 pt
+    expect(moved([4], -0.2 / 4, 0)).toBe(false)
+    expect(moved([4], 0, 0.6 / 4)).toBe(true)                                     // 0.6 pt
+    expect(moved([100], 0, 1 / 100)).toBe(true)                                   // 1 pt
+    expect(moved([100], 1 / 100, 0)).toBe(true)
+    expect(moved([100], 0, 0.4 / 100)).toBe(false)                                // 0.4 pt
+    expect(moved([4, 100], 0, 0.6 / 100)).toBe(true)                              // the tallest sets the step: 0.6 pt at 100
   })
-  it('small steps add up: a slow drift redraws once it has moved past the step in all', () => {
-    const { s } = raised(), r = stubRenderer(), z = 0.8
-    s.setLightDirection(new Vector3(0, 0, 1)); s.prepare(r, { width: 400, height: 300 }, 1)
+  it('small moves add up against the direction last drawn, and any redraw draws the latest direction', () => {
+    const s = casters(24), r = stubRenderer(), dir = () => shadowUniforms(s).shadowDir.value
+    s.setLightDirection(lightFor(0, 0)); s.prepare(r, SIZE, 1)
     let redraws = 0
     for (let k = 1; k <= 10; k++) {
-      s.setLightDirection(new Vector3(0, 0.004 * k * z, z).normalize())         // 0.004 a step: each one negligible
-      if (s.contentDirty) { redraws++; s.prepare(r, { width: 400, height: 300 }, 1) }
+      s.setLightDirection(lightFor(0, 0.005 * k))                                  // 0.12 pt a step at 24 pt: negligible
+      if (s.contentDirty) { redraws++; s.prepare(r, SIZE, 1) }
     }
-    expect(redraws).toBe(2)                                                      // 0.04 in all, past 0.0125 at 0.016 and 0.032
+    expect(redraws).toBe(2)                                                        // 1.2 pt in all: past 0.5 pt at 0.6 and 1.2
+    s.setLightDirection(lightFor(0, 0.06)); expect(s.contentDirty).toBe(false)    // 0.24 pt more: kept, not drawn yet
+    expect(dir().y).toBeCloseTo(0.05, 12)
+    s.contentDirty = true; s.prepare(r, SIZE, 1)                                   // redrawn for another reason…
+    expect(dir().y).toBeCloseTo(0.06, 12)                                         // …with the latest direction
   })
-  it('a Surface casting no shadow does not redraw for the light', () => {
-    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, ctx)
+  it('a Surface casting no shadow does not redraw for the light; once one appears, it draws along the latest light', () => {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, ctx), r = stubRenderer()
     const g = new Node('glass', 'g'); g.setStyle({ position: 'absolute', left: 20, top: 20, width: 200, height: 60 }); s.root.appendChild(g)
-    s.tick(1 / 60); s.prepare(stubRenderer(), { width: 400, height: 300 }, 1)
-    s.setLightDirection(new Vector3(-0.5, 0.5, 0.7).normalize())
+    s.tick(1 / 60); s.prepare(r, SIZE, 1)
+    s.setLightDirection(lightFor(0.3, 0.4))
     expect(s.contentDirty).toBe(false)
+    g.elevation = 24; s.tick(1 / 60); s.prepare(r, SIZE, 1)
+    expect(s.shadows.buffer.count).toBe(1)
+    expect(shadowUniforms(s).shadowDir.value.x).toBeCloseTo(0.3, 12); expect(shadowUniforms(s).shadowDir.value.y).toBeCloseTo(0.4, 12)
   })
   it('the shadow alpha follows the scheme: 0.22 light, 0.35 dark after a restyle, and back', () => {
     const c: SurfaceContext = { ...ctx }

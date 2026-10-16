@@ -172,8 +172,8 @@ describe('buildRenderList rules', () => {
   })
 
   it('gives raised glass one black shadow just under its pool, with its shape, placement and elevation (spatial §11.7)', () => {
-    const btn = box('glass', 'btn', { left: 10, top: 10, width: 80, height: 32, radius: 'capsule' }); btn.elevation = 4
-    const card = box('glass', 'card', { left: 20, top: 20, width: 200, height: 120, radius: 16, overflow: 'hidden', opacity: 0.8, scale: 0.9 }, btn); card.elevation = 24
+    const btn = box('glass', 'btn', { left: 10, top: 10, width: 80, height: 32, radius: 'capsule' }); btn.elevation = 8
+    const card = box('glass', 'card', { left: 20, top: 20, width: 200, height: 120, radius: 16, overflow: 'hidden', opacity: 0.8, scale: 0.9, glass: { thickness: 3 } }, btn); card.elevation = 24
     card.tilt = { x: 0.05, y: -0.03 }
     const flat = box('glass', 'flat', { left: 240, top: 20, width: 100, height: 40 })
     const rl = buildRenderList(layout(surface(card, flat)), theme, 'light')
@@ -189,11 +189,29 @@ describe('buildRenderList rules', () => {
     expect(shadows[0]!.z).toBeCloseTo(sortKey(g.z, 'pool') - 0.05, 12)
     expect(shadows[0]!.z).toBeLessThan(of('pool', 'card')[0]!.z); expect(shadows[0]!.z).toBeGreaterThan(g.z - 0.5)
     expect(of('shadow', 'flat')).toEqual([])                                          // not raised: no shadow
-    // glass nested in raised glass casts its own, at the composed elevation, clipped as the glass is
+    // glass lifted off raised glass casts its own, as high as it stands above that glass's top face: its composed
+    // elevation (24 + 8) minus the card's top (its composed elevation 24 + its thickness 3) = 5; clipped as the glass is
     const b = glass('btn'), nested = of('shadow', 'btn')
+    expect(b.elevation).toBe(32)
     expect(nested).toHaveLength(1)
-    expect(nested[0]).toMatchObject({ rect: b.rect, radius: b.radius, cornerExponent: 2, elevation: 28, clip: b.clip, opacity: b.opacity, transform: b.transform })
+    expect(nested[0]).toMatchObject({ rect: b.rect, radius: b.radius, cornerExponent: 2, elevation: 24 + 8 - (24 + 3), clip: b.clip, opacity: b.opacity, transform: b.transform })
     expect(nested[0]!.z).toBeCloseTo(sortKey(b.z, 'pool') - 0.05, 12)
+  })
+
+  it('a shadow falls on the face its glass sits on: the nearest glass ancestor\'s top, else the Surface plane', () => {
+    // shadow elevation = composed elevation − (nearest glass ancestor's composed elevation + its thickness); without a
+    // glass ancestor, the composed elevation. Emitted only above 0. Card: raised 24, 10 thick, so its top is at 34
+    const flush = box('glass', 'flush', { left: 10, top: 10, width: 60, height: 30 })                           // own 0: 24 − 34
+    const low = box('glass', 'low', { left: 80, top: 10, width: 60, height: 30 }); low.elevation = 8             // 32 − 34 = −2
+    const high = box('glass', 'high', { left: 10, top: 60, width: 60, height: 30 }); high.elevation = 12         // 36 − 34 = 2
+    const wrap = box('box', 'wrap', { left: 80, top: 60, width: 100, height: 50 }, box('glass', 'deep', { width: 40, height: 20 }))
+    wrap.elevation = 16                                                               // a box between: still the card's face, 40 − 34 = 6
+    const card = box('glass', 'card', { left: 20, top: 20, width: 240, height: 160, glass: { thickness: 10 } }, flush, low, high, wrap); card.elevation = 24
+    const lifted = box('box', 'lifted', { left: 280, top: 20, width: 100, height: 100 }, box('glass', 'onBox', { width: 40, height: 20 })); lifted.elevation = 6
+    const rl = buildRenderList(layout(surface(card, lifted)), theme, 'light')
+    const shadows = Object.fromEntries(rl.decorations.filter(d => d.kind === 'shadow').map(d => [d.node.id, d.elevation]))
+    expect(shadows).toEqual({ card: 24, high: 2, deep: 6, onBox: 6 })                  // a raised box is no glass: the plane
+    expect(rl.glass.find(g => g.node.id === 'flush')!.elevation).toBe(24)              // its glass keeps the composed elevation
   })
 
   it('clips to the intersection of overflow hidden/scroll ancestors and scroll nodes, decorations included', () => {

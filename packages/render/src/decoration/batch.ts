@@ -30,6 +30,8 @@ const UNTILTED = { x: 0, y: 0 } as const
 export class DecorationBatch {
   readonly geometry = createQuadGeometry()
   readonly buffer = new InstanceBuffer(this.geometry, DECOR_ATTRS)
+  /** The highest `elevation` among the instances last packed (pt; 0 when none): the shadows' redraw step. */
+  maxElevation = 0
   private m = new Matrix4()
   constructor(readonly kind: DecorationInstance['kind']) {}
 
@@ -38,6 +40,7 @@ export class DecorationBatch {
     const mine = instances.filter(d => d.kind === this.kind && visible(d)).sort((a, b) => a.z - b.z)
     const b = this.buffer, ppu = s.ptPerUnit
     b.begin(mine.length)
+    this.maxElevation = mine.reduce((e, d) => Math.max(e, d.elevation), 0)
     mine.forEach((d, i) => {
       let rect = d.rect
       if (this.kind === 'pool') {
