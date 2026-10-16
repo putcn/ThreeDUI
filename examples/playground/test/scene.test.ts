@@ -10,7 +10,7 @@ import { bins, heat, kpis, laneSummary, lanesOf, network, orders, stock } from '
 import { YAW_LIMIT } from '../src/wms/warehouse'
 import { LIMITS } from '../src/wms/map'
 import { arcPastel, createCurvedWall, MAX_U_LENGTH } from '../src/wall'
-import { ARC, BLOCKS, inFrameOf, NETWORK, PANEL, PLACE_PANEL, TWIN, WALL, wallSpan } from '../src/scenes/spatial-arc'
+import { ARC, arcAngleOf, BLOCKS, inFrameOf, NETWORK, PANEL, PLACE_PANEL, TWIN, WALL, wallSpan, wallSpanOf, type RestPose } from '../src/scenes/spatial-arc'
 
 /** pt per world unit (the Blocks' and the panel's). */
 const PT = 244
@@ -450,9 +450,19 @@ describe('the curved wall', () => {
   }
   const ASPECTS = [1512 / 808, 21 / 9, 16 / 9, 16 / 10, 4 / 3]
 
-  it('every Block\'s focus view, at five aspects and every corner of the ±2.5° parallax, sees nothing but the wall, and wall the pastel covers at its full density', async () => {
+  it('every Block\'s focus view, at five aspects and every corner of the ±2.5° parallax, sees nothing but the wall main.ts builds, and wall the pastel covers at its full density', async () => {
     const s = await scene('overview'), blocks = [s.orders, s.overview, s.network, s.twin], names = ['orders', 'overview', 'network', 'twin']
-    const angles = blocks.map(b => -b.restPose.rotation[1]), span = wallSpan(angles), R = ARC.radius, r = R + WALL.out
+    // the span as main.ts makes it, from the rest poses as a real Surface reports them: its rotation an Euler read back
+    // from its quaternion, so a yaw past 90° (the twin's −1.749) comes back as [π, −1.393, π]
+    const readBack = (b: FakeSurface): RestPose => {
+      const e = new Euler().setFromQuaternion(new Quaternion().setFromEuler(new Euler(...b.restPose.rotation, 'XYZ')))
+      return { position: b.restPose.position, rotation: [e.x, e.y, e.z] }
+    }
+    expect(readBack(s.twin).rotation.map(v => +v.toFixed(3))).toEqual([3.142, -1.393, 3.142])
+    // each Block's place on the arc comes from its position: the twin at 100.2°, not 79.8°
+    expect(arcAngleOf(readBack(s.twin).position) * 180 / Math.PI).toBeCloseTo(100.18, 1)
+    blocks.forEach(b => expect(arcAngleOf(b.restPose.position)).toBeCloseTo(-b.restPose.rotation[1], 9))
+    const span = wallSpanOf(blocks.map(readBack)), R = ARC.radius, r = R + WALL.out
     const wall = createCurvedWall({ center: [0, 0, R], radius: r, ...span, height: WALL.height })
     const periodic = (wall.material as Material).userData.periodicU === true
     const half = Math.tan(19 * Math.PI / 180), par = 2.5 * Math.PI / 180

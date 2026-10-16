@@ -65,6 +65,19 @@ export function wallSpan(angles: readonly number[]): { from: number; to: number 
   return { from: Math.min(...angles) - WALL.margin, to: Math.max(...angles) + WALL.margin }
 }
 
+/** A Block's rest pose as its Surface reports it (`Surface.restPose`). */
+export interface RestPose { position: readonly [number, number, number]; rotation: readonly [number, number, number] }
+/**
+ * Where a Block stands on the arc (radians, as the arc measures them): its rest position's angle about the arc's
+ * centre (0, 0, radius). Not its rotation: `restPose.rotation` is an Euler read back from a quaternion, and past ±90° of
+ * yaw three decomposes it otherwise (the twin's −1.749 reads back as [π, −1.393, π], a yaw that would place it at 79.8°).
+ */
+export const arcAngleOf = (position: readonly [number, number, number]): number => Math.atan2(position[0], ARC.radius - position[2])
+/** The wall's span for Blocks resting at `poses` (main.ts reads them off the Blocks' Surfaces). */
+export function wallSpanOf(poses: readonly RestPose[]): { from: number; to: number } {
+  return wallSpan(poses.map(p => arcAngleOf(p.position)))
+}
+
 /** `offset` in the frame of `pose` (a turn about y only, as the arc's), added to its position. */
 export function inFrameOf(pose: ArcSlot, offset: readonly [number, number, number]): ArcSlot {
   const [x, y, z] = offset, a = pose.rotation[1], [px, py, pz] = pose.position
