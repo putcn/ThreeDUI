@@ -73,9 +73,10 @@ export interface SurfaceEventMap extends Object3DEventMap {
 /**
  * `renderOrder` of each draw inside a Surface's `layer`; images take [images, images + ½) in z order (`ImageSet`);
  * `innerGlass*`: nested glass (spatial spec §2.4), after the outer glass, which it sees in the stacked RT instead;
+ * `panels`: the panels riding on glass (spatial spec §11.8), after all the glass, under its rims and what else rides it;
  * `viewport`: the 3D objects attached to its nodes (`Surface.attach3D`), over the rims and under what rides on glass.
  */
-export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 } as const
+export const SURFACE_ORDER = { slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, panels: 2.75, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 } as const
 export { SLAB_FROST } from '../glass/frost'
 /** `renderOrder` of each draw inside the content RT's scene. */
 export const CONTENT_ORDER = { panels: 0, shadows: 0.5, pools: 1, images: 1.5, glyphs: 2 } as const
@@ -187,10 +188,10 @@ function createCaptureProbe(capture: ScreenCapture): Mesh<PlaneGeometry, MeshBas
  * Draws (all `frustumCulled = false`, orders in `SURFACE_ORDER`): background slab back/front (`background: 'glass'`
  * only, refracting the screen) — or, on a `'none'` Surface while it has glass to see through, the capture probe in
  * their place (`createCaptureProbe`) — the content quad, the glass back (with `quality.backFaces`) and front refracting the
- * content RT, rims, then the images and glyphs riding on glass. The content RT's scene (`CONTENT_ORDER`), drawn
- * orthographically with the same Surface-local instance matrices: panels, the drop shadows of raised glass (spatial spec
- * §11.7: `createShadowMaterial`, along the key light the root hands over each tick, `setLightDirection`), pools,
- * images, glyphs (one mesh per page).
+ * content RT, the panels riding on glass (spatial spec §11.8), rims, then the images and glyphs riding on glass. The
+ * content RT's scene (`CONTENT_ORDER`), drawn orthographically with the same Surface-local instance matrices: the panels
+ * on no glass, the drop shadows of raised glass (spatial spec §11.7: `createShadowMaterial`, along the key light the
+ * root hands over each tick, `setLightDirection`), pools, images, glyphs (one mesh per page).
  * With `quality.blur === 'kawase'` the content RT also feeds a `KawasePyramid`, which the element glass samples by
  * roughness instead of the RT's mips; with clear + adaptive glass, a luma pass (`SurfaceLuma`) for its darkening.
  * `quality.glassMode` picks how all of this glass sees its backdrop (`GlassMode`): refracted, straight through, or not
@@ -229,7 +230,10 @@ export class Surface extends Object3D<SurfaceEventMap> {
   readonly glass = new GlassBatch()
   /** Glass inside other glass (spatial spec §2.4; `splitNested`): it sees the outer glass through `stack`. No luma index. */
   readonly innerGlass = new GlassBatch()
+  /** The panels on no glass, in the content RT. */
   readonly panels = new PanelBatch()
+  /** The panels riding on glass (spatial spec §11.8; `partition`), on the plane, lifted onto their glass's top face. */
+  readonly foregroundPanels = new PanelBatch()
   readonly rims = new DecorationBatch('rim')
   readonly pools = new DecorationBatch('pool')
   /** The drop shadows of raised glass (spatial spec §11.7), in the content RT. */
@@ -376,6 +380,9 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
     this.syncPyramid(this.quality)
     this.buildGlass(this.quality)
+    const fgPanelMesh = new Mesh(this.foregroundPanels.geometry, this.own(createPanelMaterial(this.foregroundPanels.geometry, this.su)))
+    fgPanelMesh.renderOrder = SURFACE_ORDER.panels; fgPanelMesh.frustumCulled = false
+    this.plane.add(fgPanelMesh)
     const rimMesh = new Mesh(this.rims.geometry, this.own(createRimMaterial(this.rims.geometry, this.su)))
     rimMesh.renderOrder = SURFACE_ORDER.rims; rimMesh.frustumCulled = false
     this.plane.add(rimMesh)
@@ -824,6 +831,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.nested = splitNested(list.glass)
     this.fillGlass()
     this.panels.update(p.content.panels, s)
+    this.foregroundPanels.update(p.foreground.panels, s, x => liftFor(p, x.node))
     this.shadows.update(p.content.shadows, s)
     this.pools.update(p.content.pools, s)
     this.fillRims(p)
@@ -846,15 +854,15 @@ export class Surface extends Object3D<SurfaceEventMap> {
   }
 
   /**
-   * The stacked RT's draws from partition `p` (`StackPass.update`): the outer glass, and the foreground text and images
-   * riding on an outer glass (`glassOf`), in the theme's colours. A no-op without a stack.
+   * The stacked RT's draws from partition `p` (`StackPass.update`): the outer glass, and the foreground panels, text and
+   * images riding on an outer glass (`glassOf`), in the theme's colours. A no-op without a stack.
    */
   private fillStack(p: Partition): void {
     const stack = this.stackPass, n = this.nested
     if (!stack || !n) return
     const outer = new Set(n.outer)
     const rides = (i: { node: Node }): boolean => { const g = p.glassOf.get(i.node); return g !== undefined && outer.has(g) }
-    stack.update(n.outer, p.foreground.text.filter(rides), p.foreground.images.filter(rides), this.model, this.ctx.theme, this.ctx.scheme)
+    stack.update(n.outer, p.foreground.panels.filter(rides), p.foreground.text.filter(rides), p.foreground.images.filter(rides), this.model, this.ctx.theme, this.ctx.scheme)
   }
 
   /**
@@ -1034,7 +1042,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       this.ctx.anim.forget(this.root)
       this.ctx.layout.dispose(this.root)
       this.contentPass.dispose(); this.pyramid?.dispose(); this.luma.dispose(); this.stackPass?.dispose()
-      for (const b of [this.glass, this.innerGlass, this.panels, this.rims, this.pools, this.shadows, this.backgroundGlass]) b?.dispose()
+      for (const b of [this.glass, this.innerGlass, this.panels, this.foregroundPanels, this.rims, this.pools, this.shadows, this.backgroundGlass]) b?.dispose()
       this.foregroundText.dispose(); this.contentText.dispose(); this.foregroundImages.dispose(); this.contentImages.dispose()
       for (const gm of this.glassMaterials) gm.dispose()
       for (const m of this.materials) m.dispose()

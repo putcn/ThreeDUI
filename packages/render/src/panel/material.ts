@@ -8,7 +8,8 @@ import { sdfNode } from './sdf'
  * Solid panels (`bg` colour and/or border): unlit (the Surface's content quad is the lit, shadow-receiving surface,
  * Task 15), alpha-blended, antialiased against the superellipse SDF over about a pixel (`fwidth`). The border is an
  * inset band of its width at the edge, composited over the fill (premultiplied); opacity is coverage × colour alpha ×
- * instance opacity. The quad extends `AA_MARGIN_PT` beyond the rect so the outer half of the ramp is rasterised.
+ * instance opacity × the Surface's opacity (`surface.opacity`: the panels riding on glass, on the plane; the content
+ * pass's have none). The quad extends `AA_MARGIN_PT` beyond the rect so the outer half of the ramp is rasterised.
  *
  * Varyings: `flatVertex`'s three + `iShape`, `iColor`, `iBorder` = 6.
  */
@@ -36,6 +37,6 @@ export function createPanelMaterial(geometry: InstancedBufferGeometry, surface: 
   const fillP = vec4(fill.rgb.mul(fill.a), fill.a), borderP = vec4(border.rgb.mul(border.a), border.a)
   const col = borderP.mul(borderMix).add(fillP.mul(float(1).sub(border.a.mul(borderMix))))
   m.colorNode = col.rgb.div(max(col.a, 1e-6))
-  m.opacityNode = cover.mul(col.a).mul(opacity)
+  m.opacityNode = cover.mul(col.a).mul(opacity).mul(surface.opacity ?? float(1))
   return m
 }

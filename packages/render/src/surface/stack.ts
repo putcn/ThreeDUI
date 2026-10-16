@@ -55,7 +55,8 @@ const translucent = (c: RGBA): RGBA => [c[0], c[1], c[2], c[3] * STACK_FILL_ALPH
  *    tint, else the theme's `fill` a shade toward `label` (`fillTokens`) — and a 1 pt `tertiaryLabel` border, both at
  *    their alpha × `STACK_FILL_ALPHA`. Panels rather than the 'fill' glass material: its lit shell turns black in an
  *    offscreen scene without lights;
- * 3. the foreground text and images riding on an outer glass, flat (no lift).
+ * 3. the foreground panels (spatial spec §11.8), text and images riding on an outer glass, flat (no lift), as they are:
+ *    the panels in the outer glass's batch, whose z order draws each over its glass's fill (a descendant sorts later).
  *
  * The inner glass samples `texture` and its mips (`ContentPass`'s target is mipmapped) where the outer glass samples
  * the content RT. The Surface makes one only while it has nested glass in a glass mode that samples a backdrop,
@@ -89,17 +90,17 @@ export class StackPass {
   get texture(): Texture { return this.pass.texture }
 
   /**
-   * Rewrites the stack's draws: `outer` as panels (coloured from `theme` for `scheme`), `text` and `images` (what rides
-   * on them) flat; the view and the content quad follow `s`.
+   * Rewrites the stack's draws: `outer` as panels (coloured from `theme` for `scheme`), `panels`, `text` and `images`
+   * (what rides on them) flat; the view and the content quad follow `s`.
    */
-  update(outer: readonly GlassInstance[], text: readonly TextInstance[], images: readonly ImageInstance[], s: SurfaceDims, theme: Theme, scheme: ColorScheme): void {
+  update(outer: readonly GlassInstance[], panels: readonly PanelInstance[], text: readonly TextInstance[], images: readonly ImageInstance[], s: SurfaceDims, theme: Theme, scheme: ColorScheme): void {
     const t = fillTokens(theme, scheme)
     const border = { width: 1, color: translucent(t.border) }
     this.panels.update(outer.map((g): PanelInstance => {
       const { node, rect, radius, z, elevation, scale, transform, tilt, opacity, clip, params: p } = g
       const color = p.glow && p.glow.strength > 0 ? p.glow.color : p.tint ?? t.glass   // the 'fill' mode's rule
       return { node, rect, radius, z, elevation, scale, transform, tilt, opacity, color: translucent(color), border, ...(clip ? { clip } : {}) }
-    }), s)
+    }).concat(panels), s)
     this.text.update(text, s)
     for (const [page, pb] of this.text.perPage) {
       if (this.glyphs.has(page)) continue

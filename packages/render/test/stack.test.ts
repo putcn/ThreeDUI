@@ -48,7 +48,7 @@ describe('StackPass (spatial spec §2.4)', () => {
     const glowing = glass('glow', 1, { glow: { color: [0.42, 0.39, 0.96, 1], strength: 1.1 }, tint: [1, 0.5, 0, 1] })
     const tinted = glass('tint', 2, { tint: [1, 0.5, 0, 0.8], glow: { color: [0, 1, 0, 1], strength: 0 } })   // a glow of strength 0 does not glow
     const plain = glass('plain', 3, {}, { opacity: 0.5, clip, elevation: 6, tilt: { x: 0.1, y: -0.2 }, transform: scaleAbout(120, 80, 0.9), scale: 0.9 })
-    st.update([plain, tinted, glowing], [], [], s, theme, 'light')
+    st.update([plain, tinted, glowing], [], [], [], s, theme, 'light')
     expect(st.panels.buffer.count).toBe(3)
 
     const fade = (c: RGBA): RGBA => [c[0], c[1], c[2], c[3] * STACK_FILL_ALPHA]
@@ -68,9 +68,23 @@ describe('StackPass (spatial spec §2.4)', () => {
     expect(st.panels.buffer.get(0, 'iShape')[1]).toBe(Math.fround(1 / 100))   // 1 pt
   })
 
+  it('spatial §11.8: holds the panels riding on outer glass (a chip on a Card) in the same batch, over the Card\'s fill, flat and as they are', () => {
+    const st = new StackPass(new Texture(), su(), { text, pages })
+    const card = glass('card', 1, {}, { elevation: 24 })
+    const chip: PanelInstance = { node: new Node('box', 'chip'), rect: { x: 40, y: 40, width: 60, height: 22 }, radius: 11, color: [0.2, 0.5, 1, 1], z: 2, elevation: 24, scale: 1, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity: 1 }
+    st.update([card], [chip], [], [], s, theme, 'light')
+    expect(st.panels.buffer.count).toBe(2)                                           // the Card's fill and the chip
+    const ref = new PanelBatch(); ref.update([chip], s)                              // the chip as a plain batch packs it: no lift, own colour
+    for (const name of PANEL_ATTRS) expect(st.panels.buffer.get(1, name), name).toEqual(ref.buffer.get(0, name))
+    expect(st.panels.buffer.get(0, 'iColor')[3]).toBe(Math.fround(STACK_FILL_ALPHA))  // first (z order): the translucent fill
+    expect(st.panels.buffer.get(1, 'iMat2')[3]).toBeCloseTo(0.24)                    // its own elevation, nothing added
+    st.update([card], [], [], [], s, theme, 'light')                                 // the chip went away
+    expect(st.panels.buffer.count).toBe(1)
+  })
+
   it('starts from the content RT: a full-Surface quad, the first draw, composited premultiplied', () => {
     const content = new Texture(), st = new StackPass(content, su(), { text, pages })
-    st.update([glass('g', 1)], [], [], s, theme, 'light')
+    st.update([glass('g', 1)], [], [], [], s, theme, 'light')
     const draws = meshes(st.pass.scene).sort((a, b) => a.renderOrder - b.renderOrder)
     const quad = draws[0]!
     expect(quad.renderOrder).toBe(STACK_ORDER.content); expect(STACK_ORDER.content).toBe(-1)
@@ -86,7 +100,7 @@ describe('StackPass (spatial spec §2.4)', () => {
   it('holds the text and images it is given, flat, over the panels', () => {
     const st = new StackPass(new Texture(), su(), { text, pages })
     const img: ImageInstance = { node: new Node('image', 'icon'), rect: { x: 30, y: 30, width: 20, height: 20 }, src: new Texture(), radius: 0, z: 1.25, elevation: 0, scale: 1, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity: 1 }
-    st.update([glass('g', 1)], [textOn('t', 'Hi', 1.25)], [img], s, theme, 'light')
+    st.update([glass('g', 1)], [], [textOn('t', 'Hi', 1.25)], [img], s, theme, 'light')
     let glyphs = 0; for (const pb of st.text.perPage.values()) { glyphs += pb.buffer.count; for (let i = 0; i < pb.buffer.count; i++) expect(pb.buffer.get(i, 'iMat2')[3]).toBe(0) }
     expect(glyphs).toBe(2)
     const draws = meshes(st.pass.scene)
@@ -94,7 +108,7 @@ describe('StackPass (spatial spec §2.4)', () => {
     const images = draws.filter(m => m.renderOrder >= STACK_ORDER.images && m.renderOrder < STACK_ORDER.glyphs)
     expect(images).toHaveLength(1)
     expect(STACK_ORDER.panels).toBeLessThan(STACK_ORDER.images)
-    st.update([glass('g', 1)], [], [], s, theme, 'light')                            // nothing rides on it any more
+    st.update([glass('g', 1)], [], [], [], s, theme, 'light')                        // nothing rides on it any more
     glyphs = 0; for (const pb of st.text.perPage.values()) glyphs += pb.buffer.count
     expect(glyphs).toBe(0); expect(meshes(st.pass.scene).filter(m => m.renderOrder >= STACK_ORDER.images && m.renderOrder < STACK_ORDER.glyphs)).toHaveLength(0)
   })
@@ -120,7 +134,7 @@ describe('StackPass (spatial spec §2.4)', () => {
 
   it('dispose frees its RT, batches, geometry and materials', () => {
     const st = new StackPass(new Texture(), su(), { text, pages })
-    st.update([glass('g', 1)], [textOn('t', 'Hi', 1.25)], [], s, theme, 'light')
+    st.update([glass('g', 1)], [], [textOn('t', 'Hi', 1.25)], [], s, theme, 'light')
     type Disposable = { addEventListener(type: 'dispose', fn: () => void): void }
     const draws = meshes(st.pass.scene)
     const tracked: Disposable[] = [st.pass.target as RenderTarget, ...draws.map(m => m.material as Material), ...draws.map(m => m.geometry)]

@@ -2,7 +2,7 @@ import type { DecorationInstance, GlassInstance, ImageInstance, Node, PanelInsta
 
 export interface Partition {
   content: { panels: PanelInstance[]; shadows: DecorationInstance[]; pools: DecorationInstance[]; text: TextInstance[]; images: ImageInstance[] }
-  foreground: { rims: DecorationInstance[]; text: TextInstance[]; images: ImageInstance[] }
+  foreground: { rims: DecorationInstance[]; panels: PanelInstance[]; text: TextInstance[]; images: ImageInstance[] }
   /** Each foreground item's node (rims: their own glass node) → the nearest glass at or above it. */
   glassOf: Map<Node, GlassInstance>
 }
@@ -10,7 +10,9 @@ export interface Partition {
 /**
  * Spec §5.1/§5.6: non-glass content is drawn into the Surface's content RT; whatever sits *on* a glass element (its
  * descendants) is drawn in 3D on top of the slab. Pools and shadows lie under the glass (content), rims ride on top
- * (foreground).
+ * (foreground). Panels (a box's background or border) ride their glass as its text does (spatial spec §11.8), except a
+ * glass node's own focus ring, which stays in the content, under the glass edge: glass draws no panel of its own
+ * (`buildRenderList`), so a panel whose node is glass is that ring.
  * O(n): every node's nearest glass (or none) is memoised, so each ancestor chain is walked once.
  */
 export function partition(rl: RenderList): Partition {
@@ -32,12 +34,13 @@ export function partition(rl: RenderList): Partition {
     if (found) glassOf.set(n, found)
     return found
   }
-  const out: Partition = { content: { panels: [...rl.panels], shadows: [], pools: [], text: [], images: [] }, foreground: { rims: [], text: [], images: [] }, glassOf }
+  const out: Partition = { content: { panels: [], shadows: [], pools: [], text: [], images: [] }, foreground: { rims: [], panels: [], text: [], images: [] }, glassOf }
   for (const d of rl.decorations) {
     if (d.kind === 'pool') out.content.pools.push(d)
     else if (d.kind === 'shadow') out.content.shadows.push(d)
     else { out.foreground.rims.push(d); nearest(d.node) }
   }
+  for (const p of rl.panels) (!glass.has(p.node) && nearest(p.node) ? out.foreground.panels : out.content.panels).push(p)
   for (const t of rl.text) (nearest(t.node) ? out.foreground.text : out.content.text).push(t)
   for (const i of rl.images) (nearest(i.node) ? out.foreground.images : out.content.images).push(i)
   return out

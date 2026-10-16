@@ -17,13 +17,17 @@ export function cornerExponentFor(rect: { width: number; height: number }, radiu
   return radius >= Math.min(rect.width, rect.height) / 2 - 1e-6 ? 2 : 4.5
 }
 
-/** All solid panels (`bg` colour and/or border) of one Surface as instances of a unit quad, sorted far→near by `z`. */
+/**
+ * Solid panels (`bg` colour and/or border) as instances of a unit quad, sorted far→near by `z`, each lifted
+ * `lift(instance)` pt along the plane normal on top of its own elevation (as `ImageSet` lifts its images): the
+ * thickness of the glass a panel rides on (spatial spec §11.8), 0 in the content pass.
+ */
 export class PanelBatch {
   readonly geometry = createQuadGeometry()
   readonly buffer = new InstanceBuffer(this.geometry, PANEL_ATTRS)
   private m = new Matrix4()
 
-  update(instances: readonly PanelInstance[], s: SurfaceDims): void {
+  update(instances: readonly PanelInstance[], s: SurfaceDims, lift: (p: PanelInstance) => number = () => 0): void {
     const sorted = [...instances].sort((a, b) => a.z - b.z)
     const b = this.buffer, ppu = s.ptPerUnit
     b.begin(sorted.length)
@@ -34,7 +38,7 @@ export class PanelBatch {
       b.set(i, 'iColor', srgbToLinear(p.color[0]), srgbToLinear(p.color[1]), srgbToLinear(p.color[2]), p.color[3])
       const bc = p.border?.color ?? [0, 0, 0, 0]
       b.set(i, 'iBorder', srgbToLinear(bc[0]), srgbToLinear(bc[1]), srgbToLinear(bc[2]), bc[3])
-      writeMatrixRows(b, i, instanceMatrix(p, s, this.m))
+      writeMatrixRows(b, i, instanceMatrix({ ...p, elevation: p.elevation + lift(p) }, s, this.m))
       writeClip(b, i, p.clip)
     })
     b.commit()

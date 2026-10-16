@@ -270,7 +270,7 @@ describe('Surface', () => {
     const { s, btn } = signup()
     s.root.appendChild(image('photo', new Texture(), 300, 30)); btn.appendChild(image('icon', new Texture(), 8, 8, 32, 32))
     s.tick(1 / 60)
-    expect(SURFACE_ORDER).toEqual({ slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 })
+    expect(SURFACE_ORDER).toEqual({ slab: -1, content: 0, glassBack: 1, glassFront: 2, innerGlassBack: 2.25, innerGlassFront: 2.5, panels: 2.75, rims: 3, viewport: 3.25, images: 3.5, glyphs: 4 })
     expect(CONTENT_ORDER).toEqual({ panels: 0, shadows: 0.5, pools: 1, images: 1.5, glyphs: 2 })
     const fg = meshes(s)
     const quad = fg.filter(m => m.renderOrder === SURFACE_ORDER.content)
@@ -854,8 +854,8 @@ describe('Surface motion', () => {
     const fade = (x: Surface) => (x as unknown as { su: { opacity: unknown } }).su.opacity
     const reads = (x: Surface, m: Mesh) => materialGraph(m.material as Material).some(n => n === fade(x))
     const plane = meshes(s).filter(m => m.name !== 'capture-probe'), content = meshes(s.contentPass.scene)
-    const { content: quad, glassBack, glassFront, innerGlassBack, innerGlassFront, rims, images, glyphs } = SURFACE_ORDER
-    expect(new Set(plane.map(m => m.renderOrder))).toEqual(new Set([quad, glassBack, glassFront, innerGlassBack, innerGlassFront, rims, images, glyphs]))   // the inner glass fades too
+    const { content: quad, glassBack, glassFront, innerGlassBack, innerGlassFront, panels, rims, images, glyphs } = SURFACE_ORDER
+    expect(new Set(plane.map(m => m.renderOrder))).toEqual(new Set([quad, glassBack, glassFront, innerGlassBack, innerGlassFront, panels, rims, images, glyphs]))   // the inner glass and the panels riding glass fade too
     for (const m of plane) expect(reads(s, m)).toBe(true)
     expect(content.length).toBeGreaterThanOrEqual(4)                       // panels, pools, the photo, content glyphs
     for (const m of content) expect(reads(s, m)).toBe(false)
@@ -1323,6 +1323,16 @@ describe('nested glass', () => {
     let glyphs = 0; for (const pb of s.stack!.text.perPage.values()) glyphs += pb.buffer.count
     expect(glyphs).toBe(2)                                          // "Hi", not "Go"
   })
+  it('spatial §11.8: the stack holds the panels riding on the outer glass, not those riding on the inner', () => {
+    const { s, card, btn } = nested()
+    const chip = new Node('box'); chip.setStyle({ width: 60, height: 22, bg: 'accent' }); card.appendChild(chip)
+    const dot = new Node('box'); dot.setStyle({ width: 8, height: 8, bg: 'label' }); btn.appendChild(dot)
+    s.tick(1 / 60)
+    expect(s.foregroundPanels.buffer.count).toBe(2)                 // both ride glass on the plane
+    expect(s.stack!.panels.buffer.count).toBe(2)                    // the outer glass's fill and the chip on it
+    const accent = resolveColor('accent', theme, 'light')
+    expect(s.stack!.panels.buffer.get(1, 'iColor')).toEqual([...accent.slice(0, 3).map(srgbToLinear), accent[3]!].map(Math.fround))   // the chip, in its own colour
+  })
   it('renders the stack right after the content pass', () => {
     const { s } = nested(), r = stubRenderer()
     s.prepare(r, { width: 400, height: 300 }, 1)
@@ -1394,6 +1404,66 @@ describe('nested glass', () => {
     again.pass.target.addEventListener('dispose', freed)
     s.dispose()
     expect(freed).toHaveBeenCalled()
+  })
+})
+
+describe('Surface: panels on glass ride the glass (spatial §11.8)', () => {
+  /** A Card of glass raised 24 pt, 12 pt thick, holding a status chip and its label; a panel on the plate beside it. */
+  function carded() {
+    const s = new Surface({ width: 400, height: 300, ptPerUnit: 100 }, ctx)
+    const card = new Node('glass', 'card'); card.setStyle({ position: 'absolute', left: 40, top: 40, width: 200, height: 120, radius: 16, glass: { thickness: 12 } }); card.elevation = 24
+    const chip = new Node('box', 'chip'); chip.setStyle({ position: 'absolute', left: 20, top: 20, width: 60, height: 22, radius: 'capsule', bg: 'accent' })
+    const label = new Node('text', 'label'); label.setProp('value', '已发货')
+    const plate = new Node('box', 'plate'); plate.setStyle({ position: 'absolute', left: 260, top: 40, width: 100, height: 40, bg: 'fill' })
+    chip.appendChild(label); card.appendChild(chip); s.root.appendChild(card); s.root.appendChild(plate)
+    s.tick(1 / 60)
+    return { s, card, chip }
+  }
+  /** The panel `i` of `b` packs at this centre (units). */
+  const centre = (b: { buffer: { get(i: number, name: string): number[] } }, i = 0) => b.buffer.get(i, 'iRect').slice(0, 2)
+
+  it('a chip inside a raised Card is one foreground panel, on the Card\'s top face with its label (24 + 12 pt); the content pass no longer holds it', () => {
+    const { s } = carded()
+    expect(s.foregroundPanels.buffer.count).toBe(1)
+    expect(centre(s.foregroundPanels)).toEqual(surfaceToLocal(40 + 20 + 30, 40 + 20 + 11, s.model).map(Math.fround))   // the chip
+    expect(s.foregroundPanels.buffer.get(0, 'iMat2')[3]).toBeCloseTo(0.36)
+    const fgPage = [...s.foregroundText.perPage.values()][0]!
+    expect(fgPage.buffer.get(0, 'iMat2')[3]).toBeCloseTo(0.36)                         // its label, at the same height
+    // the content pass: the plate's panel only
+    expect(s.panels.buffer.count).toBe(1)
+    expect(centre(s.panels)).toEqual(surfaceToLocal(310, 60, s.model).map(Math.fround))
+    expect(s.panels.buffer.get(0, 'iMat2')[3]).toBe(0)
+    const content = meshes(s.contentPass.scene)
+    expect(content.some(m => m.geometry === s.foregroundPanels.geometry)).toBe(false)
+    expect(content.find(m => m.geometry === s.panels.geometry)!.renderOrder).toBe(CONTENT_ORDER.panels)
+  })
+  it('the foreground panels draw on the plane at 2.75, after the inner glass and before the rims, and fade with the Surface', () => {
+    const { s } = carded()
+    expect(SURFACE_ORDER.panels).toBe(2.75)
+    expect(SURFACE_ORDER.innerGlassFront).toBeLessThan(SURFACE_ORDER.panels); expect(SURFACE_ORDER.panels).toBeLessThan(SURFACE_ORDER.rims)
+    const mesh = meshes(s).filter(m => m.geometry === s.foregroundPanels.geometry)
+    expect(mesh).toHaveLength(1)
+    expect(mesh[0]!.parent).toBe(s.plane); expect(mesh[0]!.renderOrder).toBe(SURFACE_ORDER.panels); expect(mesh[0]!.frustumCulled).toBe(false)
+    const fade = (s as unknown as { su: { opacity: unknown } }).su.opacity
+    expect(materialGraph(mesh[0]!.material as Material)).toContain(fade)
+    // the content pass's panels do not: the RT is faded once, on its quad
+    const contentPanels = meshes(s.contentPass.scene).find(m => m.geometry === s.panels.geometry)!
+    expect(materialGraph(contentPanels.material as Material)).not.toContain(fade)
+  })
+  it('follows the Card: lowered to the plate, the chip rides 12 pt; taken off the Card, it goes back to the content pass', () => {
+    const { s, card, chip } = carded()
+    card.elevation = 0; s.tick(1 / 60)
+    expect(s.foregroundPanels.buffer.get(0, 'iMat2')[3]).toBeCloseTo(0.12)
+    card.removeChild(chip); s.root.appendChild(chip); s.tick(1 / 60)
+    expect(s.foregroundPanels.buffer.count).toBe(0); expect(s.panels.buffer.count).toBe(2)
+  })
+  it('dispose frees the foreground panels\' geometry and material', () => {
+    const { s } = carded()
+    const mesh = meshes(s).find(m => m.geometry === s.foregroundPanels.geometry)!
+    const freed: unknown[] = []
+    for (const o of [mesh.geometry, mesh.material as Material]) o.addEventListener('dispose', () => freed.push(o))
+    s.dispose()
+    expect(freed).toHaveLength(2)
   })
 })
 

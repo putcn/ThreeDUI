@@ -33,6 +33,32 @@ describe('partition', () => {
     expect(p.content.pools.map(d => d.kind)).toEqual(['pool']); expect(p.foreground.rims.map(d => d.kind)).toEqual(['rim'])
   })
 
+  it('spatial §11.8: a panel inside glass rides it (foreground, mapped in glassOf); a panel on the plate and a glass node\'s own focus ring stay content', () => {
+    const s = createSurface({ id: 'p', width: 400, height: 300 })
+    const plate = new Node('box', 'plate'); plate.setStyle({ width: 100, height: 40, bg: 'fill' })
+    const card = new Node('glass', 'card'); card.setStyle({ width: 240, height: 120, padding: 10, glass: { thickness: 12 } }); card.elevation = 24
+    const chip = new Node('box', 'chip'); chip.setStyle({ width: 60, height: 22, bg: 'accent' })
+    const label = new Node('text', 'label'); label.setProp('value', '已发货')
+    const field = new Node('box', 'field'); field.setStyle({ width: 80, height: 30, border: { width: 1, color: 'separator' } })
+    s.root.appendChild(plate); s.root.appendChild(card); card.appendChild(chip); chip.appendChild(label); card.appendChild(field)
+    card.setState({ focused: true, focusVisible: true }); field.setState({ focused: true, focusVisible: true })
+    engine.compute(s.root, 400, 300, () => ({ width: 20, height: 20 }))
+    const rl = buildRenderList(s, theme, 'light')
+    const p = partition(rl)
+    // the card's ring: its node is the glass itself (glass draws no panel of its own), its rect outside the glass's
+    const cardRing = rl.panels.find(x => x.node === card)!
+    expect(cardRing.rect.width).toBeGreaterThan(card.layout.width); expect(cardRing.border?.width).toBe(2.5)
+    expect(p.content.panels.map(x => x.node.id)).toEqual(['plate', 'card'])
+    expect(p.content.panels).toContain(cardRing)
+    // the chip's background, the field's border and the field's own focus ring (a box, not glass) all ride the card
+    expect(p.foreground.panels.map(x => x.node.id)).toEqual(['chip', 'field', 'field'])
+    expect(p.foreground.panels).not.toContain(cardRing)
+    for (const n of [chip, field]) expect(p.glassOf.get(n)?.node).toBe(card)
+    expect(p.glassOf.has(plate)).toBe(false)
+    expect(liftFor(p, chip)).toBe(12); expect(liftFor(p, label)).toBe(12); expect(liftFor(p, plate)).toBe(0)
+    expect(p.content.panels.length + p.foreground.panels.length).toBe(rl.panels.length)   // every panel, once
+  })
+
   // Hand-built lists: partition only reads `node`, `params.thickness` and `kind`, so the fixtures carry just those.
   const glassAt = (node: Node, thickness: number) => ({ node, params: { thickness } }) as unknown as GlassInstance
   const textAt = (node: Node) => ({ node }) as unknown as TextInstance

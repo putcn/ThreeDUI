@@ -115,6 +115,26 @@ describe('PanelBatch and material', () => {
     }
     expect(worst).toBeLessThan(1e-5)   // float32 packing
   })
+  it('lifts each instance lift(instance) pt along the plane normal, on top of its own elevation, as ImageSet lifts its images', () => {
+    const z = (b: PanelBatch, i: number) => evalNode(createPanelMaterial(b.geometry, su()).positionNode, { ...packed(b, i), position: [0, 0, 0] })[2]!
+    const flat = new PanelBatch(); flat.update([p], s)
+    expect(z(flat, 0)).toBeCloseTo(0, 9)                                          // no lift: on the plane
+    const b = new PanelBatch(); b.update([p], s, () => 12)
+    expect(z(b, 0)).toBeCloseTo(12 / s.ptPerUnit, 6)
+    // per instance, through the z sort: `near` (z 3, listed first) rides 12 pt on an elevation of 6, `far` stays put
+    const near: PanelInstance = { ...p, z: 3, elevation: 6 }, far: PanelInstance = { ...p, z: 2 }
+    const seen: PanelInstance[] = []
+    const two = new PanelBatch(); two.update([near, far], s, i => { seen.push(i); return i === near ? 12 : 0 })
+    expect(seen).toContain(near); expect(seen).toContain(far)
+    expect(z(two, 0)).toBeCloseTo(0, 9); expect(z(two, 1)).toBeCloseTo(18 / s.ptPerUnit, 6)
+  })
+  it('fades with the whole Surface: alpha × su.opacity (the content pass\'s uniforms have none)', () => {
+    const b = new PanelBatch(); b.update([p], s)
+    const at = { ...packed(b), position: [0, 0, 0] }
+    const full = evalNode(createPanelMaterial(b.geometry, su()).opacityNode, at, undefined, 0.01)[0]!
+    const half = evalNode(createPanelMaterial(b.geometry, { ...su(), opacity: uniform(0.5) }).opacityNode, at, undefined, 0.01)[0]!
+    expect(full).toBeCloseTo(0.8 * 0.5, 6); expect(half).toBeCloseTo(full * 0.5, 6)
+  })
   it('flatVertex grows the rasterised quad by its margin while q and size stay in rect units', () => {
     const b = new PanelBatch(); b.update([p], s)   // rect pt (10, 10)–(110, 50)
     const fv = flatVertex(b.geometry, su(), { marginPt: 2 })
@@ -198,13 +218,14 @@ describe('PanelBatch and material', () => {
 })
 
 describe('panel material shaders (generated under Node)', () => {
-  for (const forceWebGL of [false, true]) {
-    it(`${forceWebGL ? 'GLSL' : 'WGSL'}: builds with packed varyings only and the clip discard`, () => {
+  // the content pass's uniforms, and the plane's (with the Surface's opacity: the panels riding on glass, §11.8)
+  for (const forceWebGL of [false, true]) for (const plane of [false, true]) {
+    it(`${forceWebGL ? 'GLSL' : 'WGSL'}${plane ? ' (on the plane, su.opacity)' : ''}: builds with packed varyings only and the clip discard`, () => {
       const warnings: string[] = []
       const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
       try {
-        const b = new PanelBatch(); b.update([p], s)
-        const out = buildShaders(createPanelMaterial(b.geometry, su()), b.geometry, forceWebGL)
+        const b = new PanelBatch(); b.update([p], s, plane ? () => 12 : undefined)
+        const out = buildShaders(createPanelMaterial(b.geometry, plane ? { ...su(), opacity: uniform(1) } : su()), b.geometry, forceWebGL)
         // flatVertex's three and the panel's three packs, nothing else: the fragment reads no instance attribute (three
         // would add a varying for each it reads there) and, unlit, no view position (a lit basic material derives a
         // flat normal from one)
