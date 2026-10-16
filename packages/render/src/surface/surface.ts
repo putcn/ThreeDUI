@@ -186,16 +186,20 @@ function createCaptureProbe(capture: ScreenCapture): Mesh<PlaneGeometry, MeshBas
 
 /** How far behind a screen Surface's own z = 0 (the bottom of its slab) its floor lies, pt. */
 const FLOOR_DEPTH = 1
+/** How far past what the Surface shows its floor reaches on each side, as it shows on the screen plane, CSS px. */
+const FLOOR_PAD = 1
 
 /**
- * A screen Surface's first draw (`SURFACE_ORDER.floor`): a quad over its rect, `FLOOR_DEPTH` behind everything it draws
- * (its slab's bottom is its z = 0), writing that depth whatever is there (`depthFunc` always) and no colour. Every screen
- * Surface's content plane lies on the one screen-layer plane, its slab behind it; so without the floor, the depth an
- * earlier screen Surface's content quad wrote there hides a later one's slab (a Dialog's glass panel over its scrim:
- * only the panel's content showed). With it, each screen Surface stacks above the ones drawn before it (lower
- * `drawOrder`) as a whole: over its rect, its own draws test depth only against each other. World Surfaces have none:
- * they occlude each other by depth, as the scene does. three's WebGL backend leaves `colorMask` as the last draw set it
- * when it clears: the slab or content quad after it in the same group (always there) restores it, as for the probe.
+ * A screen Surface's first draw (`SURFACE_ORDER.floor`): a quad `FLOOR_DEPTH` behind everything it draws (its slab's
+ * bottom is its z = 0), writing that depth whatever is there (`depthFunc` always) and no colour. Every screen Surface's
+ * content plane lies on the one screen-layer plane, its slab behind it; so without the floor, the depth an earlier
+ * screen Surface's content quad wrote there hides a later one's slab (a Dialog's glass panel over its scrim: only the
+ * panel's content showed). With it, each screen Surface stacks above the ones drawn before it (lower `drawOrder`) as a
+ * whole: over its rect, its own draws test depth only against each other. Under a perspective camera what lies behind
+ * the plane shows nearer the viewport's centre, so the floor is sized by `Surface.fitScreenFloor`: it shows over all the
+ * Surface has behind the plane (plus `FLOOR_PAD`), the slab's rim included. World Surfaces have none: they occlude each
+ * other by depth, as the scene does. three's WebGL backend leaves `colorMask` as the last draw set it when it clears:
+ * the slab or content quad after it in the same group (always there) restores it, as for the probe.
  */
 function createScreenFloor(): Mesh<PlaneGeometry, MeshBasicNodeMaterial> {
   const m = new MeshBasicNodeMaterial()
@@ -339,6 +343,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private captureProbe: Mesh<PlaneGeometry, MeshBasicNodeMaterial> | null = null
   /** A screen Surface's depth floor (`createScreenFloor`); null on the world layer. */
   private readonly floor: Mesh<PlaneGeometry, MeshBasicNodeMaterial> | null = null
+  /** The eye's distance from the screen-layer plane, CSS px, as the screen layer last placed this Surface (`fitScreenFloor`). */
+  private eyePx = Infinity
   /** A glass Surface's depth capture for `depthReject`, shared by the slab's faces and the element glass (one depth copy per render); made on first use. */
   private depth: DepthCapture | null = null
   /** The content RT's blur pyramid on the 'kawase' tier (null otherwise), redrawn with it while there is glass to sample it. */
@@ -387,7 +393,6 @@ export class Surface extends Object3D<SurfaceEventMap> {
     if (this.model.placement === 'screen') {
       this.floor = createScreenFloor()
       this.own(this.floor.material)
-      this.floor.position.z = -FLOOR_DEPTH / this.model.ptPerUnit
       this.layer.add(this.floor)
     }
     const bg = this.model.background
@@ -685,12 +690,43 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.contentDirty = true
   }
 
+  /**
+   * Sizes a screen Surface's floor for an eye `eyePx` CSS px in front of the screen-layer plane (perspective; Infinity:
+   * orthographic, nothing shrinks), as this Surface stands now (its position and scale in the layer, its size): the
+   * screen layer calls it whenever it places the Surface (every `update`). A point k px behind the plane shows at
+   * eye/(eye + k) of its distance from the viewport's centre (the layer's origin, on the camera's axis). So what the
+   * Surface has behind the plane (its slab, down to its bottom) shows over its rect and over that rect drawn toward the
+   * centre (the slab's bottom: on the side facing the centre it shows past the rect). The floor covers both, plus
+   * `FLOOR_PAD`, as they show on the plane: lying farther back still, it is enlarged about the centre by
+   * (eye + its own depth)/eye to show there. A no-op on the world layer.
+   */
+  fitScreenFloor(eyePx: number): void { this.eyePx = eyePx; this.placeFloor() }
+
+  /** The floor at the Surface's current size, position and scale, for the last eye distance (`fitScreenFloor`). */
+  private placeFloor(): void {
+    const f = this.floor
+    if (!f) return
+    const { width, height, ptPerUnit: ppu } = this.model, s = this.scale, D = this.eyePx
+    if (!s.x || !s.y) return                                                 // scaled to nothing: it shows nothing
+    const far = Number.isFinite(D) && D > 0
+    // the rect in the layer (px, about the viewport's centre), and the slab's bottom drawn toward that centre
+    const hx = width / ppu / 2 * s.x, hy = height / ppu / 2 * s.y, cx = this.position.x, cy = this.position.y
+    const bottom = far ? D / (D + this.contentPlaneZ * s.z) : 1
+    const x0 = Math.min(cx - hx, (cx - hx) * bottom) - FLOOR_PAD, x1 = Math.max(cx + hx, (cx + hx) * bottom) + FLOOR_PAD
+    const y0 = Math.min(cy - hy, (cy - hy) * bottom) - FLOOR_PAD, y1 = Math.max(cy + hy, (cy + hy) * bottom) + FLOOR_PAD
+    // the floor, its own depth behind the plane, shows there when enlarged about the centre by (eye + depth)/eye
+    const k = far ? (D + (this.contentPlaneZ + FLOOR_DEPTH / ppu) * s.z) / D : 1
+    // into the Surface's own units (layer = position + scale · local)
+    f.scale.set((x1 - x0) * k / s.x, (y1 - y0) * k / s.y, 1)
+    f.position.set(((x0 + x1) / 2 * k - cx) / s.x, ((y0 + y1) / 2 * k - cy) / s.y, -FLOOR_DEPTH / ppu)
+  }
+
   private applySize(): void {
     const { width, height, ptPerUnit } = this.model
     const w = width / ptPerUnit, h = height / ptPerUnit
     this.su.size.value.set(w, h)
     this.contentMesh.scale.set(w, h, 1)
-    this.floor?.scale.set(w, h, 1)
+    this.placeFloor()
     if (this.backgroundGlass) {
       const thickness = Math.max(1, Math.min(width, height) * 0.05)   // pt; never 0 (the refraction divides by it)
       this.plane.position.z = thickness / ptPerUnit

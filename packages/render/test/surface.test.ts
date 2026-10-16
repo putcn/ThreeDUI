@@ -308,8 +308,16 @@ describe('Surface', () => {
     expect(m.transparent).toBe(true)                                     // sorted with the Surfaces' other draws, by group order
     expect(localZ(s, f)).toBe(-1)                                        // 1 pt behind the slab's bottom (its z = 0) ...
     for (const x of meshes(s)) if (x !== f) expect(localZ(s, x)).toBeGreaterThanOrEqual(0)   // ... so behind all it draws
-    expect([f.scale.x, f.scale.y]).toEqual([400, 300]); expect(f.castShadow).toBe(false)
-    s.setSize(480, 220); expect([f.scale.x, f.scale.y]).toEqual([480, 220])
+    expect([f.scale.x, f.scale.y]).toEqual([402, 302]); expect(f.castShadow).toBe(false)   // not placed yet: the rect, 1 px out
+    s.setSize(480, 220); expect([f.scale.x, f.scale.y]).toEqual([482, 222])
+    // placed off-centre under a perspective eye: it reaches past the rect toward the viewport's centre (the slab's
+    // bottom shows there) and is enlarged for its own depth (the root's replay test checks the depths it leaves)
+    s.position.set(-500, 0, -s.contentPlaneZ); s.fitScreenFloor(1000)
+    // where the floor's edge shows on the plane (the layer's x, drawn toward the centre for its depth), and the slab's
+    // bottom on the side facing the centre
+    const shown = (x: number) => (s.position.x + f.position.x + x * f.scale.x / 2) * 1000 / (1000 + s.contentPlaneZ + 1)
+    expect(shown(-1)).toBeLessThan(-500 - 240); expect(shown(1)).toBeGreaterThan((-500 + 240) * 1000 / (1000 + s.contentPlaneZ))
+    s.fitScreenFloor(Infinity); expect([f.scale.x, f.scale.y, f.position.x]).toEqual([482, 222, 0])   // orthographic: nothing shrinks
     const world = new Surface({ width: 400, height: 300, ptPerUnit: 100, placement: 'world', background: 'glass' }, ctx)
     expect(meshes(world).filter(x => x.renderOrder === SURFACE_ORDER.floor)).toHaveLength(0)
     const material = vi.spyOn(m, 'dispose'), geometry = vi.spyOn(f.geometry, 'dispose')

@@ -624,6 +624,61 @@ describe('the root API for the Vue layer', () => {
     expect(at(panel)[0]!.mesh.renderOrder).toBe(SURFACE_ORDER.floor)
     expect(Math.max(...at(backdrop).map(d => d.i))).toBeLessThan(at(panel)[0]!.i)
   })
+  it('a later screen Surface\'s floor covers its slab\'s projected outline (the rim too), centred or off-centre, under the perspective screen layer', async () => {
+    // the playground's camera and viewport (fov 38, 1728 × 867 CSS px), a scrim over the whole viewport, then a glass Surface
+    for (const at of [{ center: true }, { left: 0, top: 120 }, { left: 1300, top: 500 }] as const) {
+      const o = base(); o.renderer.getSize = (t: Vector2) => t.set(1728, 867)
+      const camera = new PerspectiveCamera(38, 1728 / 867, 0.1, 100)
+      const root = await createUIRoot({ ...o, camera })
+      const backdrop = root.createSurface({ fill: true, width: 1, height: 1, background: 'none' })
+      backdrop.root.setStyle({ bg: '#00000047' })
+      const [w, h] = 'center' in at ? [480, 260] : [300, 340]
+      const panel = root.createSurface({ ...at, width: w, height: h, background: 'glass', cornerRadius: 32 })
+      root.tick(0)
+      const layer = root.screen
+      layer.updateMatrixWorld(true)
+      const eye = layer.worldToLocal(camera.getWorldPosition(new Vector3()))   // the layer's units are CSS px; the eye on its axis
+      expect(Math.hypot(eye.x, eye.y)).toBeLessThan(1e-6)
+      const D = eye.z
+      /** A quad's rect in the layer's frame (px) and its z there (0: the screen plane). */
+      const rectOf = (m: Mesh) => {
+        const [a, b] = [[-0.5, -0.5], [0.5, 0.5]].map(([x, y]) => layer.worldToLocal(m.localToWorld(new Vector3(x, y, 0))))
+        return { x0: Math.min(a!.x, b!.x), x1: Math.max(a!.x, b!.x), y0: Math.min(a!.y, b!.y), y1: Math.max(a!.y, b!.y), z: a!.z }
+      }
+      const draws: { mesh: Mesh; s: Surface }[] = []
+      for (const s of [backdrop, panel]) s.layer.traverseVisible(x => { if (x instanceof Mesh) draws.push({ mesh: x, s }) })
+      draws.sort((a, b) => a.s.layer.renderOrder - b.s.layer.renderOrder || a.mesh.renderOrder - b.mesh.renderOrder)
+      // the slab's outermost outline: its wall at the rect's edges, from its bottom (−T) up to the wall top (−0.3·T,
+      // under the fillet's round-over: fillet = 0.3 · thickness), and the round-over's top at the plane
+      const rect = rectOf(panel.contentMesh), T = panel.contentPlaneZ * panel.scale.z
+      const xc = (rect.x0 + rect.x1) / 2, yc = (rect.y0 + rect.y1) / 2
+      const outline = [
+        ...[rect.x0, rect.x1].flatMap(x => [-T, -0.3 * T].map(z => new Vector3(x, yc, z))),
+        ...[rect.y0, rect.y1].flatMap(y => [-T, -0.3 * T].map(z => new Vector3(xc, y, z))),
+        new Vector3(rect.x0 + 0.3 * T, yc, 0), new Vector3(rect.x1 - 0.3 * T, yc, 0),
+      ]
+      for (const p of outline) {
+        // the pixel it shows at (its ray from the eye, on the plane), and every planar draw that ray meets there
+        const k = D / (D - p.z), px = p.x * k, py = p.y * k
+        let buffer = Infinity, passed = true
+        for (const { mesh, s } of draws) {
+          const m = mesh.material as Material, slab = s === panel && mesh.renderOrder === SURFACE_ORDER.slab
+          let d: number | null = null
+          if (slab) d = D - p.z
+          else if (mesh === s.contentMesh || mesh.renderOrder === SURFACE_ORDER.floor) {
+            const r = rectOf(mesh), t = (D - r.z) / D, x = px * t, y = py * t
+            if (x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1) d = D - r.z
+          }
+          if (d === null) continue
+          const pass = m.depthFunc === AlwaysDepth || !m.depthTest || d <= buffer
+          if (slab) passed &&= pass
+          if (m.depthWrite && pass && mesh !== panel.contentMesh) buffer = m.depthFunc === AlwaysDepth ? d : Math.min(buffer, d)
+        }
+        expect(passed, `${JSON.stringify(at)}: the slab at (${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)})`).toBe(true)
+      }
+      root.dispose()
+    }
+  })
   it('afterTick resolves with the tick\'s dt (a spring stepped there moves by it); a dispose resolves with 0', async () => {
     const { root } = await createRoot()
     const dts: number[] = []

@@ -40,6 +40,12 @@ export class ScreenLayer extends Group {
   distanceFactor = 4
   /** CSS px, ≥ 1 each (the last `update`'s). */
   viewport = { width: 1, height: 1 }
+  /**
+   * The eye's distance from the layer plane in CSS px (the last `update`'s): `viewport height · zoom / (2·tan(fov/2))`
+   * for a perspective camera, Infinity for an orthographic one (what lies behind the plane does not shrink). Each placed
+   * Surface sizes its depth floor by it (`Surface.fitScreenFloor`).
+   */
+  eyePx = Infinity
   readonly surfaces = new Set<Surface>()
   private readonly placements = new Map<Surface, ScreenPlacement>()
 
@@ -67,11 +73,13 @@ export class ScreenLayer extends Group {
     if ('fill' in at) {
       if (s.model.width !== vw || s.model.height !== vh) s.setSize(vw, vh)
       s.position.set(0, 0, 0 - s.contentPlaneZ * s.scale.z)   // `0 −`: +0, not −0, without a glass background
-      return
+    } else if ('center' in at) {
+      s.position.set(0, 0, 0 - s.contentPlaneZ * s.scale.z)
+    } else {
+      const w = s.model.width * s.scale.x, h = s.model.height * s.scale.y
+      s.position.set(at.left + w / 2 - vw / 2, vh / 2 - (at.top + h / 2), 0 - s.contentPlaneZ * s.scale.z)
     }
-    if ('center' in at) { s.position.set(0, 0, 0 - s.contentPlaneZ * s.scale.z); return }
-    const w = s.model.width * s.scale.x, h = s.model.height * s.scale.y
-    s.position.set(at.left + w / 2 - vw / 2, vh / 2 - (at.top + h / 2), 0 - s.contentPlaneZ * s.scale.z)
+    s.fitScreenFloor(this.eyePx)   // where it now stands, for this eye
   }
 
   /**
@@ -85,7 +93,9 @@ export class ScreenLayer extends Group {
     camera.getWorldDirection(fwd); camera.getWorldPosition(pos); camera.getWorldQuaternion(q)
     this.position.copy(pos).addScaledVector(fwd, distance)
     this.quaternion.copy(q)
-    this.scale.setScalar(screenUnitsPerPx(camera, this.viewport.height, distance))
+    const unitsPerPx = screenUnitsPerPx(camera, this.viewport.height, distance)
+    this.scale.setScalar(unitsPerPx)
+    this.eyePx = (camera as PerspectiveCamera).isPerspectiveCamera ? distance / unitsPerPx : Infinity
     for (const [s, at] of this.placements) this.apply(s, at)
     this.updateMatrixWorld()
   }
