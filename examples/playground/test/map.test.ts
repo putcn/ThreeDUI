@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { BufferGeometry, Color, Group, InstancedMesh, LineSegments, Matrix4, Mesh, PerspectiveCamera, Raycaster, Texture, Vector2, Vector3, type Material, type Object3D } from 'three'
+import { BufferAttribute, BufferGeometry, Color, Group, InstancedMesh, LineSegments, Matrix4, Mesh, PerspectiveCamera, Raycaster, Texture, Vector2, Vector3, type Material, type Object3D } from 'three'
 import { defaultTheme, GlassUIError } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
 import { napiCanvas } from '../../../packages/vue/test/fixtures/mount'
@@ -511,7 +511,7 @@ describe('the network map', () => {
   it('a pan or a turn moves the frames only: the prisms and diamonds are written again only for a new scale or hover; the labels only when the view or the eye moves (Task 9P R3)', () => {
     const m = make(), store = prisms(m.group, 'store'), diamonds = named(m.group, 'diamonds') as LineSegments
     m.update(1 / 60, ctx())
-    const versions = (): number[] => [store.instanceMatrix.version, diamonds.geometry.getAttribute('position').version]
+    const versions = (): number[] => [store.instanceMatrix.version, (diamonds.geometry.getAttribute('position') as BufferAttribute).version]
     let was = versions()
     m.pan(40, 10); m.update(1 / 60, ctx()); m.rotate(0.3, 0.1); m.update(1 / 60, ctx())
     expect(versions()).toEqual(was)

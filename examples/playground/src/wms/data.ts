@@ -129,12 +129,23 @@ export const TODAY = { year: 2026, month: 10, day: 15, label: '2026年10月15日
 const DAY_MS = 86_400_000
 /** Orders by weekday (Sunday first), as a factor of the trend: outbound peaks on Monday and Friday, receiving early in the week (the weekend's replenishment arrives on Monday). */
 const WEEKDAY = { out: [0.74, 1.06, 1.04, 1.0, 1.02, 1.08, 0.8], in: [0.56, 1.18, 1.1, 1.0, 0.98, 0.94, 0.62] } as const
-/** The National Day holiday (10-01 to 10-07): a pre-holiday rush, a holiday lull, a restock after. */
-function holiday(m: number, d: number, dir: 'in' | 'out'): number {
-  if (m === 9 && d >= 27) return dir === 'out' ? 1.16 : 1.05
-  if (m === 10 && d <= 5) return dir === 'out' ? 0.58 : 0.42
-  if (m === 10 && d <= 7) return dir === 'out' ? 0.8 : 0.7
-  if (m === 10 && d <= 10) return dir === 'out' ? 1.06 : 1.32
+/**
+ * The National Day holiday (of `TODAY`'s year): its first day and how many days it lasts (10-01 to 10-07). The one
+ * place it is set: the days off (`isDayOff`) and the 30-day flow's factor (`holidayFactor`) both read it.
+ */
+export const HOLIDAY = { month: 10, day: 1, days: 7 } as const
+/** Days from the holiday's first day to (`m`, `d`) of `TODAY`'s year: negative before it. */
+const holidayDay = (m: number, d: number): number => Math.round((Date.UTC(TODAY.year, m - 1, d) - Date.UTC(TODAY.year, HOLIDAY.month - 1, HOLIDAY.day)) / DAY_MS)
+/**
+ * The 30-day flow's factor for the holiday (`HOLIDAY`), on (`m`, `d`): a rush the four days before, a lull through it
+ * (softer its last two days), a restock the three days after; 1 otherwise.
+ */
+export function holidayFactor(m: number, d: number, dir: 'in' | 'out'): number {
+  const h = holidayDay(m, d), n = HOLIDAY.days
+  if (h >= -4 && h < 0) return dir === 'out' ? 1.16 : 1.05          // the four days before
+  if (h >= 0 && h < n - 2) return dir === 'out' ? 0.58 : 0.42        // the holiday
+  if (h >= n - 2 && h < n) return dir === 'out' ? 0.8 : 0.7          // its last two days
+  if (h >= n && h < n + 3) return dir === 'out' ? 1.06 : 1.32        // the three days after
   return 1
 }
 
@@ -152,8 +163,8 @@ function makeFlow(rand: () => number): Flow {
     const date = new Date(end - i * DAY_MS), m = date.getUTCMonth() + 1, d = date.getUTCDate(), wd = date.getUTCDay()
     const trend = 1 + (29 - i) / 29 * 0.1, noise = (): number => 0.95 + rand() * 0.1
     flow.labels.push(`${pad(m)}-${pad(d)}`)
-    flow.outbound.push(Math.round(1640 * trend * WEEKDAY.out[wd]! * holiday(m, d, 'out') * noise()))
-    flow.inbound.push(Math.round(1320 * trend * WEEKDAY.in[wd]! * holiday(m, d, 'in') * noise()))
+    flow.outbound.push(Math.round(1640 * trend * WEEKDAY.out[wd]! * holidayFactor(m, d, 'out') * noise()))
+    flow.inbound.push(Math.round(1320 * trend * WEEKDAY.in[wd]! * holidayFactor(m, d, 'in') * noise()))
   }
   // today and yesterday as the outbound KPI states them: 1,932 orders, +8.4 %
   flow.outbound[29] = 1932; flow.outbound[28] = 1782
@@ -196,10 +207,10 @@ const HOURS = {
   rest: [1.1, 0.7, 0.5, 0.4, 0.3, 0.4, 0.7, 1.4, 2.8, 4.6, 6.0, 6.8, 6.2, 5.4, 5.8, 6.4, 6.8, 6.2, 5.0, 4.6, 4.2, 3.4, 2.4, 1.6],
 } as const
 
-/** Whether the day 'MM-DD' (of `TODAY`'s year) is a day off: a weekend, or the National Day holiday (10-01 to 10-07). */
+/** Whether the day 'MM-DD' (of `TODAY`'s year) is a day off: a weekend, or a day of the National Day holiday (`HOLIDAY`). */
 export function isDayOff(label: string): boolean {
-  const [m, d] = label.split('-').map(Number) as [number, number], wd = new Date(Date.UTC(TODAY.year, m - 1, d)).getUTCDay()
-  return wd === 0 || wd === 6 || (m === 10 && d <= 7)
+  const [m, d] = label.split('-').map(Number) as [number, number], wd = new Date(Date.UTC(TODAY.year, m - 1, d)).getUTCDay(), h = holidayDay(m, d)
+  return wd === 0 || wd === 6 || (h >= 0 && h < HOLIDAY.days)
 }
 
 /** The 14 whole days before `TODAY`, by hour: each day's flow total spread over the hours (±6 % noise), summing to it. */

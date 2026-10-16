@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { Box3, Color, InstancedMesh, Matrix4, Mesh, Vector3, type BufferGeometry, type Object3D } from 'three'
 import { defaultTheme } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
-import { alerts, binLevel, bins, CATEGORIES, createWmsData, flow30d, heat, isDayOff, kpis, laneSummary, lanesOf, mulberry32, network, orders, outboundToday, SEED, SHORT_PICK, stock, stockLevel, utilisation, zones } from '../src/wms/data'
+import { alerts, binLevel, bins, CATEGORIES, createWmsData, flow30d, heat, HOLIDAY, holidayFactor, isDayOff, kpis, laneSummary, lanesOf, mulberry32, network, orders, outboundToday, SEED, SHORT_PICK, stock, stockLevel, utilisation, zones } from '../src/wms/data'
 import { AGV_SPEED, createWarehouse, HOVER_LIFT, YAW_LIMIT } from '../src/wms/warehouse'
 
 const ctx = (o: Partial<Viewport3DContext> = {}): Viewport3DContext => ({ width: 1200, height: 680, reducedMotion: false, theme: defaultTheme, scheme: 'light', ...o })
@@ -116,6 +116,18 @@ describe('wms data', () => {
     expect(['10-01', '10-04', '10-07', '10-10', '10-11'].map(isDayOff)).toEqual([true, true, true, true, true])
     expect(['10-08', '10-09', '10-12', '10-14', '10-15'].map(isDayOff)).toEqual([false, false, false, false, false])
     expect(heat.days.filter(isDayOff)).toEqual(['10-01', '10-02', '10-03', '10-04', '10-05', '10-06', '10-07', '10-10', '10-11'])
+  })
+  it('the holiday is set once (HOLIDAY): its days are the days off it makes and the flow\'s lull, with the rush before and the restock after (Task 9P R4)', () => {
+    expect(HOLIDAY).toEqual({ month: 10, day: 1, days: 7 })
+    for (const label of flow30d.labels) {
+      const [m, d] = label.split('-').map(Number) as [number, number]
+      const inIt = m === HOLIDAY.month && d >= HOLIDAY.day && d < HOLIDAY.day + HOLIDAY.days
+      const weekday = ![0, 6].includes(new Date(Date.UTC(2026, m - 1, d)).getUTCDay())
+      if (weekday) expect(isDayOff(label), label).toBe(inIt)
+      expect(holidayFactor(m, d, 'out') < 1, label).toBe(inIt)                       // the lull is exactly the holiday
+    }
+    expect(holidayFactor(9, 27, 'out')).toBeGreaterThan(1); expect(holidayFactor(9, 26, 'out')).toBe(1)   // the rush: four days before
+    expect(holidayFactor(10, 10, 'in')).toBeGreaterThan(1); expect(holidayFactor(10, 11, 'in')).toBe(1)   // the restock: three days after
   })
   it('the place panel\'s lane summaries: "→ 7 家门店、2 个仓库 · n 件" out of 一号仓, "← 2 家供应商 · n 件" into it', () => {
     const { inbound, outbound } = lanesOf(network, 'WH-1')
