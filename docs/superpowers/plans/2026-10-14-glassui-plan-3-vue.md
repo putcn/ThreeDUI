@@ -5065,6 +5065,8 @@ git commit -m "feat(vue): <GlassContainer> and glassId morph transitions"
 - Create: `packages/vue/test/manifest.test.ts`
 - Modify: root `package.json` (`"manifest": "GLASSUI_WRITE_MANIFEST=1 vitest run packages/vue/test/manifest.test.ts"`), `packages/vue/package.json` (devDependency `@vue/compiler-dom` 3.5.44; `"files"`/`"exports"` include `manifest.json`)
 
+**Spatial note (spatial spec §13, Tasks 19A–19B run after this task):** the manifest is generated from each component's meta, so Space's `layout`, `columns`, `overview`, `standby` and `arrive` reach it when Task 19B lands; Task 19B regenerates `manifest.json` (`pnpm manifest`) in its commit and adds a grid + overview example.
+
 **Interfaces:**
 - Consumes: `glassComponents()` and each component's `glass` meta; core `StyleSchema`, `STYLE_KEYS`, `defaultTheme`, the tw grammar (export core's `known(theme)` list as `twClasses(theme)`); `HOST_TAGS`.
 - Produces: `generateManifest(): GlassManifest`, serialised with 2-space JSON, keys in a stable order:
@@ -5147,7 +5149,7 @@ git commit -m "feat(vue): generated manifest.json — components, props, events,
 ### Task 19: The playground in Vue — sign-up, world, gallery, performance scene
 
 **Files:**
-- Create: `examples/playground/src/scenes/{SignUp.vue, World.vue, Both.vue, Perf.vue}`; Modify: `examples/playground/src/scenes/Spatial.vue` (Task 9F's sketch → the full flow)
+- Create: `examples/playground/src/scenes/{SignUpForm.vue, SignUp.vue, World.vue, Both.vue, Perf.vue}` (`SignUpForm.vue`: the form's content alone, reused by Task 19C's login HUD; `SignUp.vue`: the scene around it). `Spatial.vue` is not touched here: its login and settings moved to Task 19C (spatial spec §13)
 - Modify: `examples/playground/src/main.ts`, `examples/playground/src/gallery/Gallery.vue`
 - Delete: `examples/playground/src/signup.ts`, `examples/playground/src/world.ts`, `examples/playground/src/icons.ts` (moved to `@glassui/vue` in Task 8); keep `wall.ts` (the host scene)
 
@@ -5169,11 +5171,7 @@ git commit -m "feat(vue): generated manifest.json — components, props, events,
   - Positions use Stack layout (not absolute coordinates) wherever the reference allows.
   - `World.vue`: the world-layer card from Plan 2 (`Surface layer="world"` with a Switch and two Buttons) behind the wall.
   - `Perf.vue` (spec §10): a screen Surface with 100 Buttons (5 variants × 20) and 20 `GlassContainer`s of 3 circle buttons each, all visible at 1280 × 900.
-  - `Spatial.vue` (Task 9K's WMS preview) gains spatial spec §4 steps 1 and 5.
-    - A login Block (`login`, focused first): the user's demo form, i.e. `SignUp.vue`'s content inside a `Block`. Its primary button (`login-submit`) shows `loading` for 0.6 s.
-    - On success the login Block leaves with `leaveTo = { rotation: [-0.5, 0, 0], position: [0, -0.4, -2.5], opacity: 0 }`, and focus moves to `overview`.
-    - The avatar in the overview top bar (`overview-avatar`) focuses a `settings` Block: a display-name `Input`, a notifications `Switch`, a `Checkbox`, and "保存" / "返回" `Button`s (`settings-back`).
-    - "退出登录" in settings (`settings-logout`) brings the login Block back.
+  - `SignUpForm.vue` emits `submit` with `{ name, email, password, terms, remember }` when its primary button is pressed, and takes `loading?: boolean` and `errors?: { email?: string; password?: string }` props (shown under the fields), so Task 19C's login HUD drives it. The spatial scene's login and settings are Task 19C's (spatial spec §13.4), not this task's.
   - `Gallery.vue` becomes a `Space`.
     - Each section is a `Block` named after it: `primitives`, `buttons`, `toggles`, `inputs`, `dialog`, `containers`.
     - `&focus=` picks the first focus.
@@ -5193,7 +5191,7 @@ The sign-up scene must keep the ids the harness reads (`name`, `email`, `passwor
 Run: `pnpm typecheck && pnpm playground:build`
 Expected: exit 0.
 
-**Controller check:** `?scene=signup` side by side with Plan 2's baseline (`examples/visual/tests/visual.spec.ts-snapshots/signup-webgpu.png`). The Vue form must read as the same design. List the differences in the report: the Inputs are real fields now, and the layout comes from Stack. Then check `?scene=perf` and `?scene=gallery` in the dark scheme, and walk `?scene=spatial` through spatial spec §4 on WebGPU and WebGL2. Take front and mid-flight screenshots, and judge them against the published demo's backdrop (bright pastel wall, no grey veil).
+**Controller check:** `?scene=signup` side by side with Plan 2's baseline (`examples/visual/tests/visual.spec.ts-snapshots/signup-webgpu.png`). The Vue form must read as the same design. List the differences in the report: the Inputs are real fields now, and the layout comes from Stack. Then check `?scene=perf` and `?scene=gallery` in the dark scheme, and confirm `?scene=spatial` still runs as Task 9P left it (its flow is Task 19C's).
 
 - [ ] **Step 3: Commit**
 
@@ -5203,6 +5201,610 @@ git commit -m "feat(playground): scenes rebuilt in Vue from the component librar
 ```
 
 (`git add -A` is safe here: it is scoped to `examples/playground`.)
+
+---
+
+### Task 19A: Overview framing, the hop, `root.idle`, gesture interceptors (render + core)
+
+Spatial spec §13.2, §13.3, §13.5 (idle), §13.9 (render tests). Read §13 before starting.
+
+**Files:**
+- Modify: `packages/render/src/rig.ts` (`framePose`, `CameraRig.frame`, `framing`, `settled`, the `hop` option, the per-mode parallax amplitude)
+- Modify: `packages/render/src/root.ts` (`UIRoot.idle`; `frame(nowMs?, opts?: { paced?: boolean })`; wherever the root reads `rig.target`, it also handles a framing rig, e.g. the light pose and `focusView`)
+- Modify: `packages/render/src/pointer.ts` (`ctrlKey`/`metaKey` on `BridgeEvent` and on dispatched pointer events; `addWheelInterceptor`, `addKeyInterceptor`), `packages/render/src/ime.ts` (`composing` getter)
+- Modify: core's pointer event type, where 9P added `buttons` and `shiftKey` (spatial spec §12.5): add `ctrlKey?: boolean` and `metaKey?: boolean` beside them
+- Modify: `packages/vue/src/root.ts` (`GlassRoot` picks the new members the Vue layer needs: `idle`, and the `pointer` interceptors)
+- Modify: `examples/playground/src/main.ts`: Task 19's `idle()` hook now reads `root.idle`
+- Test: `packages/render/test/rig.test.ts`, `packages/render/test/root.test.ts`, `packages/render/test/pointer.test.ts`
+
+**Interfaces:**
+- Consumes: `CameraRig`, `focusPose`, `fitDistance`, `restFrame` (rig.ts); `Surface.restPose`, `Surface.contentPlaneZ`, `Surface.model`; `PointerBridge.handle`; the root's tick-level `changed` and `cameraMoved` flags.
+- Produces:
+  - `export interface FrameOptions { immediate?: boolean; distanceScale?: number; pivot?: [number, number, number]; parallax?: number }`:
+    - `distanceScale` default 1;
+    - `parallax` in degrees, default 3;
+    - `pivot` defaults to the mean of the targets' rest content-plane centres.
+  - `export function framePose(targets: readonly Surface[], fovDeg: number, aspect: number, margin: number, distanceScale: number, out: { position: Vector3; quaternion: Quaternion }, pivot?: Vector3): Vector3`. It writes the pose that frames every target and returns the pivot. Its definition:
+    - View normal `n` = normalize(Σ each target's rest world normal), or `(0, 0, 1)` when the sum's length is below 1e-6.
+    - Orientation: the camera looks along −n, with up = world +y orthogonalised against n.
+    - Pivot P = `pivot` or the mean of the rest content-plane centres.
+    - Right `r` and up `u` come from the orientation.
+    - For each target's four rest corners `c` (content plane, ±w/2, ±h/2 in its rest world frame), compute `x = (c−P)·r`, `y = (c−P)·u`, `z = (c−P)·n`.
+    - `D = max over corners of z + max(|y|·k/t, |x|·k/(t·aspect))`, with `t = tan(fov/2)` and `k = 1 + 2·margin`.
+    - Position = `P + n·D·distanceScale`.
+  - `CameraRig.frame(targets: readonly Surface[], opts?: FrameOptions): Promise<boolean>`:
+    - `[]` throws `GlassUIError('CameraRig.frame', '至少要一个 Surface')`, and a screen Surface throws as `focus` does.
+    - It ends a pending `focus`/`frame` with `false`.
+    - Each `update` recomputes `framePose` (resize refits). The rebase-on-pivot-change and parallax logic is the same as for `focus`, with the pivot as the orbit centre and `opts.parallax` as the amplitude.
+    - Disposed or failed targets drop out of the list; with none left, it behaves like `focus` when its target goes away.
+  - `CameraRig.framing: readonly Surface[] | null` holds the targets while framing. `target` is null while framing. `lightPose` is non-null while focusing or framing.
+  - `CameraRig.settled: boolean`: the plain pose and the light are settled, and both parallax springs are at rest.
+  - `CameraRigOptions.hop?: number` (default 0.35, ≥ 0, validated like the others).
+    - Hopping applies when `focus` moves from one focused Surface to another, and is not immediate, not under reduced motion, not the rig's first focus, and not from framing.
+    - While hopping, each `update` pushes the camera's goal position along the goal's normal by `min(hop × |plain.position − goal.position|, 0.4 × d)`, where `d` is the fit distance.
+    - The light pose follows the un-pushed goal.
+    - Hopping ends when the plain pose settles.
+  - `UIRoot.idle: boolean` is true after a tick in which:
+    - no shown Surface was `contentDirty`, `needsFrame` or animating;
+    - the camera did not move;
+    - the rig, if any, is `settled`.
+  - `UIRoot.frame(nowMs?, opts?: { paced?: boolean })`: a paced frame does not feed the `'auto'` quality sampler. Frames the loop skipped are not drops.
+  - `PointerBridge.addWheelInterceptor(fn: (g: WheelGesture) => boolean): () => void`, with `interface WheelGesture { deltaX: number; deltaY: number; ctrlKey: boolean; metaKey: boolean; surface: Surface | null; screenX: number; screenY: number }`.
+    - Runs after the wheel's hover update and before `applyWheel` and dispatch.
+    - The first interceptor (in registration order) to return true consumes the wheel: `preventDefault`, no scroll, no dispatch.
+    - A throwing interceptor is logged (`console.error('[glassui] a wheel interceptor threw:', e)`) and counts as false.
+  - `ImeBridge.composing: boolean` (read-only; today a private field): whether the OS IME is composing in the active field. Task 19B reads it so an Escape that cancels a composition does not also leave the Block.
+  - `PointerBridge.addKeyInterceptor(fn: (g: KeyGesture) => boolean): () => void`, with `interface KeyGesture { key: string; type: 'keydown' | 'keyup'; shiftKey: boolean; surface: Surface | null; focused: Node | null }`.
+    - `surface` is where the key would go (`active ?? adopt()`), and `focused` is that Surface's `focus.current`.
+    - Runs before the Tab handling.
+    - Consumption and throwing follow the wheel interceptor's rules.
+
+- [ ] **Step 1: Write the failing tests**
+
+`rig.test.ts` (use the file's existing fake-Surface and camera helpers):
+
+```ts
+it('framePose fits every corner of every target with the margin, tight on one side', () => {
+  const a = worldSurface({ width: 488, height: 300, position: [-3, 0, 0] }), b = worldSurface({ width: 488, height: 300, position: [3, 0.5, -0.4], rotation: [0, -0.2, 0] })
+  const out = { position: new Vector3(), quaternion: new Quaternion() }
+  framePose([a, b], 40, 16 / 9, 0.08, 1, out)
+  const cam = new PerspectiveCamera(40, 16 / 9, 0.1, 100); cam.position.copy(out.position); cam.quaternion.copy(out.quaternion); cam.updateMatrixWorld()
+  let edge = 0
+  for (const s of [a, b]) for (const c of cornersOf(s)) {
+    const p = c.clone().project(cam)
+    expect(Math.abs(p.x)).toBeLessThanOrEqual(1 / 1.16 + 1e-6); expect(Math.abs(p.y)).toBeLessThanOrEqual(1 / 1.16 + 1e-6)
+    edge = Math.max(edge, Math.abs(p.x) * 1.16, Math.abs(p.y) * 1.16)
+  }
+  expect(edge).toBeCloseTo(1, 3)
+})
+it('distanceScale moves the camera away from the pivot by that factor', () => {
+  const s = [worldSurface({ width: 488, height: 300, position: [0, 0, 0] })]
+  const one = { position: new Vector3(), quaternion: new Quaternion() }, far = { position: new Vector3(), quaternion: new Quaternion() }
+  const pivot = framePose(s, 40, 1.5, 0.08, 1, one); framePose(s, 40, 1.5, 0.08, 1.25, far)
+  expect(far.position.distanceTo(pivot)).toBeCloseTo(one.position.distanceTo(pivot) * 1.25, 6)
+})
+it('frame refits on resize and orbits the pivot by the frame parallax (3° default)', () => {
+  const { rig, env, canvas } = makeRig()
+  const s = [worldSurface({ width: 488, height: 300, position: [-2, 0, 0] }), worldSurface({ width: 488, height: 300, position: [2, 0, 0] })]
+  void rig.frame(s, { immediate: true }); rig.update(1 / 60)
+  const before = env.camera.position.clone()
+  env.setAspect(1); rig.update(1 / 60); rig.update(5)
+  expect(env.camera.position.z).toBeGreaterThan(before.z)                          // narrower: further away
+  canvas.move({ pointerType: 'mouse', clientX: canvas.width, clientY: canvas.height / 2 })
+  for (let i = 0; i < 300; i++) rig.update(1 / 60)
+  const pivot = new Vector3(0, 0, s[0]!.contentPlaneZ)
+  const dir = env.camera.position.clone().sub(pivot).normalize()
+  expect(MathUtils.radToDeg(Math.atan2(dir.x, dir.z))).toBeCloseTo(3, 1)
+})
+it('focus from one Surface to another hops outward and lands square on the target; hop 0 does not', () => {
+  const run = (hop: number): number => {
+    const { rig, env } = makeRig({ hop })
+    const a = worldSurface({ width: 488, height: 300, position: [-4, 0, 0] }), b = worldSurface({ width: 488, height: 300, position: [4, 0, 0] })
+    void rig.focus(a, { immediate: true }); rig.update(1 / 60)
+    void rig.focus(b)
+    const goal = { position: new Vector3(), quaternion: new Quaternion() }; focusPose(b, env.camera.getEffectiveFOV(), env.aspect(), rig.margin, goal)
+    let bulge = 0
+    for (let i = 0; i < 600; i++) { rig.update(1 / 60); bulge = Math.max(bulge, env.camera.position.z - goal.position.z) }
+    expect(env.camera.position.distanceTo(goal.position)).toBeLessThan(1e-3)
+    return bulge
+  }
+  const d = run(0.35), flat = run(0)
+  expect(d).toBeGreaterThan(0.2); expect(flat).toBeLessThan(1e-3)
+})
+it('frame → focus does not hop, and the light pose follows the un-pushed goal', () => { /* as above: frame first, then focus(b); bulge < 1e-3 */ })
+it('frame([]) and a screen Surface throw; a disposed target drops out', () => { /* … */ })
+it('settled is false while a parallax spring moves and true once all rest', () => { /* … */ })
+```
+
+Write the last three in full in the same style (no placeholders in the committed test file).
+
+`root.test.ts`:
+
+```ts
+it('idle: true after a quiet tick; false while a Surface animates or the rig moves', async () => {
+  const root = await makeRoot(), s = root.createSurface({ layer: 'world', width: 200, height: 100 })
+  for (let i = 0; i < 5; i++) root.tick(1 / 60)
+  expect(root.idle).toBe(true)
+  void s.animateTo({ position: [1, 0, 0] }); root.tick(1 / 60); expect(root.idle).toBe(false)
+  for (let i = 0; i < 300; i++) root.tick(1 / 60); expect(root.idle).toBe(true)
+  const rig = root.createCameraRig(); void rig.focus(s); root.tick(1 / 60); expect(root.idle).toBe(false)
+})
+it('paced frames do not feed the auto quality sampler', async () => {
+  const root = await makeRoot({ quality: 'auto' }), sample = vi.spyOn(root.quality, 'sample')
+  root.frame(1000); root.frame(1067, { paced: true }); root.frame(1134, { paced: true })
+  expect(sample).toHaveBeenCalledTimes(1)
+})
+```
+
+`pointer.test.ts`:
+
+```ts
+it('a wheel interceptor consumes a ctrl wheel before dispatch and scrolling', () => {
+  const { bridge, node, canvas } = scrollFixture(), seen: WheelGesture[] = [], got: unknown[] = []
+  node.addEventListener('wheel', e => got.push(e))
+  const off = bridge.addWheelInterceptor(g => { seen.push(g); return g.ctrlKey })
+  const ev = wheelAt(canvas, node, { deltaY: 50, ctrlKey: true })
+  bridge.handle('wheel', ev)
+  expect(seen[0]).toMatchObject({ deltaY: 50, ctrlKey: true, metaKey: false }); expect(got).toEqual([]); expect(ev.defaultPrevented).toBe(true)
+  bridge.handle('wheel', wheelAt(canvas, node, { deltaY: 50, metaKey: false }))
+  expect(got).toHaveLength(1); expect(got[0]).toMatchObject({ ctrlKey: false, metaKey: false })
+  off(); bridge.handle('wheel', wheelAt(canvas, node, { deltaY: 50, ctrlKey: true })); expect(got).toHaveLength(2)
+})
+it('a key interceptor sees the target Surface and its focused node, and can consume the key', () => { /* Escape consumed → focus manager not called; returns false → dispatched */ })
+it('a throwing interceptor is logged and the event still dispatches', () => { /* … */ })
+```
+
+Use the helpers the file already has, or add small local ones: `scrollFixture`, `wheelAt` builds a `BridgeEvent` with `preventDefault` that sets `defaultPrevented`. Write every test in full.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `pnpm vitest run packages/render/test/rig.test.ts packages/render/test/root.test.ts packages/render/test/pointer.test.ts`
+Expected: FAIL (`framePose` is not exported, `frame` is not a function, `idle` is undefined, `addWheelInterceptor` is not a function).
+
+- [ ] **Step 3: Implement**
+
+- **Rig.** Generalise the goal step in `update`:
+  - a focus target gives `restFrame` + `focusPose`, with the pivot at its centre;
+  - framing gives `framePose`, with the pivot at P.
+  - Both then share the rebase, the parallax and the followers. The amplitude is per mode: the option's for focus, `opts.parallax` for frame.
+  - The hop pushes only the camera's goal, not the light's.
+- **Root.** Fold the existing `changed`/`cameraMoved` computation into `idle`.
+- **Pointer.** Interceptors are arrays of functions; the listed rules define them.
+
+- [ ] **Step 4: Run, typecheck, commit**
+
+Run: `pnpm vitest run packages/render packages/core && pnpm typecheck`
+Expected: PASS.
+
+```bash
+git add packages/render packages/core packages/vue/src/root.ts examples/playground/src/main.ts
+git commit -m "feat(render): the rig frames a set of Surfaces and hops between foci; root.idle and paced frames; wheel and key interceptors"
+```
+
+---
+
+### Task 19B: `<Space>` — the spherical grid, overview and standby (vue)
+
+Spatial spec §13.1, §13.2, §13.8, §13.9 (vue tests).
+
+**Files:**
+- Create: `packages/vue/src/spatial/grid.ts` (`gridSlots`), exported from `packages/vue/src/index.ts` next to `arcSlots`
+- Modify: `packages/vue/src/spatial/context.ts`:
+  - `SpaceContext` gains `mode: Readonly<Ref<'overview' | 'focus'>>`, `highlighted: Readonly<Ref<string | null>>`, `highlight(name: string | null, by: 'pointer' | 'keys'): void`, `standby: Readonly<Ref<boolean>>`, `row(name: string): number`, and `requestFocus(name: string | null)`;
+  - `BlockHandle` gains `height: Readonly<Ref<number>>` (world units);
+  - `LIFT = { position: [0, 0, 0.25] } as const`.
+- Modify: `packages/vue/src/components/Space.ts`, `packages/vue/src/components/Block.ts`
+- Modify: the vue test fixtures (fake root):
+  - the fake rig gains `frame` (records calls, returns a controllable promise);
+  - the fake pointer gains `addWheelInterceptor` / `addKeyInterceptor` (stores them so tests can call them);
+  - the fake root gains `idle`.
+- Test: `packages/vue/test/grid.test.ts`, `packages/vue/test/space-overview.test.ts`
+
+**Interfaces:**
+- Consumes: Task 19A `rig.frame`, `FrameOptions`, `addWheelInterceptor`, `addKeyInterceptor`, `WheelGesture`, `KeyGesture`; the existing `arcSlots`, `RECEDE`, Block's `place`/`rotate` helpers.
+- Produces:
+  - `gridSlots(sizes: readonly { width: number; height: number }[], columns: number, radius: number, gap: number): ArcSlot[]`. World units; row-major; spatial spec §13.1:
+
+    ```ts
+    export function gridSlots(sizes: readonly { width: number; height: number }[], columns: number, radius: number, gap: number): ArcSlot[] {
+      const rows = Math.ceil(sizes.length / columns)
+      const cw = Array.from({ length: columns }, (_, c) => Math.max(0, ...sizes.filter((_, i) => i % columns === c).map(s => s.width)))
+      const rh = Array.from({ length: rows }, (_, r) => Math.max(0, ...sizes.slice(r * columns, r * columns + columns).map(s => s.height)))
+      const W = cw.reduce((a, b) => a + b, 0) + gap * (columns - 1), H = rh.reduce((a, b) => a + b, 0) + gap * (rows - 1)
+      const xs = cw.map((w, c) => -W / 2 + cw.slice(0, c).reduce((a, b) => a + b + gap, 0) + w / 2)
+      const ys = rh.map((h, r) => H / 2 - rh.slice(0, r).reduce((a, b) => a + b + gap, 0) - h / 2)
+      return sizes.map((_, i) => {
+        const theta = xs[i % columns]! / radius, phi = ys[Math.floor(i / columns)]! / radius
+        const position: [number, number, number] = [radius * Math.sin(theta) * Math.cos(phi), radius * Math.sin(phi), radius - radius * Math.cos(theta) * Math.cos(phi)]
+        // R = Ry(−θ)·Rx(φ) as an XYZ Euler (three's order: Rx(α)·Ry(β)·Rz(γ))
+        const sb = Math.sin(-theta), cb = Math.cos(-theta), sa = Math.sin(phi), ca = Math.cos(phi)
+        const rotation: [number, number, number] = [Math.atan2(sa, cb * ca), Math.asin(Math.max(-1, Math.min(1, sb * ca))), Math.atan2(-sb * sa, cb)]
+        return { position, rotation }
+      })
+    }
+    ```
+
+  - `Space` props:
+    - `focus: z.string().nullable().optional()`;
+    - `layout: z.enum(['arc', 'grid']).default('arc')`;
+    - `columns: z.number().int().positive().optional()`;
+    - `radius` and `gap` become optional with layout-dependent defaults (arc 7 / 0.5, grid 24 / 0.4); describe both defaults in the zod `describe`;
+    - `overview: z.boolean().default(false)`;
+    - `standby: z.boolean().default(false)`.
+  - The §13.8 errors:
+    - `grid` without `columns` → `[Space.columns] layout 为 grid 时必须给 columns（正整数）`;
+    - `focus === null` without `overview` → `[Space.focus] 只有 overview 为 true 时才能为 null（表示总览）`;
+    - `standby` with a non-null focus → one `console.warn('[Space] standby 只在总览（focus 为 null）时生效')`.
+
+    Express the two errors the way other components report cross-prop errors (find the existing pattern in `define.ts` / `validate.ts`; a zod `superRefine` with the issue path set to the prop works when the formatter reads the path).
+  - Events: `update:focus` (payload `string | null`); `arrive` (payload `string | null`, emitted when the rig's `focus`/`frame` promise resolves `true` for the pose still current).
+  - Behaviour:
+    - Overview: `overview && focused === null`. With an unbound `focus` the Space keeps its own `string | null` state, still starting at the first Block.
+    - **Overview.**
+      - `rig.frame(<every registered Block's Surface>, { distanceScale: standby ? 1.25 : 1, parallax: 3, immediate: first || frozen })`, called again when the set, `standby` or a Surface changes.
+      - The previously active Block's `trapFocus` goes off and `root.pointer.setActive(null)` is called (it takes null today), so nothing inside a Block has the keys.
+    - **Block rest poses.**
+      - In overview: `own`, or `own ⊕ LIFT` for the highlighted Block.
+      - In focus mode: `own` for the focus and `own ⊕ RECEDE` for the others.
+    - **Opacity.**
+      - Every Block's target opacity is 0.35 while `standby`, else 1.
+      - Leaving standby, a Block waits `row(name) × 60` ms before springing to 1 (`setTimeout`; no wait under `frozen`).
+      - The rest watch passes the opacity with the pose (`animateTo({ ...rest, opacity })`).
+    - **Pointer in overview.**
+      - The Block's root box `onPointerenter` → `highlight(name, 'pointer')`, and `onPointerleave` → `highlight(null, 'pointer')` if it is still this Block.
+      - A press on the root box → `requestFocus(name)` (the existing path: an overview Block is unfocused).
+    - **Highlight look.** The highlighted Block's root box gets `border: { width: 4, color: 'accent' }` with the Block's radius. The visual checkpoint in 19D judges this; it may be retuned there.
+    - **Wheel interceptor**, active while `overview` is true:
+      - `ctrlKey || metaKey` wheels are consumed (return true). Others pass (false).
+      - Accumulate `deltaY` while consecutive wheels are ≤ 300 ms apart (reset otherwise).
+      - Focus mode: `acc ≥ 40` → `requestFocus(null)`, then reset.
+      - Overview: `acc ≤ −40`, with the gesture over a Block's Surface → `requestFocus(thatBlock)`, then reset.
+    - **Key interceptor**, active while `overview` is true. Focus mode, `keydown` of `Escape`:
+      - `g.surface` must be the focused Block's Surface, `g.focused?.props.textField` not `true`, and `root.ime?.composing` not true;
+      - when all hold → `requestFocus(null)` and true. Otherwise false: the Input blurs on its own Esc, and a Dialog's Surface is not the Block's.
+
+      Overview, `keydown` (all consumed):
+      - `Tab` / `Shift+Tab` moves the highlight through the slot order, wrapping;
+      - arrows move it on the grid (`columns`), clamped at the edges;
+      - `Enter` / `' '` focuses the highlighted Block;
+      - the first Tab with nothing highlighted highlights the first Block.
+    - Removing a Block (`v-if`) while in overview re-frames the rest.
+
+- [ ] **Step 1: Write the failing tests**
+
+`grid.test.ts`:
+
+```ts
+import { gridSlots } from '../src/spatial/grid'
+const rotate = ([x, y, z]: number[], [a, b, c]: number[]): number[] => {           // XYZ Euler, as Block.ts
+  const x1 = x! * Math.cos(c!) - y! * Math.sin(c!), y1 = x! * Math.sin(c!) + y! * Math.cos(c!)
+  const x2 = x1 * Math.cos(b!) + z! * Math.sin(b!), z2 = z! * Math.cos(b!) - x1 * Math.sin(b!)
+  return [x2, y1 * Math.cos(a!) - z2 * Math.sin(a!), y1 * Math.sin(a!) + z2 * Math.cos(a!)]
+}
+const SIZES = [[880, 1000], [1440, 1000], [1600, 1000], [1100, 900], [1280, 900], [1000, 900]].map(([w, h]) => ({ width: w! / 244, height: h! / 244 }))
+it('places a 3 × 2 grid row-major on the sphere, every Block facing the centre', () => {
+  const R = 24, slots = gridSlots(SIZES, 3, R, 0.4)
+  for (const s of slots) {
+    const [x, y, z] = s.position, d = Math.hypot(x, y, z - R)
+    expect(d).toBeCloseTo(R, 6)
+    const n = rotate([0, 0, 1], s.rotation), toC = [-x / R, -y / R, (R - z) / R]
+    n.forEach((v, i) => expect(v).toBeCloseTo(toC[i]!, 6))
+  }
+  expect(slots[0]!.position[1]).toBeGreaterThan(0); expect(slots[3]!.position[1]).toBeLessThan(0)   // row 0 above row 1
+  expect(slots[0]!.position[0]).toBeLessThan(slots[1]!.position[0]); expect(slots[1]!.position[0]).toBeLessThan(slots[2]!.position[0])
+  expect(slots[0]!.position[0]).toBeCloseTo(slots[3]!.position[0] * Math.cos(slots[0]!.rotation[0]) / Math.cos(slots[3]!.rotation[0]), 0)
+})
+it('a single Block sits at the origin facing +z', () => {
+  expect(gridSlots([{ width: 4, height: 3 }], 3, 24, 0.4)[0]).toEqual({ position: [0, 0, 0], rotation: [0, 0, 0] })
+})
+it('columns take their widest Block and keep the gap between cells', () => {
+  const s = gridSlots([{ width: 2, height: 1 }, { width: 2, height: 1 }, { width: 4, height: 1 }, { width: 2, height: 1 }], 2, 1e6, 0.5)
+  expect(s[1]!.position[0] - s[0]!.position[0]).toBeCloseTo(4 / 2 + 0.5 + 2 / 2, 3)               // column 0 is 4 wide (row 1's)
+  expect(s[0]!.position[1] - s[2]!.position[1]).toBeCloseTo(1 + 0.5, 3)
+})
+```
+
+`space-overview.test.ts` (fake root; mount `Space` with the six demo Block sizes, `layout: 'grid'`, `columns: 3`, `overview: true`, `v-model:focus` on a `ref<string | null>`):
+
+```ts
+it('focus null frames every Block; standby frames further and fades the Blocks to 0.35', async () => { /* rig.frame calls: surfaces = all six, distanceScale 1 then 1.25; each Surface's last animateTo target opacity 0.35 */ })
+it('leaving standby fades the rows in 60 ms apart', async () => { /* vi.useFakeTimers(); row 0 animateTo at 0 ms, row 1 at 60 ms, opacity 1 */ })
+it('a press on a Block in overview emits update:focus with its name and does not reach its content', async () => { /* … */ })
+it('ctrl-wheel out in focus mode goes to overview; small deltas add up within 300 ms only', async () => { /* 50 → null; 20 + 25 within 300 ms → null; 20, then 25 after 400 ms → none; a plain wheel → interceptor returns false */ })
+it('ctrl-wheel in over a Block in overview focuses it', async () => { /* deltaY −50, surface = twin's → 'twin' */ })
+it('Escape goes to overview unless a text field is focused, an IME composes, or the key is for another Surface', async () => { /* … */ })
+it('overview keys: Tab highlights and lifts, arrows move on the grid, Enter focuses', async () => { /* the highlighted Block's rest = own ⊕ LIFT; ArrowDown from column 1 row 0 → index 4; Enter → update:focus */ })
+it('arrive is emitted when the rig lands, not when it is cut short', async () => { /* resolve true → arrive(null); resolve false → nothing */ })
+it('a Block removed in overview re-frames the rest', async () => { /* … */ })
+it('errors: grid without columns; focus null without overview; standby with a focus warns once', () => { /* … */ })
+it('unbound focus with overview: Esc goes to overview and a press comes back', async () => { /* … */ })
+```
+
+Write every test in full against the fixtures (no placeholders in the committed file).
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `pnpm vitest run packages/vue/test/grid.test.ts packages/vue/test/space-overview.test.ts`
+Expected: FAIL (module `../src/spatial/grid` not found; Space rejects `layout`).
+
+- [ ] **Step 3: Implement**
+
+Follow the Interfaces block. Keep `Space.ts` readable; move the gesture logic into `packages/vue/src/spatial/gestures.ts` (`createSpaceGestures(ctx): { wheel(g): boolean; key(g): boolean }`). Update the `Space` and `Block` descriptions, examples and mistakes for the manifest:
+- an example `<Space layout="grid" :columns="3" overview v-model:focus="view">…`;
+- a mistake: `focus` null without `overview`.
+
+- [ ] **Step 4: Run, typecheck, commit**
+
+Run: `pnpm vitest run packages/vue && pnpm typecheck && pnpm playground:build`
+Expected: PASS. The existing Space/Block tests still pass: the arc layout and the bound-string focus are unchanged.
+
+```bash
+git add packages/vue
+git commit -m "feat(vue): <Space> spherical grid, overview and standby; pinch and Esc back to overview; overview pointer and keys"
+```
+
+---
+
+### Task 19C: The WMS demo flow and its six views (playground)
+
+Spatial spec §13.4, §13.6. The aurora backdrop is Task 19D; until then the spatial scene keeps the curved wall, recomputed for the grid's span.
+
+**Files:**
+- Create: `examples/playground/src/scenes/spatial-grid.ts`. It replaces `spatial-arc.ts`:
+  - `GRID = { columns: 3, radius: 24, gap: 0.4 }`;
+  - `BLOCKS` in slot order `orders, dashboard, network, inbound, twin, settings` with the §13.1 sizes;
+  - `SLOTS = gridSlots(…)`, the same function and inputs Space uses;
+  - `NETWORK`, `TWIN` and the info-panel offsets via `inFrameOf` (now composing the slot's full rotation, pitch included);
+  - the wall span helpers for the grid.
+
+  Delete `spatial-arc.ts` and move its tests.
+- Create: `examples/playground/src/wms/flow.ts` (the stage machine) and `examples/playground/src/wms/forms.ts` (validation, the inbound number, the order filter)
+- Create: `examples/playground/src/wms/{Breadcrumb.vue, Dock.vue, LoginHud.vue, Inbound.vue, Settings.vue, OrderDialog.vue}`
+- Modify: `examples/playground/src/scenes/Spatial.vue` (the Space in grid + overview + standby; the flow; the HUDs)
+- Modify: `examples/playground/src/wms/{Overview.vue → Dashboard.vue (rename), Orders.vue, Network.vue, Twin.vue, map.ts, warehouse.ts, data.ts}`
+- Modify: `packages/vue/src/icons.ts`: add `grid`, `chart`, `list`, `map`, `cube`, `inbox`, `refresh`, `logout` on the same 24-unit stroke grid, with aliases where natural, plus their entries in the icons test.
+- Modify: `examples/playground/src/main.ts` (`?stage=login|overview`; `?focus=` skips the login; `window.__glassui.focus()` returns the Space's focus, `null` in overview)
+- Test: `examples/playground/test/flow.test.ts`, `examples/playground/test/forms.test.ts`, `examples/playground/test/scene.test.ts` (grid slots; panels clear the twin's racks and the map at every yaw/pitch, as today, from the new poses)
+
+**Interfaces:**
+- Consumes: Task 19B `Space` (`layout`, `columns`, `overview`, `standby`, `arrive`), `gridSlots`; Task 19's `SignUpForm.vue` (emits `submit` with `{ name, email, password, terms, remember }`); Tasks 10–17 components (`Button` variants `glass | glassProminent | filled | tinted | plain`, `glassId`; `Switch`; `Checkbox`; `Input` with `type` / `leadingIcon`; `Dialog`; `GlassContainer`).
+- Produces:
+  - `flow.ts`:
+
+    ```ts
+    export type Stage = 'login' | 'entering' | 'overview' | 'operating'
+    export interface Flow { stage: Stage; focus: string | null; standby: boolean; autoZoomed: boolean }
+    export const AUTO_ZOOM_MS = 1000
+    export function initialFlow(p: { stage?: 'login' | 'overview'; focus?: string }): Flow
+    //   focus given → { stage: 'operating', focus, standby: false, autoZoomed: true }
+    //   stage 'overview' → { stage: 'overview', focus: null, standby: false, autoZoomed: true }
+    //   else → { stage: 'login', focus: null, standby: true, autoZoomed: false }
+    export function loginSucceeded(f: Flow): Flow                        // login → entering, standby false
+    export function arrived(f: Flow, at: string | null): { flow: Flow; autoZoomIn: number | null }
+    //   entering + at null + !autoZoomed → overview, autoZoomIn AUTO_ZOOM_MS; else unchanged, null
+    export function autoZoom(f: Flow): Flow                              // overview + focus null + !autoZoomed → operating 'dashboard', autoZoomed true
+    export function chose(f: Flow, focus: string | null): Flow          // any user navigation; autoZoomed true; stage from focus
+    export function loggedOut(f: Flow): Flow                            // → initialFlow({})
+    ```
+
+  - `forms.ts`:
+    - `validateLogin({ email, password }): { email?: string; password?: string }` with the messages `请输入有效的邮箱地址` and `密码至少 6 位`;
+    - `validateInbound(form: InboundForm): Partial<Record<keyof InboundForm | `sku${0|1|2}` | `qty${0|1|2}`, string>>`, where the supplier and PO number are required, at least one SKU row has both code and quantity > 0, and a row with one of the two needs the other;
+    - `inboundNumber(date: Date, seq: number): string` → `RK-20261016-001`;
+    - `filterOrders(orders, { query, overdueOnly, todayOnly })`, a case-insensitive match on the order number or the customer (Chinese included).
+  - The views and HUDs implement spatial spec §13.4 and §13.6 exactly; read them. Points the spec leaves to the plan:
+    - **Dock** (`Dock.vue`):
+      - a screen `Surface`, `background="none"`, 64 pt tall, bottom-centred 24 px above the viewport's bottom edge;
+      - `<Surface>` has no bottom anchor, so compute `left`/`top` from a reactive viewport size updated on `resize`;
+      - inside, a `GlassContainer` (spacing 16, gap 8) of circle `Button`s with `leadingIcon`: `grid` (总览), then `list` 订单, `chart` 运营看板, `map` 物流网络, `inbox` 入库作业, `cube` 仓储孪生, `gear` 设置;
+      - the current view's button is `variant="glassProminent"` with `glassId="dock-active"`, and it is keyed `name + '-on'` so a change re-mounts it and the morph runs. The others are `glass`.
+      - It emits `go(name | null)`.
+      - It is wrapped in `GlassTransition` and shown only while `stage === 'operating'`.
+    - **Breadcrumb** (`Breadcrumb.vue`): `总览 / <title>`. "总览" is a plain-variant small `Button`, and it emits `navigate(null)`. Every view's header uses it in place of today's "‹ 总览" link.
+    - **LoginHud** (`LoginHud.vue`):
+      - a centred screen `Surface` wrapping `SignUpForm`, scaled to fit as `SignUp.vue` does;
+      - `validateLogin` errors show under the fields;
+      - on success the primary button is `loading` for 800 ms, then it emits `success`;
+      - it sits inside a `GlassTransition` (leave 0.35 s: scale 0.9, opacity 0).
+    - **Dashboard**:
+      - "自动刷新" `Switch` (a 5 s interval with seeded steps from `data.ts`);
+      - the range `GlassContainer` of three small `Button`s, the active one `glassProminent` + `glassId="range-active"`;
+      - `data.ts` gains `today/week/month` series for the KPIs and the line of figures under the charts.
+    - **Orders**:
+      - search `Input` (`leadingIcon="search"`), the two `Checkbox`es, "导出" (`glass`; `loading` 800 ms, then the label "已导出" for 2 s);
+      - a row press opens `OrderDialog.vue` with the order's fields and "标记已发货" (`glassProminent`), which sets the row's status to 已发货 and closes.
+    - **Network**:
+      - a toolbar `GlassContainer` in the map's upper-right corner (an absolute `Box` over the `Viewport3D`): `plus`, `minus`, `refresh`, then three small text `Button`s 门店 / 仓库 / 供应商 that toggle their layer (`tinted` when shown, `glass` when hidden);
+      - `map.ts` gains `zoomBy(factor)`, `resetView()` and `setLayer(kind: 'store' | 'warehouse' | 'supplier', visible: boolean)`, which hides that kind's prisms, labels and the lanes touching it, with unit tests in `examples/playground/test/map.test.ts` if that file exists, else a new one.
+    - **Twin**:
+      - a presets `GlassContainer` 俯视 / 斜视 / 正视;
+      - `warehouse.ts` gains `setView(preset)`, which springs the model's yaw/pitch to `{ top: [0, 1.25], angled: [−0.5, 0.75], front: [0, 0.15] }`;
+      - an "只显示低库存" `Switch`; `warehouse.ts` gains `setLowOnly(on)`, which fades bins at ≥ 30 % occupancy to opacity 0.2.
+    - **Inbound** and **Settings**: as spec §13.6.
+      - Settings' "减少动态效果" writes `useRoot().anim.reducedMotion`.
+      - "画质" calls `useRoot().quality.set(tier)` and shows the current tier, read from `root.quality.tier` and updated on `root.on('quality')`.
+      - The logout confirm `Dialog` emits `logout`.
+    - **Spatial.vue**:
+      - holds a `Flow` in a `ref`;
+      - binds `v-model:focus` (a user change → `chose`), `standby` and `@arrive`;
+      - runs `arrived` → `setTimeout(autoZoom, autoZoomIn)` (cleared by any `chose`);
+      - shows `LoginHud` while `stage === 'login'` and `Dock` while `stage === 'operating'`;
+      - the twin's and the map's info panels as today.
+    - Element ids for the harness:
+      - `login-submit`;
+      - `dock-<name>` and `dock-overview`;
+      - `crumb-overview` (in each view, suffixed `-<name>`);
+      - `inbound-submit`, `inbound-confirm`;
+      - `order-row-0`;
+      - `settings-logout`, `logout-confirm`.
+
+- [ ] **Step 1: Write the failing tests (flow, forms, scene)**
+
+```ts
+// flow.test.ts
+it('login → entering → overview (+1 s) → dashboard, once', () => {
+  let f = initialFlow({}); expect(f).toEqual({ stage: 'login', focus: null, standby: true, autoZoomed: false })
+  f = loginSucceeded(f); expect(f).toMatchObject({ stage: 'entering', standby: false, focus: null })
+  const a = arrived(f, null); expect(a.autoZoomIn).toBe(1000); f = a.flow; expect(f.stage).toBe('overview')
+  f = autoZoom(f); expect(f).toMatchObject({ stage: 'operating', focus: 'dashboard', autoZoomed: true })
+  f = chose(f, null); expect(f).toMatchObject({ stage: 'overview', focus: null })
+  expect(arrived(f, null).autoZoomIn).toBeNull(); expect(autoZoom(f)).toEqual(f)
+})
+it('a choice during the hold wins over the auto zoom', () => {
+  let f = arrived(loginSucceeded(initialFlow({})), null).flow
+  f = chose(f, 'twin'); expect(autoZoom(f)).toEqual(f); expect(f).toMatchObject({ stage: 'operating', focus: 'twin' })
+})
+it('?stage=overview and ?focus= skip the auto zoom; logout starts over', () => {
+  expect(initialFlow({ stage: 'overview' })).toEqual({ stage: 'overview', focus: null, standby: false, autoZoomed: true })
+  expect(initialFlow({ focus: 'orders' })).toEqual({ stage: 'operating', focus: 'orders', standby: false, autoZoomed: true })
+  expect(loggedOut(initialFlow({ focus: 'orders' }))).toEqual(initialFlow({}))
+})
+// forms.test.ts
+it('validates the login', () => {
+  expect(validateLogin({ email: 'a@b', password: '12345' })).toEqual({ email: '请输入有效的邮箱地址', password: '密码至少 6 位' })
+  expect(validateLogin({ email: 'li@yuncang.cn', password: '123456' })).toEqual({})
+})
+it('validates the inbound form row by row', () => { /* empty → supplier, po, sku0 errors; a row with a code and no qty → qty error; one full row → {} */ })
+it('numbers inbound receipts by date and sequence', () => { expect(inboundNumber(new Date(2026, 9, 16), 1)).toBe('RK-20261016-001') })
+it('filters orders by number or customer, overdue and today', () => { /* includes a Chinese customer query */ })
+```
+
+`scene.test.ts`:
+- the six `SLOTS` equal `gridSlots(BLOCKS sizes, 3, 24, 0.4)`;
+- the bin panel clears the twin's racks at every yaw, and the place panel clears the map at every pitch. These are the existing checks, run from the new poses.
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `pnpm vitest run examples/playground/test`
+Expected: FAIL (modules not found).
+
+- [ ] **Step 3: Implement the modules, then the views and the scene**
+
+Then run `pnpm vitest run examples/playground/test packages/vue && pnpm typecheck && pnpm playground:build`. Expected: PASS.
+
+- [ ] **Step 4: Controller check (Chrome, outside the sandbox; not yet shown to the user)**
+
+Walk the flow on WebGPU and WebGL2:
+1. Login: wrong email → red text; success → loading → the HUD leaves; the grid comes forward row by row; 1 s; zoom to 运营看板.
+2. The dock: switch views. The camera hops (pulls back, then comes in), and the active dock glass flows to the new button.
+3. Back to overview: Ctrl+wheel out (Playwright `keyboard.down('Control')` + `mouse.wheel`), Esc, the dock's 总览, a breadcrumb.
+4. Overview: hover lifts and outlines a Block; a click and Ctrl+wheel in focus it; Tab, arrows and Enter work.
+5. The components in every view: search with Pinyin through CDP composition, the order dialog, the inbound validation, the confirm dialog and success text, the settings switches (reduce motion stops the hop), the quality buttons, logout back to the login HUD.
+6. No console errors.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add -A examples/playground packages/vue/src/icons.ts packages/vue/test
+git commit -m "feat(playground): the WMS demo flow — login HUD over the overview grid, the dock, breadcrumbs; inbound and settings views; components in every view"
+```
+
+(`git add -A` is scoped to `examples/playground`.)
+
+---
+
+### Task 19D: The aurora backdrop and idle pacing — visual checkpoint, show the user
+
+Spatial spec §13.5.
+
+**Files:**
+- Create: `examples/playground/src/aurora.ts`
+- Modify: `examples/playground/src/main.ts`:
+  - the spatial scene gets the dome instead of the curved wall;
+  - the loop updates the aurora before `root.frame` and paces idle frames;
+  - the HUD stats line shows `· idle 15 fps` while paced.
+- Modify: `examples/playground/src/scenes/spatial-grid.ts` (`DOME = { out: 8, yawMargin, pitchMargin }`, `domeSpan(...)`)
+- Modify: `examples/playground/src/wall.ts` only if a shared pastel helper is extracted (`pastelBase()`, used by both the wall and the aurora)
+- Test: `examples/playground/test/scene.test.ts` (dome coverage), `examples/playground/test/aurora.test.ts`
+
+**Interfaces:**
+- Consumes: Task 19A `root.idle`, `frame(now, { paced })`; Task 19C `GRID`, `SLOTS`, `BLOCKS`; three's `RenderTarget`, `MeshBasicNodeMaterial`, `SphereGeometry`, TSL.
+- Produces:
+  - `createAuroraDome(opts: { center: [number, number, number]; radius: number; yaw: [number, number]; pitch: [number, number]; size?: [number, number] }): AuroraDome`, with:
+
+    ```ts
+    export interface AuroraDome {
+      readonly mesh: Mesh
+      update(renderer: Renderer, nowSec: number, mode: 'live' | 'frozen' | 'reduced'): boolean
+      dispose(): void
+    }
+    ```
+
+    - `update` re-renders the RT when `mode === 'live'` and at least 1/15 s has passed since the last render, and once on the first call in any mode. It returns whether it rendered.
+    - `frozen` uses `AURORA.frozenTime`; `reduced` renders once at the current time and then holds.
+  - `AURORA = { rt: [512, 256], octaves: 3, speed: 0.12, strength: 0.35, rate: 15, frozenTime: 20, lighten: 0.5 }`, the tunables. `speed` multiplies seconds into the shader's `t`.
+  - The dome: a sphere section about `center` (the grid's centre `(0, 0, GRID.radius)`) of radius `GRID.radius + DOME.out`, spanning `yaw` and `pitch` (radians, as the grid measures them: yaw 0 at −z, pitch 0 level). It has a `BackSide` `MeshBasicNodeMaterial` sampling the RT (u along yaw, v along pitch, linear filtering), `fog: false`, no shadows. It is the host scene's only backdrop in the spatial scene.
+  - The RT pass: a 2 × 2 plane with a TSL `MeshBasicNodeMaterial` through an orthographic camera, rendered with `renderer.setRenderTarget(rt)`; the previous target is restored after. The colour:
+    - **Base:** the wall's pastel blobs and beam (`wall.ts`), without the dark blob at (0.18, 0.18), the dark beam side and the vignette, mixed toward white by `lighten`.
+    - **Bands:** the website's `band()`, ported to TSL (`fbm` unrolled in JS for `octaves`; `hash` = `fract(sin(dot(p, vec2(127.1, 311.7))) × 43758.5453)`). There are four bands at y 0.40 / 0.55 / 0.69 / 0.25, with widths, seeds and colours aqua `(0.62, 0.88, 0.96)`, lavender `(0.80, 0.74, 0.98)`, peach `(0.99, 0.87, 0.74)` and aqua again.
+    - **Mix:** `c = mix(c, colour, clamp(band × strength, 0, 1))` per band, in order. The result is never darker than the base, so there is no grey.
+  - `domeSpan(): { yaw: [number, number]; pitch: [number, number] }` covers every pose with margins (`DOME.yawMargin`, `DOME.pitchMargin`). The poses are standby (1.25), overview, and each slot's focus pose, each with its parallax corners (±3° overview/standby, ±2.5° focus), at the aspects 4:3, 16:10, 16:9, 1512 × 808 and 21:9, with the playground camera's fov.
+  - Idle pacing in `main.ts` (spatial scene only):
+    - `lastInput` is updated on the canvas's `pointermove`, `pointerdown`, `wheel` and `keydown`.
+    - When `root.idle` has held for 2 s and there has been no input for 2 s, `step` returns early unless 1/15 s has passed since the last paced frame. It then calls `aurora.update` and `root.frame(t, { paced: true })`.
+    - Otherwise it calls `aurora.update` and `root.frame(t)`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+// scene.test.ts
+it('the dome covers every view of the spatial scene', () => {
+  const span = domeSpan()
+  for (const aspect of [4 / 3, 16 / 10, 16 / 9, 1512 / 808, 21 / 9]) for (const pose of spatialPoses(aspect)) for (const ray of frustumCornerRays(pose, FOV, aspect)) {
+    const hit = raySphereFromInside(ray, [0, 0, GRID.radius], GRID.radius + DOME.out)
+    const { yaw, pitch } = anglesOnSphere(hit, [0, 0, GRID.radius])
+    expect(yaw).toBeGreaterThanOrEqual(span.yaw[0]); expect(yaw).toBeLessThanOrEqual(span.yaw[1])
+    expect(pitch).toBeGreaterThanOrEqual(span.pitch[0]); expect(pitch).toBeLessThanOrEqual(span.pitch[1])
+  }
+})
+// aurora.test.ts
+it('renders at most 15 times a second live, once frozen, and holds under reduced motion', () => {
+  const dome = createAuroraDome({ center: [0, 0, 24], radius: 32, yaw: [-0.6, 0.6], pitch: [-0.3, 0.3] }), r = fakeRenderer()
+  expect(dome.update(r, 0, 'live')).toBe(true); expect(dome.update(r, 0.03, 'live')).toBe(false); expect(dome.update(r, 0.07, 'live')).toBe(true)
+  const f = createAuroraDome({ center: [0, 0, 24], radius: 32, yaw: [-0.6, 0.6], pitch: [-0.3, 0.3] })
+  expect(f.update(r, 5, 'frozen')).toBe(true); expect(f.update(r, 9, 'frozen')).toBe(false)
+  const m = createAuroraDome({ center: [0, 0, 24], radius: 32, yaw: [-0.6, 0.6], pitch: [-0.3, 0.3] })
+  expect(m.update(r, 1, 'reduced')).toBe(true); expect(m.update(r, 2, 'reduced')).toBe(false)
+  expect(r.targets.at(-1)).toBeNull()                                                  // the target put back
+})
+it('the dome mesh neither casts nor receives shadows and is drawn from inside', () => { /* castShadow false, receiveShadow false, material.side BackSide */ })
+```
+
+Write the helpers (`spatialPoses`, `frustumCornerRays`, `raySphereFromInside`, `anglesOnSphere`, `fakeRenderer`) in full in the test files. `spatialPoses` builds each pose with the same math as the rig (`framePose`/`focusPose` imported from `@glassui/render`, given stand-in Surfaces made from `SLOTS` and `BLOCKS`).
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run examples/playground/test` (FAIL), then implement and run again (PASS). Then run `pnpm typecheck && pnpm playground:build`.
+
+- [ ] **Step 3: Visual checkpoint (controller), then show the user**
+
+`?scene=spatial` on WebGPU and WebGL2, at high and minimal:
+- The aurora is bright and airy, pastel, never grey, with no dark corners.
+- Its bands drift so slowly that a 10 s watch shows motion, but a glance does not.
+- It never draws in front of a Block; the glass backplates refract and blur it.
+- After 2 s idle the HUD shows `idle 15 fps`, and pointer movement returns to full rate at once.
+- `motion=frozen` gives an identical frame on reload.
+- Reduce motion in Settings freezes it.
+
+Retune `AURORA.speed` / `strength` / `lighten` against the screenshots if needed.
+
+Then send the user screenshots, with Chinese captions:
+1. standby + login HUD;
+2. overview;
+3. 运营看板;
+4. a mid-hop frame between two views;
+5. 入库作业 with a validation error;
+6. 设置;
+7. the order dialog.
+
+Then pause for the user's look, as at the earlier checkpoints.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A examples/playground
+git commit -m "feat(playground): a slow pastel aurora on a dome behind the spatial grid, rendered at 15 Hz; idle pacing"
+```
 
 ---
 
@@ -5229,11 +5831,13 @@ git commit -m "feat(playground): scenes rebuilt in Vue from the component librar
       - Checkbox checked and indeterminate;
       - Input empty, with a value and a selection, and focused;
     - `dialog` (the gallery's open-dialog button clicked).
-    - `spatial` (spatial spec §6), driven by real clicks with `&motion=frozen`:
-      - `spatial-login` (as loaded);
-      - `spatial-overview`: fill in the login form, click `login-submit`, then `await idle()`;
-      - `spatial-twin`: after clicking the twin Block, `await idle()`;
-      - `spatial-bin-hover`: on the twin, move the pointer to a fixed bin (a `rectOf('twin-view')` point the harness computes from the model), wait 500 ms; the info glass panel is shown.
+    - `spatial` (spatial spec §13.9; it replaces §6's cases), all `&motion=frozen` (the aurora frozen at `AURORA.frozenTime`):
+      - `spatial-login`: `?scene=spatial&stage=login`, as loaded;
+      - `spatial-flow`: from `stage=login`, fill the form, click `login-submit`, wait until `focus()` is `null` and `idle()`, screenshot (the overview), then wait until `focus()` is `'dashboard'` (the 1 s auto zoom) and `idle()`, and screenshot again;
+      - `spatial-inbound-error`: `?focus=inbound`, click `inbound-submit` with the form empty (the red errors);
+      - `spatial-settings`: `?focus=settings`;
+      - `spatial-order-dialog`: `?focus=orders`, click `order-row-0`;
+      - `spatial-bin-hover`: `?focus=twin`, move the pointer to a fixed bin (a `rectOf('twin-view')` point the harness computes from the model), wait 500 ms; the info glass panel is shown.
   - `ime.spec.ts` (Chromium CDP):
     1. Click the email Input and assert `__glassui.ime()`.
     2. Send `Input.imeSetComposition { text: 'ni', selectionStart: 2, selectionEnd: 2 }` and screenshot the field clipped (the composition underlined).
@@ -5278,10 +5882,9 @@ git commit -m "test(visual): component states, tiers, dark scheme, dialog and IM
     - loads `?scene=perf&quality=high&hud=0&motion=frozen` on `webgl2` (spec §10: "CI 上只做回归阈值（Chrome headless，WebGL 路径）") and `webgpu`;
     - waits 2 s, samples `stats()` for 120 frames, and writes `test-results/perf.json` with `{ frameMs, draws }` per backend;
     - fails when `draws > baseline.draws × 1.05` or `frameMs > baseline.frameMs × 1.5`;
-    - a spatial case (spatial spec §3.5, §6), on `webgpu` only:
-      - load `?scene=spatial&quality=high&hud=0&motion=live` and log in as Task 20 does;
-      - sample rAF intervals for the 1.2 s after the click;
-      - fail when their p95 exceeds 33 ms.
+    - spatial cases, on `webgpu` only, at 1512 × 808, DPR 2 (spatial spec §13.7):
+      - the switch: load `?scene=spatial&quality=high&hud=0&motion=live&focus=dashboard`, click `dock-network`, sample rAF intervals for the 1.2 s after the click, and fail when their p95 exceeds 33 ms;
+      - the overview: load `?scene=spatial&quality=high&hud=0&motion=live&stage=overview`, move the pointer in a slow circle for 2 s (parallax), sample the rAF intervals, and fail when their p95 exceeds 25 ms.
   - `perf-baseline.json`: the controller's first measurement on the reference machine, committed with the date and machine.
   - Optimisations (Plan 2 carry-overs M4, f, the pyramid crop and RT shrink hysteresis), each kept only when it measurably helps the perf scene or the unit-level counters:
     1. `AnimationRuntime.tick` skips subtrees with no transitions without allocating: cache `transitionKeys` per style object (`WeakMap<Style, Set>`), and read `effectiveStyle` only for nodes with keys or state branches that set `display`.
@@ -5289,6 +5892,7 @@ git commit -m "test(visual): component states, tiers, dark scheme, dialog and IM
     3. The high tier's backdrop fetches drop from 15 to 6 per fragment (Plan 2 f): each colour channel samples only the two pyramid levels bracketing `k = roughness·levels` (`select` on ⌊k⌋, no TSL `If` outside `Fn`). Prove it with the shader fixture (texture-sample count per channel) and a CPU `tsl-eval` equality test against today's mix.
     4. The Kawase pyramid covers the union of the glass rects plus a 2 × blur-radius margin (spec §5.6 "仅覆盖玻璃矩形并集 + 位移余量"): render each pass with a scissor or viewport over that rect, sample the same uv as today, and leave texels outside it untouched (never sampled).
     5. Content RT shrink hysteresis: done in Task 9A (`rtTarget`, spatial spec §2.1). Nothing to implement here; the report records how many content-RT reallocations one spatial focus switch causes.
+    7. Only if the overview case misses 25 ms (spatial spec §13.7): Surfaces whose projected rects do not overlap share one backdrop capture (they all see only the dome behind them). Prove it with a unit test that two non-overlapping glass Surfaces trigger one capture per frame, and an overlapping pair two.
     6. A world Surface seen at a grazing angle, wholly in front of the camera, projects to a huge bounding box (Plan 2 residual: up to the 4096 cap). Cap a world Surface's RT at the texels it can actually show: 2 × the viewport's device px on each axis. Pin it with a `projectedPx` test at a grazing angle.
 
 - [ ] **Step 1: The harness and the first baseline**
@@ -5297,7 +5901,7 @@ Write `perf.spec.ts`. The controller runs it outside the sandbox and commits `pe
 
 - [ ] **Step 2: Each optimisation as its own commit, test first**
 
-For each of 1–4 and 6:
+For each of 1–4, 6 and (when needed) 7:
 1. Write a unit test that pins the behaviour: identical output, and the count or allocation it removes.
 2. Implement.
 3. Run `pnpm test`.

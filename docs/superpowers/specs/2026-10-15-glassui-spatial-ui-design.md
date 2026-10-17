@@ -403,7 +403,7 @@ chart.update(dt: number, ctx: Viewport3DContext): boolean   // 交给 attach3D �
 
 - **操作模式里 Block 到 Block**：飞行中镜头的目标点沿目标 Block 的法线向后推 `hop × 剩余距离`（`hop` 默认 0.35，推远量不超过对焦距离的 40 %）。剩余距离随飞行缩小，所以路径向外拱起、最后正对目标到达；视觉上是"稍微拉远，再推近"。
 - **总览 ↔ 操作模式**：直接推拉（不拱起）。
-- 减少动态效果：镜头直接到位（同 §2.2）；Block 与 HUD 的出现、消失改用 0.2 秒的纯不透明度淡入淡出。
+- 减少动态效果：镜头、Block 与 HUD 都直接到终态（同 §2.2、§3.4；动画运行时在减少动态效果下让弹簧直接到位，没有可用的短淡入淡出，不为此另造补间）。
 
 ### 13.4 演示流程（playground `?scene=spatial`）
 
@@ -502,13 +502,13 @@ dashboard 改名为"运营看板"（Block 名 `dashboard`），"总览"一词只
 
 ### 13.10 插入 Plan 3 的任务
 
-Task 19 保留 signup、world、gallery 与性能场景的 Vue 化；它原来的 spatial 部分（登录与设置）移到 19D。新任务排在 Task 19 之后、Task 20 之前：
+Task 19 保留 signup、world、gallery 与性能场景的 Vue 化；它原来的 spatial 部分（登录与设置）移到 19C。新任务排在 Task 19 之后、Task 20 之前：
 
 | 任务 | 层 | 内容 |
 |---|---|---|
 | 19A | render + core | `rig.frame`、总览视差绕 `pivot`、`hop` 飞行路径（§13.2、§13.3）；`root.idle`（§13.5）；wheel 带 `ctrlKey`/`metaKey` |
 | 19B | vue | `Space` 的 `layout: 'grid'`、`columns`、`overview`、`standby`、`arrive`；总览里的悬停、点击、键盘；捏合与 Esc 回总览；Ctrl/⌘ 滚轮归 Space（§13.1、§13.2、§13.8） |
-| 19C | playground | 极光穹顶与闲置降帧（§13.5）；可视检查 |
-| 19D | playground | 演示流程（§13.4）：登录 HUD、总览停留与推进、导航坞、面包屑、退出登录、测试入口；六个 view 与组件（§13.6）；可视检查后给用户看 |
+| 19C | playground | 演示流程（§13.4）：登录 HUD、总览停留与推进、导航坞、面包屑、退出登录、测试入口；六个 view 与组件（§13.6）；可视检查 |
+| 19D | playground | 极光穹顶与闲置降帧（§13.5）；可视检查后给用户看（穹顶要按最终的网格与镜头位姿验证覆盖，所以排在流程之后） |
 
 对已有任务的调整：Task 20 的 spatial 用例按 §13.9；Task 21 加上 §13.7 的总览帧时间；Task 18 的 manifest 收录 `Space` 的新 props 与事件，示例里给一个 `layout="grid"` + `overview` 的写法。
