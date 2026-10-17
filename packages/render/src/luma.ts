@@ -193,6 +193,11 @@ export interface LumaFrame {
   renderer: RendererLike
   /** The last render list's glass. */
   glass: readonly GlassInstance[]
+  /**
+   * Glass drawn by other batches (fused slabs: one instance each over its shapes' bounds), in their luma order: texel
+   * `glass.length + j` is `extra[j]`'s, after the element glass's (`GlassBatch.update`'s `lumaBase`). Default none.
+   */
+  extra?: readonly GlassInstance[]
   surface: SurfaceDims
   /** The content RT's texture. */
   content: Texture
@@ -202,6 +207,8 @@ export interface LumaFrame {
   /** A glass or `'none'` Surface's (with a camera and a capture): what its element glass shows where the content is transparent. */
   behind?: LumaBehind
 }
+
+const NO_GLASS: readonly GlassInstance[] = Object.freeze([])
 
 /** The zero rect: what an element wholly behind the camera measures (a defined value, read by no visible glass). */
 const NO_RECT: LumaRect = Object.freeze({ u: 0, v: 0, w: 0, h: 0 })
@@ -234,6 +241,7 @@ export class SurfaceLuma {
   private materials: readonly GlassMaterial[] = []
   /** The glass list and Surface size the content rects were packed from, and that list in instance order. */
   private glass: readonly GlassInstance[] | null = null
+  private extra: readonly GlassInstance[] | null = null
   private sorted: readonly GlassInstance[] = []
   private width = 0
   private height = 0
@@ -262,12 +270,13 @@ export class SurfaceLuma {
    */
   update(f: LumaFrame): void {
     this.settle = f.redrawn ? LUMA_SETTLE : this.settle - f.dt
-    if (!(f.behind || this.settle > 0) || !f.glass.some(adaptiveClear)) return
-    const pass = this.fit(f.glass.length), s = f.surface
-    if (f.glass !== this.glass || s.width !== this.width || s.height !== this.height) {
-      this.sorted = [...f.glass].sort((a, b) => a.z - b.z)
+    const extra = f.extra ?? NO_GLASS
+    if (!(f.behind || this.settle > 0) || !(f.glass.some(adaptiveClear) || extra.some(adaptiveClear))) return
+    const pass = this.fit(f.glass.length + extra.length), s = f.surface
+    if (f.glass !== this.glass || extra !== this.extra || s.width !== this.width || s.height !== this.height) {
+      this.sorted = [...f.glass].sort((a, b) => a.z - b.z).concat(extra)
       pass.setRects(this.sorted.map(({ rect: r }) => ({ u: r.x / s.width, v: r.y / s.height, w: r.width / s.width, h: r.height / s.height })))
-      this.glass = f.glass; this.width = s.width; this.height = s.height
+      this.glass = f.glass; this.extra = extra; this.width = s.width; this.height = s.height
     }
     const behind = f.behind
     if (behind) pass.setScreenRects(this.sorted.map(g => screenRect(g.rect, s, behind)))

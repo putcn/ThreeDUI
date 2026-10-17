@@ -462,16 +462,17 @@ export function extrudeSlab(contours: readonly Contour[], shapes: readonly Fused
   const offsets: number[] = []
   const vertex = (ci: number, k: number, i: number) => offsets[ci]! + k * contours[ci]!.length + i
 
-  // outward normals per contour point: the field's gradient (`fusedNormal`), unless it is weak (|∇f| < 0.5: near a
+  // outward normals per contour point: the field's gradient (`fusedNormal`), unless it is weak (|∇f| < 0.25: near a
   // bridge's saddle, where it points anywhere — the outline traced there may even pinch where the field does not) or
-  // points into the traced outline; then the polyline's own, right of its tangent, which the outline agrees with
+  // points into the traced outline; then the polyline's own, right of its tangent, which the outline agrees with (a
+  // cut-off of 0.5 bent ordinary bridge normals by up to 6°)
   const outward = contours.map(c => {
     const n = c.length, on = new Float64Array(2 * n)
     c.forEach(([x, y], i) => {
       const [gx, gy] = fusedGradient(shapes, spacing, x + cx, cy - y), g = Math.hypot(gx, gy)
       const [px, py] = c[(i + n - 1) % n]!, [qx, qy] = c[(i + 1) % n]!, l = Math.hypot(qx - px, qy - py) || 1
       const tx = (qy - py) / l, ty = -(qx - px) / l
-      const weak = g < 0.5 || gx * tx + gy * ty <= 0
+      const weak = g < 0.25 || gx * tx + gy * ty <= 0
       on[2 * i] = weak ? tx : gx / g; on[2 * i + 1] = weak ? ty : gy / g
     })
     return on

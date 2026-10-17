@@ -1,4 +1,4 @@
-import { AddEquation, AlwaysDepth, Box3, Color, CustomBlending, Euler, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Quaternion, Vector2, Vector3, type Camera, type Material, type Object3DEventMap, type Texture } from 'three'
+import { AddEquation, AlwaysDepth, Box3, Color, CustomBlending, Euler, Group, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Quaternion, Vector2, Vector3, type Camera, type InstancedBufferGeometry, type Material, type Object3DEventMap, type Texture } from 'three'
 import { MeshBasicNodeMaterial, MeshStandardNodeMaterial, type UniformNode } from 'three/webgpu'
 import { bool, float, screenUV, texture, uniform, uv, vec2 } from 'three/tsl'
 import {
@@ -22,7 +22,8 @@ import { ContentPass, contentRTSize, rtTarget, RT_SETTLE_FRAMES, type RendererLi
 import { checkOpacity, SurfaceMotion, type PoseSpring, type ResolvedPose, type SurfacePose } from './motion'
 import { KawasePyramid } from '../blur/kawase'
 import { SurfaceLuma } from '../luma'
-import { liftFor, partition, splitNested, type Partition } from './partition'
+import { liftFor, partition, splitNested, type NestedSplit, type Partition } from './partition'
+import { FusedGlass, glassFaces, pressTarget } from './fused'
 import { StackPass } from './stack'
 import { toColor } from '../color'
 import { Viewport3DAttachment, type Attach3DOptions, type Viewport3DStep } from '../viewport'
@@ -243,6 +244,12 @@ function createScreenFloor(): Mesh<PlaneGeometry, MeshBasicNodeMaterial> {
  * outer glass; while there is some and the glass mode samples a backdrop, a stacked RT (`stack`) holds the content RT
  * with the outer glass drawn over it as translucent panels, and the inner glass sees that instead of the content.
  *
+ * Glass containers (spec §5.2): each cluster a container fuses (`RenderList.fused`) is drawn as one slab (`fused`:
+ * `FusedGlass`), its members out of the element glass, with materials made like the element glass's (by `buildGlass`):
+ * at the outer glass's orders, reading the luma after it; nested in glass, at the inner glass's, over the stacked RT.
+ * What rides on a member rides on the slab's top (`liftFor`). The 'fill' glass mode draws no fused slab: the members
+ * go back into the element glass, each on its own.
+ *
  * 3D viewports (spatial spec §2.3): `attach3D` hangs a three.js object off a node of a world Surface, on an anchor in
  * `plane` that every `tick` places at the node's box (`Viewport3DAttachment`); it fades with `opacity`, raises
  * `glassBounds` by its `depth`, and the pointer hits it with the content quad (`hitSurfaces`).
@@ -259,6 +266,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   readonly glass = new GlassBatch()
   /** Glass inside other glass (spatial spec §2.4; `splitNested`): it sees the outer glass through `stack`. No luma index. */
   readonly innerGlass = new GlassBatch()
+  /** The glass containers' fused slabs (spec §5.2): one mesh batch per cluster; none in the 'fill' glass mode. */
+  readonly fused: FusedGlass
   /** The panels on no glass, in the content RT. */
   readonly panels = new PanelBatch()
   /** The panels riding on glass (spatial spec §11.8; `partition`), on the plane, lifted onto their glass's top face. */
@@ -277,7 +286,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
   /** The content plane: the content quad, the glass, rims and what rides on glass; at z = `contentPlaneZ`. */
   readonly plane = new Object3D()
   interactive: boolean
-  /** `castShadows`: the casters as set, and the element glass draws (the casters among `glassMeshes`). */
+  /** `castShadows`: the casters as set, and the element glass draws (the casters among `glassMeshes`; `fused` keeps its own). */
   private casts: boolean
   private readonly casters: Mesh[] = []
   /** `SurfaceOptions.castToWorld`: no effect yet (planned). */
@@ -327,6 +336,8 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private quality: QualitySettings
   private readonly contentClear: { color: Color; alpha: number } = { color: new Color(0, 0, 0), alpha: 0 }
   private readonly glassMaterials: GlassMaterial[] = []
+  /** The outer element glass's materials, which read the luma with the outer fused slabs' (`attachLuma`). */
+  private elementLuma: GlassMaterial[] = []
   /** The meshes `buildGlass` made (slab and element glass), replaced on a quality change. */
   private readonly glassMeshes: Mesh[] = []
   private readonly materials: Material[] = []
@@ -362,8 +373,13 @@ export class Surface extends Object3D<SurfaceEventMap> {
   private pointerPt: [number, number] | null = null
   private list: RenderList | null = null
   private parts: Partition | null = null
-  /** `list.glass` split by nesting (`splitNested`): what `glass` and `innerGlass` hold. */
-  private nested: { outer: GlassInstance[]; inner: GlassInstance[] } | null = null
+  /**
+   * `list.glass` and `list.fused` split by nesting (`splitNested`): what `glass`, `innerGlass` and `fused` hold. In the
+   * 'fill' glass mode the fused members are split with the glass, and there are no fused clusters.
+   */
+  private nested: NestedSplit | null = null
+  /** The faces a 3D attachment stands on (`glassFaces`), from the last list. */
+  private faces: readonly GlassInstance[] = []
   /** The atlas epoch the glyph batches were last built at (the pages are shared: another Surface may have seen the change). */
   private seenEpoch: number
   private isDisposed = false
@@ -416,6 +432,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     this.plane.add(this.contentMesh)
     this.maskContentShadow()
 
+    this.fused = new FusedGlass(this.plane, { castShadows: this.casts, K: this.glass.K })
     this.syncPyramid(this.quality)
     this.buildGlass(this.quality)
     const fgPanelMesh = new Mesh(this.foregroundPanels.geometry, this.own(createPanelMaterial(this.foregroundPanels.geometry, this.su)))
@@ -454,6 +471,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
    * `q.glassMode` (`GlassMode`): `'straight'` looks through the same backdrops unrefracted, with no depth reject (and no
    * depth capture); `'fill'` hands no backdrop to any draw (the theme's fill colour instead), so while it lasts no draw
    * references the captures and three copies nothing; the next rebuild to another mode references them again.
+   * The fused slabs' materials are rebuilt with them, made the same way (`FusedGlass.setBuild`; none in `'fill'`).
    */
   private buildGlass(q: QualitySettings): void {
     for (const m of this.glassMeshes) m.removeFromParent()
@@ -482,26 +500,47 @@ export class Surface extends Object3D<SurfaceEventMap> {
       : slab && screen ? { screen, screenLevel: SLAB_BEHIND.level, screenLift: SLAB_BEHIND.lift, depthReject: reject, ...(depth ? { depth } : {}) }
         : this.behindCapture ? { screen: this.behindCapture, screenLift: NO_FROST.lift }
           : {}
-    /** One batch's element-glass draws (its back with `q.backFaces`, its front) at `orders`, refracting `source`. */
-    const draws = (batch: GlassBatch, orders: readonly [number, number], source: Pick<GlassMaterialOptions, 'content' | 'pyramid'>) => {
+    // nested glass: the stacked RT and its mips (no pyramid), or without one (the 'fill' mode) the content RT, as the outer glass
+    const stack = this.stackPass
+    const outerSource: Pick<GlassMaterialOptions, 'content' | 'pyramid'> = { content: this.contentPass.texture, pyramid: this.pyramid?.textures }
+    const innerSource: Pick<GlassMaterialOptions, 'content' | 'pyramid'> = stack ? { content: stack.texture } : outerSource
+    /** An element-glass material on `geometry` (`K`: its profile segments, 0 for a fused slab's mesh), outer or `nested`. */
+    const material = (geometry: InstancedBufferGeometry, K: number, side: 'back' | 'front', nested: boolean): GlassMaterial =>
+      createGlassMaterial({ geometry, K, backdrop: 'panel', side, surface: this.su, ...(nested ? innerSource : outerSource), ...behind, ...optics, fill: fills.glass, border: fills.border })
+    /** One batch's element-glass draws (its back with `q.backFaces`, its front) at `orders`, outer or `nested`. */
+    const draws = (batch: GlassBatch, orders: readonly [number, number], nested: boolean) => {
       const made: { mesh: Mesh; gm: GlassMaterial }[] = []
       for (const [side, order, on] of [['back', orders[0], q.backFaces], ['front', orders[1], true]] as const) {
         if (!on) continue
-        const gm = createGlassMaterial({ geometry: batch.geometry, K: batch.K, backdrop: 'panel', side, surface: this.su, ...source, ...behind, ...optics, fill: fills.glass, border: fills.border })
+        const gm = material(batch.geometry, batch.K, side, nested)
         const mesh = new Mesh(batch.geometry, gm.material)
         mesh.renderOrder = order; mesh.frustumCulled = false; mesh.castShadow = this.casts; mesh.receiveShadow = false
         this.plane.add(mesh); this.glassMeshes.push(mesh); this.casters.push(mesh); this.glassMaterials.push(gm); made.push({ mesh, gm })
       }
       return made
     }
-    const element = draws(this.glass, [SURFACE_ORDER.glassBack, SURFACE_ORDER.glassFront], { content: this.contentPass.texture, pyramid: this.pyramid?.textures })
-    this.luma.attach(element.map(d => d.gm))   // the slab's luma index is −1, the inner glass's too: only the outer element glass reads it
-    // nested glass: the stacked RT and its mips (no pyramid), or without one (the 'fill' mode) the content RT, as the outer glass
-    const stack = this.stackPass
-    const inner = draws(this.innerGlass, [SURFACE_ORDER.innerGlassBack, SURFACE_ORDER.innerGlassFront], stack ? { content: stack.texture } : { content: this.contentPass.texture, pyramid: this.pyramid?.textures })
+    const element = draws(this.glass, [SURFACE_ORDER.glassBack, SURFACE_ORDER.glassFront], false)
+    const inner = draws(this.innerGlass, [SURFACE_ORDER.innerGlassBack, SURFACE_ORDER.innerGlassFront], true)
     this.innerMeshes = inner.map(d => d.mesh)
+    this.fused.setBuild(mode === 'fill' ? null : {
+      material: (geometry, side, nested) => material(geometry, 0, side, nested), backFaces: q.backFaces,
+      orders: { outer: [SURFACE_ORDER.glassBack, SURFACE_ORDER.glassFront], inner: [SURFACE_ORDER.innerGlassBack, SURFACE_ORDER.innerGlassFront] },
+    })
+    this.elementLuma = element.map(d => d.gm)
+    this.attachLuma()
     this.showInner()
   }
+
+  /**
+   * Points the luma at the materials that read it: the outer element glass's and the outer fused slabs' (the slab's
+   * luma index is −1, the inner glass's too). After every rebuild of either: new materials start on "never darken".
+   */
+  private attachLuma(): void { this.luma.attach([...this.elementLuma, ...this.fused.lumaMaterials]) }
+
+  /** Whether some outer glass is drawn: element glass or a fused slab (what the content's blur and a behind-capture are for). */
+  private hasOuterGlass(): boolean { return (this.nested?.outer.length ?? 0) + (this.nested?.outerFused.length ?? 0) > 0 }
+  /** Whether some glass nests in glass: element glass or a fused slab (what the stacked RT is for). */
+  private hasInnerGlass(): boolean { return (this.nested?.inner.length ?? 0) + (this.nested?.innerFused.length ?? 0) > 0 }
 
   /** The inner glass draws are shown while there is nested glass: hidden, three never builds their shader. */
   private showInner(): void { for (const m of this.innerMeshes) m.visible = this.innerGlass.buffer.count > 0 }
@@ -556,23 +595,26 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /**
    * A quality change for this Surface: rebuilds the glass draws for `q` (and the blur pyramid for `q.blur`; a 'none'
-   * Surface's behind-capture and the stacked RT, which the 'fill' glass mode drops; the rims when it enters or leaves the
-   * 'fill' glass mode), switches the content RT's texel type (and the stacked RT's) and marks the content dirty (the
-   * RT's size follows `q.contentScale` at the next `prepare`). A throw fails the Surface instead of propagating; a failed
-   * or disposed Surface only records `q`. It leaves the shared `ctx.quality` alone: the root owns that (it is what new
-   * Surfaces start from), replaces it on a tier change and then calls this on every Surface.
+   * Surface's behind-capture and the stacked RT, which the 'fill' glass mode drops; when it enters or leaves the 'fill'
+   * glass mode, the rims and the fused clusters, drawn fused or member by member, with what rides on them), switches the
+   * content RT's texel type (and the stacked RT's) and marks the content dirty (the RT's size follows `q.contentScale`
+   * at the next `prepare`). A throw fails the Surface instead of propagating; a failed or disposed Surface only records
+   * `q`. It leaves the shared `ctx.quality` alone: the root owns that (it is what new Surfaces start from), replaces it
+   * on a tier change and then calls this on every Surface.
    */
   setQuality(q: QualitySettings): void {
-    const wasFill = this.quality.glassMode === 'fill'
+    const wasFill = this.quality.glassMode === 'fill', fill = q.glassMode === 'fill'
     this.quality = q
     if (this.error || this.isDisposed) return
     try {
       this.syncPyramid(q)
-      this.syncBehind(this.glass.buffer.count > 0 && q.glassMode !== 'fill')
-      this.syncStack(this.innerGlass.buffer.count > 0 && q.glassMode !== 'fill')
+      // into or out of 'fill': the fused members move between the slabs and the element glass, and what rides on them
+      // between the slab's top and their own; the rims go or come back
+      if (this.list && wasFill !== fill) this.fill(this.list, this.parts = partition(this.list, { fuse: !fill }))
+      this.syncBehind(this.hasOuterGlass() && !fill)
+      this.syncStack(this.hasInnerGlass() && !fill)
       this.buildGlass(q)
       this.contentPass.setType(q.contentType); this.stackPass?.setType(q.contentType)
-      if (this.parts && wasFill !== (q.glassMode === 'fill')) this.fillRims(this.parts)
       this.contentDirty = true
     } catch (e) { this.markFailed(e) }
   }
@@ -803,16 +845,17 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /**
    * Whether the Surface shadows the UI (default true; `SurfaceOptions.castShadows`): false takes every caster of its
-   * out of the key light's shadow map, its element glass and its attached 3D objects (`attach3D`; a detach gives an
-   * object its own `castShadow` back), and masks its content quad out of the map too (three draws a receiver into a
-   * VSM map, so the quad would cast its whole rectangle). Its own content still receives shadows. The background slab
-   * never casts. Takes effect at once, and holds through rebuilds.
+   * out of the key light's shadow map, its element glass, its fused slabs (those made later too) and its attached 3D
+   * objects (`attach3D`; a detach gives an object its own `castShadow` back), and masks its content quad out of the map
+   * too (three draws a receiver into a VSM map, so the quad would cast its whole rectangle). Its own content still
+   * receives shadows. The background slab never casts. Takes effect at once, and holds through rebuilds.
    */
   get castShadows(): boolean { return this.casts }
   set castShadows(v: boolean) {
     if (v === this.casts) return
     this.casts = v
     for (const m of this.casters) m.castShadow = v
+    this.fused.castShadows = v
     for (const a of this.attachments.values()) a.castShadows = v
     this.maskContentShadow()
   }
@@ -865,14 +908,14 @@ export class Surface extends Object3D<SurfaceEventMap> {
       if (root.dirty.layout || root.dirty.tree) ctx.layout.compute(root, this.model.width, this.model.height, ctx.measure)
       this.needsFrame = ctx.anim.tick(root, dt, this.model.cornerRadius)
       if (root.dirty.paint || !this.list || !this.parts) {
+        const fillMode = this.quality.glassMode === 'fill'
         const list = this.list = buildRenderList(this.model, ctx.theme, ctx.scheme)
-        const p = this.parts = partition(list)
+        const p = this.parts = partition(list, { fuse: !fillMode })
         this.updateTouch(list)
         this.fill(list, p)
         // glass appeared on (or left) a 'none' Surface: it now sees (or no longer sees) what is behind it; nested glass
         // appeared (or went away): its stacked RT with it. Both synced, then one rebuild
-        const fillMode = this.quality.glassMode === 'fill'
-        const behind = this.syncBehind(this.glass.buffer.count > 0 && !fillMode), stack = this.syncStack(this.innerGlass.buffer.count > 0 && !fillMode)
+        const behind = this.syncBehind(this.hasOuterGlass() && !fillMode), stack = this.syncStack(this.hasInnerGlass() && !fillMode)
         if (behind || stack) this.buildGlass(this.quality)
         root.walk(n => { n.dirty.paint = false })
         this.contentDirty = true
@@ -902,14 +945,16 @@ export class Surface extends Object3D<SurfaceEventMap> {
     // the focus pose's distance from the content plane in this Surface's own pt: the fit is linear in the size, so a
     // uniform rest scale (a Block's, receding or not) cancels and the Surface's own size gives it
     const focus = v ? fitDistance(W / ppu, H / ppu, v.fovDeg, v.aspect, v.margin) * ppu : Number.NaN
-    const step: Viewport3DStep = { root: this.root, surface: this.model, glass: list.glass, opacity: this.fade, context: { reducedMotion: anim.reducedMotion, theme, scheme } }
+    const step: Viewport3DStep = { root: this.root, surface: this.model, glass: this.faces, opacity: this.fade, context: { reducedMotion: anim.reducedMotion, theme, scheme } }
     if (Number.isFinite(focus)) step.focus = focus
     for (const a of this.attachments.values()) if (a.step(dt, step)) this.needsFrame = true
   }
 
   private fill(list: RenderList, p: Partition): void {
-    const s = this.model
-    this.nested = splitNested(list.glass)
+    const s = this.model, fuse = this.quality.glassMode !== 'fill'
+    // the 'fill' glass mode draws no fused slab: its members are glass like any other
+    this.nested = fuse ? splitNested(list.glass, list.fused) : splitNested(list.glass.concat(list.fused.flatMap(f => f.members)))
+    this.faces = glassFaces(list, fuse)
     this.fillGlass()
     this.panels.update(p.content.panels, s)
     this.foregroundPanels.update(p.foreground.panels, s, x => liftFor(p, x.node))
@@ -922,28 +967,32 @@ export class Surface extends Object3D<SurfaceEventMap> {
   }
 
   /**
-   * Both element-glass batches from the last split (`nested`), with the press glow wherever the pressed glass is: the
-   * outer glass, and the inner glass with no luma index (its adaptive darkening is deferred, spatial spec §2.4); shows
-   * or hides the inner glass draws.
+   * Both element-glass batches and the fused slabs from the last split (`nested`), with the press glow wherever the
+   * pressed glass is: the outer glass, the inner glass with no luma index (its adaptive darkening is deferred, spatial
+   * spec §2.4), the outer fused slabs reading the luma after the outer glass, the nested ones none; shows or hides the
+   * inner glass draws.
    */
   private fillGlass(): void {
     const n = this.nested
     if (!n) return
     this.glass.update(n.outer, this.model, this.touch)
     this.innerGlass.update(n.inner, this.model, this.touch, { luma: false })
+    if (this.fused.update(n.outerFused, n.innerFused, this.model, this.touch, n.outer.length)) this.attachLuma()
     this.showInner()
   }
 
   /**
-   * The stacked RT's draws from partition `p` (`StackPass.update`): the outer glass, and the foreground panels, text and
-   * images riding on an outer glass (`glassOf`), in the theme's colours. A no-op without a stack.
+   * The stacked RT's draws from partition `p` (`StackPass.update`): the outer glass — an outer fused slab as its
+   * members' own shapes (the bridges between them are not drawn there) — and the foreground panels, text and images
+   * riding on an outer glass (`glassOf`), in the theme's colours. A no-op without a stack.
    */
   private fillStack(p: Partition): void {
     const stack = this.stackPass, n = this.nested
     if (!stack || !n) return
-    const outer = new Set(n.outer)
+    const glass = n.outerFused.length ? n.outer.concat(n.outerFused.flatMap(f => f.members)) : n.outer
+    const outer = new Set(glass)
     const rides = (i: { node: Node }): boolean => { const g = p.glassOf.get(i.node); return g !== undefined && outer.has(g) }
-    stack.update(n.outer, p.foreground.panels.filter(rides), p.foreground.text.filter(rides), p.foreground.images.filter(rides), this.model, this.ctx.theme, this.ctx.scheme)
+    stack.update(glass, p.foreground.panels.filter(rides), p.foreground.text.filter(rides), p.foreground.images.filter(rides), this.model, this.ctx.theme, this.ctx.scheme)
   }
 
   /**
@@ -1002,19 +1051,19 @@ export class Surface extends Object3D<SurfaceEventMap> {
 
   /**
    * The press glow (spec §5.4): while a node is pressed and the pointer is known, the nearest glass at or above it glows
-   * at the pointer, in its centred slab uv (y up; the glass's own scale divided out). Returns whether it changed.
+   * at the pointer, in its centred slab uv (y up; the glass's own scale divided out) — a fused member's slab, in the
+   * slab's (`pressTarget`). Returns whether it changed.
    */
   private updateTouch(list: RenderList): boolean {
     const before = this.touch.entries().next().value
     this.touch.clear()
     const pressed = this.pointer.pressed, pt = this.pointerPt
     if (pressed && pt) {
-      let g: GlassInstance | undefined
-      for (let n: Node | null = pressed; n && !g; n = n.parent) g = list.glass.find(i => i.node === n)
+      const g = pressTarget(list, pressed, this.quality.glassMode !== 'fill')
       const t = g?.transform, k = t ? Math.sqrt(Math.abs(t.a * t.d - t.b * t.c)) : 0
       if (g && t && k > 1e-6 && g.rect.width > 0 && g.rect.height > 0) {
         const [cx, cy] = apply(t, g.rect.x + g.rect.width / 2, g.rect.y + g.rect.height / 2)
-        this.touch.set(g.node, { u: (pt[0] - cx) / (g.rect.width * k), v: (cy - pt[1]) / (g.rect.height * k), press: 1 })
+        this.touch.set(g.key, { u: (pt[0] - cx) / (g.rect.width * k), v: (cy - pt[1]) / (g.rect.height * k), press: 1 })
       }
     }
     const after = this.touch.entries().next().value
@@ -1061,7 +1110,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
         this.contentDirty = false; this.pyramidCurrent = false
       }
       // 9 passes only when glass will sample them; skipped, the targets stay (wired to the glass) and catch up later
-      if (this.pyramid && !this.pyramidCurrent && this.glass.buffer.count > 0) {
+      if (this.pyramid && !this.pyramidCurrent && this.hasOuterGlass()) {
         this.pyramid.render(renderer, this.contentPass.texture)
         this.pyramidCurrent = true
       }
@@ -1070,7 +1119,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       // what the element glass sees where the content is transparent, frosted as it sees it
       const capture = this.screen ?? this.behindCapture, frost = this.screen ? SLAB_BEHIND : NO_FROST
       const behind = capture && camera ? { behind: { capture, camera, plane: this.plane, frost } } : {}
-      this.luma.update({ renderer, glass: this.nested?.outer ?? [], surface: this.model, content: this.contentPass.texture, dt: this.lastDt, redrawn, ...behind })
+      this.luma.update({ renderer, glass: this.nested?.outer ?? [], extra: this.fused.outer, surface: this.model, content: this.contentPass.texture, dt: this.lastDt, redrawn, ...behind })
     } catch (e) { this.markFailed(e) }
   }
 
@@ -1102,6 +1151,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
     const ppu = this.model.ptPerUnit, w = this.model.width / ppu, h = this.model.height / ppu
     let top = this.contentPlaneZ
     for (const g of this.list?.glass ?? []) top = Math.max(top, this.contentPlaneZ + (g.elevation + g.params.thickness) / ppu)
+    for (const f of this.list?.fused ?? []) for (const g of [f, ...f.members]) top = Math.max(top, this.contentPlaneZ + (g.elevation + g.params.thickness) / ppu)
     for (const a of this.attachments.values()) if (a.anchor.visible) top = Math.max(top, this.contentPlaneZ + (a.base + a.depth) / ppu)
     return new Box3(new Vector3(-w / 2, -h / 2, 0), new Vector3(w / 2, h / 2, top + 0.01))   // never flat
   }
@@ -1124,6 +1174,7 @@ export class Surface extends Object3D<SurfaceEventMap> {
       this.ctx.layout.dispose(this.root)
       this.contentPass.dispose(); this.pyramid?.dispose(); this.luma.dispose(); this.stackPass?.dispose()
       for (const b of [this.glass, this.innerGlass, this.panels, this.foregroundPanels, this.rims, this.pools, this.shadows, this.backgroundGlass]) b?.dispose()
+      this.fused.dispose()
       this.foregroundText.dispose(); this.contentText.dispose(); this.foregroundImages.dispose(); this.contentImages.dispose()
       for (const gm of this.glassMaterials) gm.dispose()
       for (const m of this.materials) m.dispose()

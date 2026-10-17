@@ -1,5 +1,6 @@
-import { IDENTITY, multiply, scaleAbout, type Mat2D } from './transform2d'
+import { apply, IDENTITY, multiply, scaleAbout, type Mat2D } from './transform2d'
 import type { Node, Rect, VisualValues } from './node'
+import { GlassUIError } from './errors'
 import type { Style } from './style/schema'
 import { effectiveStyle } from './style/effective'
 import { resolveColor, resolveRadius, type ColorScheme, type RGBA, type Theme } from './style/theme'
@@ -51,7 +52,18 @@ export interface TextInstance extends InstanceTransform { node: Node; rect: Rect
  */
 export interface DecorationInstance extends InstanceTransform { node: Node; kind: 'rim' | 'pool' | 'shadow'; rect: Rect; radius: number; cornerExponent: number; color: RGBA; strength: number; z: number; clip?: ClipRect }
 export interface ImageInstance extends InstanceTransform { node: Node; rect: Rect; src: unknown; radius: number; z: number; clip?: ClipRect }
-export interface RenderList { panels: PanelInstance[]; glass: GlassInstance[]; text: TextInstance[]; decorations: DecorationInstance[]; images: ImageInstance[] }
+/** An axis-aligned rounded rect in Surface pt, already through its instance's transform. */
+export interface GlassShape { x: number; y: number; width: number; height: number; radius: number }
+/**
+ * A cluster of glass that a glass container (`props.glassContainer`, spec §5.2) fuses into one slab: `node` is the
+ * container; `members` the clustered glass instances in list order (their rims dropped, their pools and shadows kept);
+ * `shapes` their rects through their own transforms (a pressed member's shrinks), in the same order; `spacing` the
+ * container's. `params`, `opacity`, `scale`, `z` and `clip` are the first member's; `elevation` the tallest member's (a
+ * hovered member lifts the whole slab); `rect` the shapes' bounds; `transform` is `IDENTITY` (the shapes are already
+ * transformed) and `tilt` 0 (tilts do not compose: a member's hover tilt has no slab of its own to bend).
+ */
+export interface FusedGlassInstance extends InstanceTransform { node: Node; members: GlassInstance[]; shapes: GlassShape[]; spacing: number; params: ResolvedGlass; rect: Rect; z: number; clip?: ClipRect }
+export interface RenderList { panels: PanelInstance[]; glass: GlassInstance[]; text: TextInstance[]; decorations: DecorationInstance[]; images: ImageInstance[]; fused: FusedGlassInstance[] }
 
 /**
  * Draw order inside one node: pool (below the glass), glass (or panel), content (the node's own text or image), rim
@@ -142,6 +154,67 @@ export function resolveGlass(s: Style, rect: Rect, theme: Theme, scheme: ColorSc
   }
 }
 
+/** A glass container's pending members: the glass whose nearest container it is, each with its rim. */
+interface Container { node: Node; spacing: number; members: { glass: GlassInstance; rim: DecorationInstance }[] }
+
+/** `n`'s `props.glassContainer` spacing (pt), or null when it is no container (absent, null or false). */
+function containerSpacing(n: Node): number | null {
+  const c = n.props.glassContainer
+  if (c === undefined || c === null || c === false) return null
+  const spacing = typeof c === 'object' ? (c as { spacing?: unknown }).spacing : undefined
+  if (typeof spacing !== 'number' || !Number.isFinite(spacing) || spacing < 0) {
+    throw new GlassUIError('glassContainer.spacing', `必须是不小于 0 的有限数（pt），实际为 ${typeof c === 'object' ? String(spacing) : String(c)}`)
+  }
+  return spacing
+}
+
+/**
+ * `g`'s rect through its own transform, about its transformed centre (core composes scales about centres, which keep
+ * it axis-aligned; any other transform gets its bounds), its radius scaled with it.
+ */
+function shapeOf(g: GlassInstance): GlassShape {
+  const t = g.transform, r = g.rect
+  const [cx, cy] = apply(t, r.x + r.width / 2, r.y + r.height / 2)
+  const width = r.width * Math.abs(t.a) + r.height * Math.abs(t.c), height = r.width * Math.abs(t.b) + r.height * Math.abs(t.d)
+  return { x: cx - width / 2, y: cy - height / 2, width, height, radius: g.radius * Math.sqrt(Math.abs(t.a * t.d - t.b * t.c)) }
+}
+
+/** The distance between two rects (0 when they touch or overlap). */
+function gapBetween(p: GlassShape, q: GlassShape): number {
+  const dx = Math.max(0, q.x - (p.x + p.width), p.x - (q.x + q.width)), dy = Math.max(0, q.y - (p.y + p.height), p.y - (q.y + q.height))
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+/**
+ * Clusters a container's members (spec §5.2): two join when the gap between their shapes (`shapeOf`) is ≤ its spacing,
+ * transitively; a member with an empty or non-finite shape joins none. Each cluster of two or more becomes one
+ * `FusedGlassInstance` in `out` (in the order of its first member), its members' glass and rims put in `drop`.
+ */
+function cluster(c: Container, out: FusedGlassInstance[], drop: Set<GlassInstance | DecorationInstance>): void {
+  const ms = c.members, n = ms.length
+  if (n < 2) return
+  const shapes = ms.map(m => shapeOf(m.glass))
+  const ok = shapes.map(s => [s.x, s.y, s.width, s.height, s.radius].every(Number.isFinite) && s.width > 0 && s.height > 0)
+  const up = Array.from({ length: n }, (_, i) => i)
+  const find = (i: number): number => { while (up[i] !== i) { up[i] = up[up[i]!]!; i = up[i]! } return i }
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    if (ok[i] && ok[j] && gapBetween(shapes[i]!, shapes[j]!) <= c.spacing) { const a = find(i), b = find(j); if (a !== b) up[Math.max(a, b)] = Math.min(a, b) }
+  }
+  const groups = new Map<number, number[]>()
+  for (let i = 0; i < n; i++) { const r = find(i), g = groups.get(r); if (g) g.push(i); else groups.set(r, [i]) }   // roots are their sets' least index: groups in first-member order
+  for (const idx of groups.values()) {
+    if (idx.length < 2) continue
+    const members = idx.map(i => ms[i]!.glass), sh = idx.map(i => shapes[i]!), first = members[0]!
+    for (const i of idx) { drop.add(ms[i]!.glass); drop.add(ms[i]!.rim) }
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (const s of sh) { x0 = Math.min(x0, s.x); y0 = Math.min(y0, s.y); x1 = Math.max(x1, s.x + s.width); y1 = Math.max(y1, s.y + s.height) }
+    out.push({
+      node: c.node, members, shapes: sh, spacing: c.spacing, params: first.params, rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, z: first.z,
+      elevation: Math.max(...members.map(m => m.elevation)), scale: first.scale, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity: first.opacity, ...defined({ clip: first.clip }),
+    })
+  }
+}
+
 /**
  * Walks `surface.root` in pre-order and emits its draw data. Each node's effective style (state branches merged)
  * decides what it draws: glass (`type: 'glass'` or `bg: 'glass' | 'glass-clear'`) with a `rim` and a `pool`
@@ -152,12 +225,24 @@ export function resolveGlass(s: Style, rect: Rect, theme: Theme, scheme: ColorSc
  * `concentric` resolves against the parent's radius (the root's parent is the surface's `cornerRadius`).
  * A node's `visual` values, while it animates, replace its layout rect (its children follow the visual rect) and the
  * style targets they cover. Unknown tokens throw `GlassUIError`.
+ *
+ * Glass containers (spec §5.2): a node with `props.glassContainer = { spacing }` (pt, finite, ≥ 0; anything else throws
+ * a `GlassUIError`; null or false is no container) collects the glass whose nearest container it is, glass nested in
+ * glass aside (that rides on its glass, as it does anywhere). After its subtree it clusters them (`cluster`): a cluster
+ * of one stays plain glass with its rim and pool; a larger one becomes a `FusedGlassInstance` in `fused`, its members
+ * leaving `glass` and their rims leaving `decorations` (the fused slab's own edges are lit by its shell), their pools
+ * and shadows kept. A container nested in another completes, and lists its clusters, first.
  */
 export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: ColorScheme): RenderList {
-  const rl: RenderList = { panels: [], glass: [], text: [], decorations: [], images: [] }
+  const rl: RenderList = { panels: [], glass: [], text: [], decorations: [], images: [], fused: [] }
+  /** The fused members' glass and rims, taken out of `glass` and `decorations` at the end. */
+  const drop = new Set<GlassInstance | DecorationInstance>()
   let z = 0
-  /** `parent.face`: the height (pt) of the face the node stands on, its nearest glass ancestor's top, else 0. */
-  const visit = (n: Node, originX: number, originY: number, clip: ClipRect | undefined, parent: { elevation: number; scale: number; transform: Mat2D; opacity: number; radius: number; w: number; h: number; face: number }): void => {
+  /**
+   * `parent.face`: the height (pt) of the face the node stands on, its nearest glass ancestor's top, else 0;
+   * `parent.container`: the glass container that collects the node if it is glass (none inside glass).
+   */
+  const visit = (n: Node, originX: number, originY: number, clip: ClipRect | undefined, parent: { elevation: number; scale: number; transform: Mat2D; opacity: number; radius: number; w: number; h: number; face: number; container: Container | null }): void => {
     const s = effectiveStyle(n)
     if (s.display === 'none') return
     const v = n.visual
@@ -175,13 +260,14 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
     const radius = Math.max(0, Math.min(resolved, rect.width / 2, rect.height / 2))
     const base = { node: n, rect, elevation, scale, transform, tilt, opacity, ...defined({ clip }) }
     let face = parent.face
-    if (n.type === 'glass' || s.bg === 'glass' || s.bg === 'glass-clear') {
+    const isGlass = n.type === 'glass' || s.bg === 'glass' || s.bg === 'glass-clear'
+    if (isGlass) {
       const params = resolveGlass(s, rect, theme, scheme, v?.glass)
-      rl.glass.push({ ...base, radius, z: sortKey(myZ, 'glass'), params })
-      rl.decorations.push(
-        { ...base, kind: 'rim', radius, cornerExponent: params.cornerExponent, color: [1, 1, 1, 1], strength: 1, z: sortKey(myZ, 'rim') },
-        { ...base, kind: 'pool', radius, cornerExponent: params.cornerExponent, ...poolOf(params.glow), z: sortKey(myZ, 'pool') },
-      )
+      const glass: GlassInstance = { ...base, radius, z: sortKey(myZ, 'glass'), params }
+      const rim: DecorationInstance = { ...base, kind: 'rim', radius, cornerExponent: params.cornerExponent, color: [1, 1, 1, 1], strength: 1, z: sortKey(myZ, 'rim') }
+      rl.glass.push(glass)
+      rl.decorations.push(rim, { ...base, kind: 'pool', radius, cornerExponent: params.cornerExponent, ...poolOf(params.glow), z: sortKey(myZ, 'pool') })
+      parent.container?.members.push({ glass, rim })
       const height = elevation - parent.face   // the shadow falls on the face it stands on
       if (height > 0) rl.decorations.push({ ...base, elevation: height, kind: 'shadow', radius, cornerExponent: params.cornerExponent, color: [0, 0, 0, 1], strength: 1, z: sortKey(myZ, 'pool') - SHADOW_Z_BELOW_POOL })
       face = elevation + params.thickness
@@ -209,8 +295,16 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
     if (n.type === 'image') rl.images.push({ ...base, src: n.props.src, radius, z: sortKey(myZ, 'content') })
     const childClip = s.overflow === 'hidden' || s.overflow === 'scroll' || n.type === 'scroll' ? clipTo(clip, rect, radius, transform) : clip
     const o = scrollOffset(n)
-    for (const c of n.children) visit(c, rect.x - o.x, rect.y - o.y, childClip, { elevation, scale, transform, opacity, radius, w: rect.width, h: rect.height, face })
+    const spacing = containerSpacing(n)
+    const own: Container | null = spacing !== null ? { node: n, spacing, members: [] } : null
+    const container = own ?? (isGlass ? null : parent.container)
+    for (const c of n.children) visit(c, rect.x - o.x, rect.y - o.y, childClip, { elevation, scale, transform, opacity, radius, w: rect.width, h: rect.height, face, container })
+    if (own) cluster(own, rl.fused, drop)
   }
-  visit(surface.root, 0, 0, undefined, { elevation: 0, scale: 1, transform: IDENTITY, opacity: 1, radius: surface.cornerRadius, w: surface.width, h: surface.height, face: 0 })
+  visit(surface.root, 0, 0, undefined, { elevation: 0, scale: 1, transform: IDENTITY, opacity: 1, radius: surface.cornerRadius, w: surface.width, h: surface.height, face: 0, container: null })
+  if (drop.size) {
+    rl.glass = rl.glass.filter(g => !drop.has(g))
+    rl.decorations = rl.decorations.filter(d => !drop.has(d))
+  }
   return rl
 }

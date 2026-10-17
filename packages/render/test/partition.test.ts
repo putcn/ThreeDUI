@@ -63,7 +63,7 @@ describe('partition', () => {
   // Hand-built lists: partition only reads `node`, `params.thickness` and `kind`, so the fixtures carry just those.
   const glassAt = (node: Node, thickness: number) => ({ node, params: { thickness } }) as unknown as GlassInstance
   const textAt = (node: Node) => ({ node }) as unknown as TextInstance
-  const list = (glass: GlassInstance[], text: TextInstance[]): RenderList => ({ panels: [], glass, text, decorations: [], images: [] })
+  const list = (glass: GlassInstance[], text: TextInstance[]): RenderList => ({ panels: [], glass, text, decorations: [], images: [], fused: [] })
 
   it('lifts a foreground item by the nearest glass when glass nests', () => {
     const outer = new Node('glass', 'outer'), inner = new Node('glass', 'inner'), a = new Node('text', 'a'), b = new Node('text', 'b')
@@ -97,5 +97,40 @@ describe('partition', () => {
     const g = (node: Node) => ({ node } as GlassInstance)
     const { outer, inner } = splitNested([g(a), g(b), g(c), g(d)])
     expect(outer.map(i => i.node)).toEqual([a, d]); expect(inner.map(i => i.node)).toEqual([b, c])
+  })
+
+  /** A container of two glass capsules 10 pt apart (`a` raised `raise` pt), each with a label, inside `card` glass or not. */
+  function container(opts: { raise?: number; inCard?: boolean } = {}) {
+    const s = createSurface({ id: 'c', width: 400, height: 200 })
+    const box = new Node('box', 'box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ position: 'absolute', left: 10, top: 10, width: 300, height: 100 })
+    const at = (id: string, left: number) => {
+      const g = new Node('glass', id); g.setStyle({ position: 'absolute', left, top: 0, width: 80, height: 40, radius: 'capsule', glass: { thickness: id === 'a' ? 8 : 5 } })
+      const t = new Node('text', `${id}-label`); t.setProp('value', id); g.appendChild(t); box.appendChild(g)
+      return { g, t }
+    }
+    const a = at('a', 0), b = at('b', 90)
+    a.g.elevation = opts.raise ?? 0
+    const knob = new Node('glass', 'knob'); knob.setStyle({ position: 'absolute', left: 4, top: 4, width: 10, height: 10 }); b.g.appendChild(knob)
+    if (opts.inCard) { const card = new Node('glass', 'card'); card.setStyle({ width: 400, height: 200 }); card.appendChild(box); s.root.appendChild(card) } else s.root.appendChild(box)
+    engine.compute(s.root, 400, 200, () => ({ width: 20, height: 20 }))
+    return { rl: buildRenderList(s, theme, 'light'), a, b, knob }
+  }
+  it('glass containers: a fused member is glass to what rides on it, lifted onto the slab\'s top (the cluster\'s elevation + thickness); with fuse: false onto its own', () => {
+    const { rl, a, b } = container({ raise: 6 })
+    const p = partition(rl)
+    expect(p.foreground.text.map(x => x.node.id).sort()).toEqual(['a-label', 'b-label'])
+    expect(p.glassOf.get(b.t)!.node).toBe(b.g); expect(p.fusedOf.get(p.glassOf.get(b.t)!)).toBe(rl.fused[0])
+    // the slab: elevation 6 (a's), thickness 8 (a's params); a's label already carries a's 6, b's none
+    expect(liftFor(p, a.t)).toBe(8); expect(liftFor(p, b.t)).toBe(14)
+    const own = partition(rl, { fuse: false })
+    expect(own.fusedOf.size).toBe(0); expect(liftFor(own, a.t)).toBe(8); expect(liftFor(own, b.t)).toBe(5)
+  })
+  it('splitNested with fused clusters: their members count as glass (glass in one is inner); a cluster inside glass is inner', () => {
+    const top = container(), n = splitNested(top.rl.glass, top.rl.fused)
+    expect(n.outerFused).toEqual(top.rl.fused); expect(n.innerFused).toEqual([])
+    expect(n.inner.map(g => g.node)).toEqual([top.knob]); expect(n.outer).toEqual([])
+    const carded = container({ inCard: true }), m = splitNested(carded.rl.glass, carded.rl.fused)
+    expect(m.innerFused).toEqual(carded.rl.fused); expect(m.outerFused).toEqual([])
+    expect(m.outer.map(g => g.node.id)).toEqual(['card']); expect(m.inner.map(g => g.node.id)).toEqual(['knob'])
   })
 })

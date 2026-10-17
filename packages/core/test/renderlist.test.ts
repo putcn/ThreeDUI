@@ -478,3 +478,100 @@ describe('transform, opacity and clip composition (Plan 2 seams)', () => {
     expect(rl.glass[0]!.params.thickness).toBe(3)
   })
 })
+
+describe('glass containers (GlassContainer, spec §5.2)', () => {
+  /** An absolutely placed `w × h` glass node at (left, top), a capsule. */
+  const glass = (left: number, top: number, width: number, height: number, id?: string): Node => {
+    const n = new Node('glass', id); n.setStyle({ position: 'absolute', left, top, width, height, radius: 'capsule' }); return n
+  }
+  const layoutOf = (s: ReturnType<typeof createSurface>) => engine.compute(s.root, s.width, s.height, () => ({ width: 80, height: 22 }))
+
+  it('fuses glass within spacing under a glassContainer, keeps the rest single', () => {
+    const s = createSurface({ width: 400, height: 100 })
+    const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 100, flexDirection: 'row' })
+    const a = glass(0, 0, 80, 40), b = glass(90, 0, 80, 40), c = glass(300, 0, 80, 40)    // a–b gap 10 ≤ 16, c far
+    box.appendChild(a); box.appendChild(b); box.appendChild(c); s.root.appendChild(box); layoutOf(s)
+    const rl = buildRenderList(s, theme, 'light')
+    expect(rl.fused).toHaveLength(1); expect(rl.fused[0]!.members.map(m => m.node)).toEqual([a, b])
+    expect(rl.glass.map(g => g.node)).toEqual([c])
+    expect(rl.decorations.filter(d => d.kind === 'rim').map(d => d.node)).toEqual([c])
+    expect(rl.decorations.filter(d => d.kind === 'pool').map(d => d.node).sort()).toEqual([a, b, c].sort())
+  })
+  it('a pressed member fuses with its shrunken shape', () => {
+    const s = createSurface({ width: 400, height: 100 })
+    const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 100 })
+    const a = glass(0, 0, 80, 40), b = glass(90, 0, 80, 40); box.appendChild(a); box.appendChild(b); s.root.appendChild(box); layoutOf(s)
+    a.setVisual({ scale: 0.9 })
+    const f = buildRenderList(s, theme, 'light').fused[0]!
+    expect(f.shapes[0]).toMatchObject({ x: 4, y: 2, width: 72, height: 36 })          // 80 × 40 at (0, 0) scaled 0.9 about its centre
+    expect(f.shapes[1]).toMatchObject({ x: 90, y: 0, width: 80, height: 40 })
+    expect(f.shapes[0]!.radius).toBeCloseTo(18); expect(f.shapes[1]!.radius).toBe(20)  // capsule radii, scaled with their shapes
+  })
+  it('the fused instance: the container\'s node, the first member\'s params, opacity, clip and z, the tallest elevation, untransformed and untilted', () => {
+    const s = createSurface({ width: 400, height: 100 })
+    const clip = new Node('box', 'clip'); clip.setStyle({ position: 'absolute', left: 0, top: 0, width: 300, height: 100, overflow: 'hidden' })
+    const box = new Node('box', 'box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ position: 'absolute', left: 10, top: 20, width: 300, height: 60, opacity: 0.5 })
+    const a = glass(0, 0, 80, 40, 'a'), b = glass(90, 10, 60, 30, 'b')
+    a.setStyle({ glass: { thickness: 7 } }); b.elevation = 6; b.tilt = { x: 0.05, y: 0 }
+    box.appendChild(a); box.appendChild(b); clip.appendChild(box); s.root.appendChild(clip); layoutOf(s)
+    const rl = buildRenderList(s, theme, 'light')
+    const f = rl.fused[0]!, [ma, mb] = f.members
+    expect(f.node).toBe(box); expect(f.spacing).toBe(16)
+    expect(f.params).toBe(ma!.params); expect(f.params.thickness).toBe(7)
+    expect(f.elevation).toBe(6); expect(mb!.elevation).toBe(6); expect(ma!.elevation).toBe(0)
+    expect(f.opacity).toBe(0.5); expect(f.z).toBe(ma!.z); expect(f.clip).toEqual(ma!.clip); expect(f.clip).toMatchObject({ x: 0, y: 0, width: 300, height: 100 })
+    expect(f.transform).toEqual(IDENTITY); expect(f.tilt).toEqual({ x: 0, y: 0 }); expect(f.scale).toBe(1)
+    expect(f.rect).toEqual({ x: 10, y: 20, width: 150, height: 40 })                  // the shapes' bounds
+    expect(mb!.tilt).toEqual({ x: 0.05, y: 0 })                                       // the member keeps its own
+    expect(rl.decorations.filter(d => d.kind === 'shadow').map(d => d.node)).toEqual([b])   // members keep their shadows
+  })
+  it('joins transitively; an unrelated layout keeps no fused list', () => {
+    const s = createSurface({ width: 400, height: 100 })
+    const box = new Node('box'); box.setProp('glassContainer', { spacing: 12 }); box.setStyle({ width: 400, height: 100 })
+    const a = glass(0, 0, 40, 40), b = glass(50, 0, 40, 40), c = glass(100, 0, 40, 40), d = glass(200, 0, 40, 40), e = glass(250, 0, 40, 40)
+    for (const n of [a, b, c, d, e]) box.appendChild(n)
+    s.root.appendChild(box); layoutOf(s)
+    const rl = buildRenderList(s, theme, 'light')
+    expect(rl.fused.map(f => f.members.map(m => m.node))).toEqual([[a, b, c], [d, e]])   // a–c 60 apart, joined through b
+    expect(rl.glass).toEqual([])
+    const plain = createSurface({ width: 400, height: 100 }); plain.root.appendChild(glass(0, 0, 40, 40)); plain.root.appendChild(glass(45, 0, 40, 40)); layoutOf(plain)
+    const none = buildRenderList(plain, theme, 'light')
+    expect(none.fused).toEqual([]); expect(none.glass).toHaveLength(2)
+  })
+  it('the gap is the distance between the rects: diagonal neighbours join only within spacing of each other', () => {
+    const s = createSurface({ width: 400, height: 200 })
+    const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 200 })
+    const a = glass(0, 0, 40, 40), b = glass(52, 52, 40, 40)           // 12 × 12 apart: 17 pt > 16
+    box.appendChild(a); box.appendChild(b); s.root.appendChild(box); layoutOf(s)
+    expect(buildRenderList(s, theme, 'light').fused).toEqual([])
+    b.setStyle({ left: 50, top: 50 }); layoutOf(s)                      // 10 × 10: 14 pt
+    expect(buildRenderList(s, theme, 'light').fused).toHaveLength(1)
+  })
+  it('glass inside a member rides on it (not a member); a nested container takes its own glass', () => {
+    const s = createSurface({ width: 400, height: 200 })
+    const box = new Node('box', 'outer'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 200 })
+    const a = glass(0, 0, 100, 60, 'a'), b = glass(110, 0, 100, 60, 'b')
+    const knob = glass(10, 10, 20, 20, 'knob'); a.appendChild(knob)
+    const inner = new Node('box', 'inner'); inner.setProp('glassContainer', { spacing: 4 }); inner.setStyle({ position: 'absolute', left: 0, top: 100, width: 400, height: 60 })
+    const c = glass(0, 0, 40, 40, 'c'), d = glass(42, 0, 40, 40, 'd')
+    inner.appendChild(c); inner.appendChild(d)
+    box.appendChild(a); box.appendChild(b); box.appendChild(inner); s.root.appendChild(box); layoutOf(s)
+    const rl = buildRenderList(s, theme, 'light')
+    expect(rl.fused.map(f => [f.node.id, f.members.map(m => m.node.id)])).toEqual([['inner', ['c', 'd']], ['outer', ['a', 'b']]])
+    expect(rl.glass.map(g => g.node.id)).toEqual(['knob'])
+    expect(rl.decorations.filter(dd => dd.kind === 'rim').map(dd => dd.node.id)).toEqual(['knob'])
+  })
+  it('an empty member stays single; a bad spacing throws a GlassUIError naming the prop', () => {
+    const s = createSurface({ width: 400, height: 100 })
+    const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 100 })
+    const a = glass(0, 0, 40, 40), b = glass(44, 0, 0, 40)
+    box.appendChild(a); box.appendChild(b); s.root.appendChild(box); layoutOf(s)
+    expect(buildRenderList(s, theme, 'light').fused).toEqual([])
+    for (const bad of [{ spacing: -1 }, { spacing: Number.NaN }, { spacing: '16' }, 16]) {
+      box.setProp('glassContainer', bad)
+      expect(() => buildRenderList(s, theme, 'light')).toThrow(/\[glassContainer\.spacing\]/)
+    }
+    box.setProp('glassContainer', null)
+    expect(buildRenderList(s, theme, 'light').glass).toHaveLength(2)
+  })
+})

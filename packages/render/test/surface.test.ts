@@ -1639,3 +1639,220 @@ describe('Surface: drop shadows of raised glass (spatial §11.7)', () => {
     s.setQuality(QUALITY.minimal); s.tick(1 / 60); expect(s.shadows.buffer.count).toBe(1)
   })
 })
+
+describe('glass containers: fused slabs (GlassContainer, spec §5.2)', () => {
+  /** A Surface whose root holds a container with two close glass nodes (`a`, `b`: 10 pt apart) and one far one. */
+  function fusedSurface(c: SurfaceContext = ctx, opts: { ptPerUnit?: number; labels?: boolean; glass?: Record<string, unknown>; background?: string } = {}) {
+    const s = new Surface({ width: 400, height: 100, ptPerUnit: opts.ptPerUnit ?? 1, ...(opts.background ? { background: opts.background } : {}) }, c)
+    const box = new Node('box', 'bar'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ position: 'absolute', left: 0, top: 0, width: 400, height: 100 })
+    const at = (id: string, left: number) => {
+      const g = new Node('glass', id); g.setStyle({ position: 'absolute', left, top: 30, width: 80, height: 40, radius: 'capsule', ...(opts.glass ? { glass: opts.glass } : {}) }); box.appendChild(g)
+      if (opts.labels) { const t = new Node('text', `${id}-label`); t.setProp('value', id.toUpperCase()); t.setStyle({ width: '100%', height: '100%', textAlign: 'center' }); g.appendChild(t) }
+      return g
+    }
+    const a = at('a', 0), b = at('b', 90), far = at('far', 300)
+    s.root.appendChild(box); s.tick(0)
+    return { s, box, a, b, far }
+  }
+  const meshBatches = (s: Surface) => meshes(s).filter(m => (m.geometry as { userData?: { vertex?: string } }).userData?.vertex === 'mesh')
+  /** The members' thickness: an 80 × 40 capsule's (shorter side · ratio), pt. */
+  const T = 40 * theme.glass.thicknessRatio
+
+  it('draws a fused cluster as one mesh-based glass batch and rebuilds only when the shapes change', () => {
+    const { s, b, far } = fusedSurface()
+    const fused = meshBatches(s)
+    expect(fused.length).toBeGreaterThan(0)                                      // front (+ back when backFaces)
+    expect(s.glass.nodes).toEqual([far])                                          // members left the instanced batch
+    const geometry = fused[0]!.geometry
+    s.tick(0); expect(meshBatches(s)[0]!.geometry).toBe(geometry)                 // nothing changed: same mesh
+    let disposed = 0; geometry.addEventListener('dispose', () => { disposed++ })
+    b.setStyle({ left: 95 }); s.tick(0)                                           // still within the spacing (gap 15)
+    expect(meshBatches(s)[0]!.geometry).not.toBe(geometry); expect(disposed).toBe(1)
+    expect(meshBatches(s).every(m => m.geometry === meshBatches(s)[0]!.geometry)).toBe(true)
+  })
+  it("in the 'fill' mode a fused cluster draws its members as single glass with rims", () => {
+    const { s, a, b, far } = fusedSurface({ ...ctx, quality: QUALITY.minimal })
+    expect(meshBatches(s)).toEqual([])
+    expect([...s.glass.nodes].sort()).toEqual([a, b, far].sort())
+    expect(s.rims.buffer.count).toBe(0)                                           // fill mode draws no rims at all (Plan 2)
+  })
+  it('the fused draws: back and front at the element glass\'s orders on the plane, casting shadows; one instance over the shapes\' bounds', () => {
+    const { s } = fusedSurface()
+    const draws = meshBatches(s)
+    expect(draws.map(m => m.renderOrder).sort()).toEqual([SURFACE_ORDER.glassBack, SURFACE_ORDER.glassFront])
+    for (const m of draws) { expect(m.parent).toBe(s.plane); expect(m.castShadow).toBe(true); expect(m.receiveShadow).toBe(false); expect(m.frustumCulled).toBe(false) }
+    expect((draws.find(m => m.renderOrder === SURFACE_ORDER.glassBack)!.material as MeshPhysicalNodeMaterial).side).not.toBe(FrontSide)
+    const batch = s.fused.batches[0]!
+    expect(batch.buffer.count).toBe(1); expect(batch.geometry).toBe(draws[0]!.geometry)
+    // a at (0, 30), b at (90, 30), both 80 × 40: bounds (0, 30)–(170, 70), centred at (85, 50)
+    expect(batch.buffer.get(0, 'iRect')).toEqual([...surfaceToLocal(85, 50, s.model), 170, 40].map(Math.fround))
+    expect(batch.buffer.get(0, 'iShape').slice(0, 2)).toEqual([0, Math.fround(T)])   // radius 0, the first member's thickness
+    expect(batch.buffer.get(0, 'iMat0').slice(0, 3)).toEqual([1, 0, 0]); expect(batch.buffer.get(0, 'iMat1').slice(0, 3)).toEqual([0, 1, 0])
+    // the mesh: centred on those bounds, in units
+    const pos = batch.geometry.getAttribute('position')
+    let x0 = Infinity, x1 = -Infinity
+    for (let i = 0; i < pos.count; i++) { x0 = Math.min(x0, pos.getX(i)); x1 = Math.max(x1, pos.getX(i)) }
+    expect(x0).toBeCloseTo(-85, 0); expect(x1).toBeCloseTo(85, 0)
+    const half = fusedSurface(ctx, { ptPerUnit: 2 }).s.fused.batches[0]!.geometry.getAttribute('position')
+    let h1 = -Infinity; for (let i = 0; i < half.count; i++) h1 = Math.max(h1, half.getX(i))
+    expect(h1).toBeCloseTo(85 / 2, 0)
+  })
+  it('a sub-0.25 pt move keeps the mesh; a member leaving the spacing dissolves the cluster and frees its draws', () => {
+    const { s, b, far } = fusedSurface()
+    const geometry = s.fused.batches[0]!.geometry, materials = meshBatches(s).map(m => m.material as Material)
+    let freed = 0; geometry.addEventListener('dispose', () => { freed++ })
+    b.setStyle({ left: 90.1 }); s.tick(0)
+    expect(s.fused.batches[0]!.geometry).toBe(geometry)
+    b.setStyle({ left: 110 }); s.tick(0)                                          // 30 pt apart
+    expect(meshBatches(s)).toEqual([]); expect(s.fused.batches).toEqual([]); expect(freed).toBe(1)
+    expect(s.glass.nodes.length).toBe(3); expect(s.glass.nodes).toContain(far)
+    expect(s.rims.buffer.count).toBe(3)                                           // single again: rims back
+    b.setStyle({ left: 90 }); s.tick(0)
+    expect(meshBatches(s).map(m => m.material)).toEqual(materials)               // the shared fused materials are kept
+  })
+  it('content riding a fused member sits on the slab\'s top: a hovered (raised) member lifts the slab, its neighbour\'s label and focus ring with it', () => {
+    const { s, a, b } = fusedSurface(ctx, { labels: true })
+    a.elevation = 6
+    b.setProp('tabIndex', 0); b.setState({ focused: true, focusVisible: true })
+    s.tick(0)
+    const top = 6 + T                                                             // the tallest member's elevation + the slab's thickness
+    expect(s.fused.batches[0]!.buffer.get(0, 'iMat2')[3]).toBeCloseTo(6)          // the slab stands at the raised member's elevation
+    const glyphs = [...s.foregroundText.perPage.values()].flatMap(pb => Array.from({ length: pb.buffer.count }, (_, i) => pb.buffer.get(i, 'iMat2')[3]!))
+    // "A" and "B" on the slab's top (b's own elevation is 0: without the ruling its label would sink to T, into the
+    // slab); the far glass's "FAR" on its own top
+    expect(glyphs.filter(z => Math.abs(z - top) < 1e-4)).toHaveLength(2); expect(glyphs.filter(z => Math.abs(z - T) < 1e-4)).toHaveLength(3)
+    expect(s.foregroundPanels.buffer.count).toBe(1)                               // b's focus ring
+    expect(s.foregroundPanels.buffer.get(0, 'iMat2')[3]).toBeCloseTo(top, 4)
+  })
+  it('the fused slab is untilted: a member\'s hover tilt has no slab of its own to bend', () => {
+    const { s, a } = fusedSurface()
+    a.tilt = { x: 0.05, y: 0.05 }; s.tick(0)
+    const batch = s.fused.batches[0]!
+    expect(batch.buffer.get(0, 'iMat0').slice(0, 3)).toEqual([1, 0, 0]); expect(batch.buffer.get(0, 'iMat2').slice(0, 3)).toEqual([0, 0, 1])
+  })
+  it('castShadows covers the fused draws, those made later included', () => {
+    const { s, b } = fusedSurface()
+    s.castShadows = false
+    expect(meshBatches(s).every(m => !m.castShadow)).toBe(true)
+    b.setStyle({ left: 200 }); s.tick(0); b.setStyle({ left: 90 }); s.tick(0)     // dissolved, then fused again
+    expect(meshBatches(s).length).toBeGreaterThan(0); expect(meshBatches(s).every(m => !m.castShadow)).toBe(true)
+    s.castShadows = true
+    expect(meshBatches(s).every(m => m.castShadow)).toBe(true)
+  })
+  it('a quality rebuild (and a restyle) rebuilds the fused materials like the element glass, keeping the mesh', () => {
+    const { s } = fusedSurface({ ...ctx })
+    const before = meshBatches(s), geometry = before[0]!.geometry, freed: unknown[] = []
+    for (const m of before) (m.material as Material).addEventListener('dispose', () => freed.push(m.material))
+    s.setQuality({ ...ctx.quality, backFaces: false })
+    expect(freed).toHaveLength(2); expect(before.every(m => m.parent === null)).toBe(true)
+    const after = meshBatches(s)
+    expect(after.map(m => m.renderOrder)).toEqual([SURFACE_ORDER.glassFront]); expect(after[0]!.geometry).toBe(geometry)
+    // the same backdrop as the element glass's: the content RT
+    const sampled = nodesOf((after[0]!.material as MeshPhysicalNodeMaterial).backdropNode).filter(n => n.isTextureNode).map(n => n.value)
+    expect(sampled).toContain(s.contentPass.texture)
+    const front = after[0]!.material
+    s.restyle()
+    expect(meshBatches(s)[0]!.material).not.toBe(front)
+  })
+  it("switching to the 'fill' mode puts the members back in the element batch at their own height, and back again", () => {
+    const { s, a, b, far } = fusedSurface({ ...ctx }, { labels: true })
+    a.elevation = 6; s.tick(0)
+    const geometry = s.fused.batches[0]!.geometry
+    let freed = 0; geometry.addEventListener('dispose', () => { freed++ })
+    s.setQuality(QUALITY.minimal)
+    expect(meshBatches(s)).toEqual([]); expect(freed).toBe(1)
+    expect([...s.glass.nodes].sort()).toEqual([a, b, far].sort())
+    const z = [...s.foregroundText.perPage.values()].flatMap(pb => Array.from({ length: pb.buffer.count }, (_, i) => pb.buffer.get(i, 'iMat2')[3]!))
+    expect(z.some(v => Math.abs(v - T) < 1e-4)).toBe(true)                        // b's label on b itself, not on the slab
+    s.setQuality(QUALITY.high)
+    expect(meshBatches(s).length).toBeGreaterThan(0); expect(s.glass.nodes).toEqual([far])
+  })
+  it('a press on a member glows on the fused slab, at the pointer in the slab\'s bounds', () => {
+    const { s, b } = fusedSurface()
+    b.setStyle({ pressed: {} })                                                   // no press scale: the shapes stay
+    s.tick(0)
+    // bounds (0, 30)–(170, 70): a quarter right of and above its centre (85, 50) is (127.5, 40)
+    s.setPointer([127.5, 40]); s.pointer.down(127.5, 40); s.tick(0)
+    expect(b.state.pressed).toBe(true)
+    expect(s.fused.batches[0]!.buffer.get(0, 'iTouch').slice(0, 3)).toEqual([0.25, 0.25, 1])
+    expect(s.glass.buffer.get(0, 'iTouch')[2]).toBe(0)                            // not on the far glass
+    s.pointer.up(127.5, 40); s.tick(0)
+    expect(s.fused.batches[0]!.buffer.get(0, 'iTouch').slice(0, 3)).toEqual([0, 0, 0])
+  })
+  it('adaptive darkening: the fused slab reads the luma texel after the element glass\'s, packed with its bounds', () => {
+    const { s } = fusedSurface(ctx, { glass: { variant: 'clear', adaptive: true } })
+    expect(s.glass.buffer.get(0, 'iGlow2')[3]).toBe(0)                            // far
+    expect(s.fused.batches[0]!.buffer.get(0, 'iGlow2')[3]).toBe(1)               // after it
+    let bound: RenderTarget | null = null; const drawn: (RenderTarget | null)[] = [], scenes: Object3D[] = []
+    const r = { ...stubRenderer(), setRenderTarget: vi.fn((t: RenderTarget | null) => { bound = t }), render: vi.fn((scene: Object3D) => { drawn.push(bound); scenes.push(scene) }) }
+    s.prepare(r, { width: 400, height: 100 }, 1)
+    const luma = drawn[1]!
+    for (const m of meshBatches(s)) expect(new Set(materialGraph(m.material as Material).filter(n => n.isTextureNode).map(n => n.value))).toContain(luma.texture)
+    const kernel = ((scenes[1] as Mesh).material as MeshBasicNodeMaterial).colorNode
+    const rects = nodesOf(kernel).map(n => n.value).find((v): v is DataTexture => v instanceof DataTexture)!
+    expect(Array.from((rects.image.data as Float32Array).slice(4, 8))).toEqual([0, 30 / 100, 170 / 400, 40 / 100].map(Math.fround))
+  })
+  it("a 'none' Surface whose only glass is fused still sees what is behind it", () => {
+    const { s, far } = fusedSurface()
+    far.setStyle({ display: 'none' }); s.tick(0)
+    expect(s.glass.buffer.count).toBe(0); expect(meshBatches(s).length).toBeGreaterThan(0)
+    expect(probeOf(s)).toHaveLength(1)
+    for (const m of meshBatches(s)) expect(capturesIn([m]).length).toBeGreaterThan(0)
+  })
+  it('nested: a container inside a glass card draws its slab as inner glass, over the stacked RT, with no luma index', () => {
+    const s = new Surface({ width: 400, height: 200, ptPerUnit: 1 }, ctx)
+    const card = new Node('glass', 'card'); card.setStyle({ position: 'absolute', left: 0, top: 0, width: 400, height: 200, radius: 24, glass: { variant: 'clear', adaptive: true } })
+    const box = new Node('box', 'bar'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ position: 'absolute', left: 20, top: 20, width: 300, height: 100 })
+    for (const [id, left] of [['a', 0], ['b', 90]] as const) { const g = new Node('glass', id); g.setStyle({ position: 'absolute', left, top: 30, width: 80, height: 40, radius: 'capsule', glass: { variant: 'clear', adaptive: true } }); box.appendChild(g) }
+    card.appendChild(box); s.root.appendChild(card); s.tick(0)
+    expect(s.stack).not.toBeNull()
+    const draws = meshBatches(s)
+    expect(draws.map(m => m.renderOrder).sort()).toEqual([SURFACE_ORDER.innerGlassBack, SURFACE_ORDER.innerGlassFront])
+    for (const m of draws) {
+      const tex = materialGraph(m.material as Material).filter(n => n.isTextureNode).map(n => n.value)
+      expect(tex).toContain(s.stack!.texture); expect(tex).not.toContain(s.contentPass.texture)
+    }
+    expect(s.fused.batches[0]!.buffer.get(0, 'iGlow2')[3]).toBe(-1)
+    expect(s.glass.nodes.map(n => n.id)).toEqual(['card']); expect(s.innerGlass.buffer.count).toBe(0)
+    box.parent!.removeChild(box); s.root.appendChild(box); s.tick(0)               // out of the card: outer again
+    expect(meshBatches(s).map(m => m.renderOrder).sort()).toEqual([SURFACE_ORDER.glassBack, SURFACE_ORDER.glassFront])
+  })
+  it('the stacked RT holds an outer fused cluster\'s members as panels (their own shapes) when glass nests in one', () => {
+    const { s, a } = fusedSurface()
+    const knob = new Node('glass', 'knob'); knob.setStyle({ position: 'absolute', left: 10, top: 10, width: 20, height: 20 }); a.appendChild(knob)
+    s.tick(0)
+    expect(s.innerGlass.nodes).toEqual([knob]); expect(s.stack).not.toBeNull()
+    expect(s.stack!.panels.buffer.count).toBe(3)                                  // far, a and b
+  })
+  for (const forceWebGL of [false, true]) {
+    it(`${forceWebGL ? 'GLSL' : 'WGSL'}: on a glass Surface (kawase, depth reject) the fused draws build within 11 varyings, reuse the slab's copies, and cast`, () => {
+      const warnings: string[] = []
+      const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
+      try {
+        const { s } = fusedSurface({ ...ctx, quality: { ...ctx.quality, blur: 'kawase' } }, { background: 'glass', glass: { variant: 'clear', adaptive: true } })
+        const copies = (m: Mesh) => buildShaders(m.material as MeshPhysicalNodeMaterial, m.geometry, forceWebGL).updateBefore
+          .filter(n => CAPTURES.includes(n.constructor.type!)).map(n => n.getBase!())
+        const slab = new Set(probeOf(s).flatMap(copies))
+        expect(slab.size).toBe(2)
+        const draws = meshBatches(s)
+        expect(draws).toHaveLength(2)
+        for (const m of draws) {
+          const built = buildShaders(m.material as MeshPhysicalNodeMaterial, m.geometry, forceWebGL)
+          expect(built.varyings.length).toBeLessThanOrEqual(11)
+          expect(new Set(copies(m))).toEqual(slab)
+          expect(buildShaders(m.material as MeshPhysicalNodeMaterial, m.geometry, forceWebGL, true).vertex.length).toBeGreaterThan(0)
+        }
+        expect(new Set(draws.flatMap(m => materialGraph(m.material as Material)).filter(n => n.isTextureNode).map(n => n.value))).toContain(s.contentPass.texture)
+      } finally { spy.mockRestore() }
+      expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
+    })
+  }
+  it('dispose frees the fused meshes, batches and materials', () => {
+    const { s } = fusedSurface()
+    const draws = meshBatches(s), freed: string[] = []
+    draws[0]!.geometry.addEventListener('dispose', () => freed.push('geometry'))
+    for (const m of draws) (m.material as Material).addEventListener('dispose', () => freed.push('material'))
+    s.dispose()
+    expect(freed.sort()).toEqual(['geometry', 'material', 'material'])
+  })
+})

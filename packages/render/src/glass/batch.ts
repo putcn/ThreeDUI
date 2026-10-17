@@ -20,7 +20,7 @@ export interface TouchState { u: number; v: number; press: number }
  */
 export const MIN_THICKNESS = 0.01
 /** `v` clamped to [lo, hi]; a non-finite `v` is `lo`. */
-const clampPt = (v: number, lo: number, hi: number): number => Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo
+export const clampPt = (v: number, lo: number, hi: number): number => Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo
 
 /**
  * All glass elements of one Surface as instances of the shared slab geometry, sorted far→near by `z` — or, built from
@@ -48,11 +48,12 @@ export class GlassBatch {
 
   /**
    * Packs `instances` (stable-sorted by `z`); `touch` gives a node its press glow. The luma index (`iGlow2.w`) of clear +
-   * adaptive glass is its instance index (`SurfaceLuma` packs its rects in this order); with `opts.luma === false` every
-   * instance's is −1, so none darkens (nested glass, spatial spec §2.4: its index would collide with the outer batch's).
+   * adaptive glass is its instance index plus `opts.lumaBase` (default 0; `SurfaceLuma` packs its rects in this order,
+   * another batch's after the element glass's: a fused slab's); with `opts.luma === false` every instance's is −1, so
+   * none darkens (nested glass, spatial spec §2.4: its index would collide with the outer batch's).
    */
-  update(instances: readonly GlassInstance[], s: SurfaceDims, touch?: Map<Node, TouchState>, opts: { luma?: boolean } = {}): void {
-    const luma = opts.luma !== false
+  update(instances: readonly GlassInstance[], s: SurfaceDims, touch?: ReadonlyMap<Node, TouchState>, opts: { luma?: boolean; lumaBase?: number } = {}): void {
+    const luma = opts.luma !== false, lumaBase = opts.lumaBase ?? 0
     const sorted = [...instances].sort((a, b) => a.z - b.z)
     this.sorted = sorted.map(i => i.node)
     const b = this.buffer
@@ -73,7 +74,7 @@ export class GlassBatch {
       if (p.glow) b.set(i, 'iGlow', srgbToLinear(p.glow.color[0]), srgbToLinear(p.glow.color[1]), srgbToLinear(p.glow.color[2]), p.glow.strength)
       else b.set(i, 'iGlow', 0, 0, 0, 0)
       // luma index: only clear + adaptive glass samples the backdrop luma pass (adaptive darkening)
-      b.set(i, 'iGlow2', p.glow?.split ?? -1, GLOW_SOFTNESS, inst.opacity, luma && p.variant === 'clear' && p.adaptive ? i : -1)
+      b.set(i, 'iGlow2', p.glow?.split ?? -1, GLOW_SOFTNESS, inst.opacity, luma && p.variant === 'clear' && p.adaptive ? lumaBase + i : -1)
       const t = touch?.get(inst.node)
       b.set(i, 'iTouch', t?.u ?? 0, t?.v ?? 0, t?.press ?? 0, REFLECTION_STRENGTH)
       writeClip(b, i, inst.clip)
