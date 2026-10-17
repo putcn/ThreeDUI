@@ -159,7 +159,7 @@ export function resolveGlass(s: Style, rect: Rect, theme: Theme, scheme: ColorSc
 }
 
 /** A glass container's pending members: the glass whose nearest container it is, each with its rim. */
-interface Container { node: Node; spacing: number; members: { glass: GlassInstance; rim: DecorationInstance }[] }
+interface Container { node: Node; spacing: number; members: { glass: GlassInstance; rim: DecorationInstance; fusible: boolean }[] }
 
 /** `n`'s `props.glassContainer` spacing (pt), or null when it is no container (absent, null or false). */
 function containerSpacing(n: Node): number | null {
@@ -167,8 +167,9 @@ function containerSpacing(n: Node): number | null {
   if (c === undefined || c === null || c === false) return null
   const spacing = typeof c === 'object' ? (c as { spacing?: unknown }).spacing : undefined
   if (typeof spacing !== 'number' || !Number.isFinite(spacing) || spacing < 0) {
-    const v = typeof c === 'object' ? spacing : c
-    throw new GlassUIError('glassContainer.spacing', '必须是不小于 0 的有限数（pt）', { got: typeof v === 'number' ? String(v) : String(JSON.stringify(v)) })
+    // the value in the reason, as core's other single-value errors (GlassUIError prints `got` only beside `allowed`)
+    const v = typeof c === 'object' ? spacing : c, got = typeof v === 'number' ? String(v) : String(JSON.stringify(v))
+    throw new GlassUIError('glassContainer.spacing', `必须是不小于 0 的有限数（pt），得到 ${got}${typeof c === 'object' ? '' : '（glassContainer 写成 { spacing: 16 }）'}`)
   }
   return spacing
 }
@@ -201,8 +202,14 @@ function gapBetween(p: GlassShape, q: GlassShape): number {
  * Whether a member's look lets it fuse: no glow (none, or of strength 0: a Switch that is off) and no tint. A glowing
  * or tinted member (a primary Button, a checked Switch, a selected item) stays single glass with its own rim and pool:
  * the slab has one look over its whole outline, and a glow or its split there would smear across the other members.
+ * Decided on the effective style's targets (as `resolveGlass` reads them without the animated values), not on the
+ * animated glow or tint: a glow springing through 0 under a snappy or bouncy spring would flip the membership, and
+ * rebuild the slab, several times a second.
  */
-const fusible = (p: ResolvedGlass): boolean => (p.glow === null || p.glow.strength <= 0) && p.tint === null
+const fusible = (s: Style): boolean => {
+  const g = s.glass
+  return (!g?.glow || g.glow.strength <= 0) && !g?.tint
+}
 
 /** How a member ranks among the members sharing the slab's elevation: a pressed one, then a hovered one, leads it. */
 const leadRank = (g: GlassInstance): number => g.node.state.pressed ? 2 : g.node.state.hover ? 1 : 0
@@ -218,7 +225,7 @@ function cluster(c: Container, out: FusedGlassInstance[], drop: Set<GlassInstanc
   const ms = c.members, n = ms.length
   if (n < 2) return
   const shapes = ms.map(m => shapeOf(m.glass))
-  const ok = shapes.map((s, i) => [s.x, s.y, s.width, s.height, s.radius].every(Number.isFinite) && s.width > 0 && s.height > 0 && fusible(ms[i]!.glass.params))
+  const ok = shapes.map((s, i) => [s.x, s.y, s.width, s.height, s.radius].every(Number.isFinite) && s.width > 0 && s.height > 0 && ms[i]!.fusible)
   const up = Array.from({ length: n }, (_, i) => i)
   const find = (i: number): number => { while (up[i] !== i) { up[i] = up[up[i]!]!; i = up[i]! } return i }
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
@@ -301,7 +308,7 @@ export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: Col
       const rim: DecorationInstance = { ...base, kind: 'rim', radius, cornerExponent: params.cornerExponent, color: [1, 1, 1, 1], strength: 1, z: sortKey(myZ, 'rim') }
       rl.glass.push(glass)
       rl.decorations.push(rim, { ...base, kind: 'pool', radius, cornerExponent: params.cornerExponent, ...poolOf(params.glow), z: sortKey(myZ, 'pool') })
-      parent.container?.members.push({ glass, rim })
+      parent.container?.members.push({ glass, rim, fusible: fusible(s) })
       const height = elevation - parent.face   // the shadow falls on the face it stands on
       if (height > 0) rl.decorations.push({ ...base, elevation: height, kind: 'shadow', radius, cornerExponent: params.cornerExponent, color: [0, 0, 0, 1], strength: 1, z: sortKey(myZ, 'pool') - SHADOW_Z_BELOW_POOL })
       face = elevation + params.thickness

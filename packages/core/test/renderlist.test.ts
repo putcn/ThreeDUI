@@ -583,6 +583,23 @@ describe('glass containers (GlassContainer, spec §5.2)', () => {
     p.setStyle({ glass: { glow: { color: 'accent', strength: 0 } } })
     expect(buildRenderList(s, theme, 'light').fused[0]!.members.map(m => m.node.id)).toEqual(['a', 'primary', 'c'])
   })
+  it('membership follows the style\'s target glow and tint, not the animated values (a glow springing through 0 flips nothing)', () => {
+    const s = createSurface({ width: 400, height: 100 })
+    const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 100 })
+    const a = glass(0, 0, 80, 40, 'a'), b = glass(90, 0, 80, 40, 'b')
+    box.appendChild(a); box.appendChild(b); s.root.appendChild(box); layoutOf(s)
+    const fused = () => buildRenderList(s, theme, 'light').fused.map(f => f.members.map(m => m.node.id))
+    // turning on: the target glows, its spring is still at (or overshooting below) 0: it stands apart from the start
+    b.setStyle({ glass: { glow: { color: 'accent', strength: 1.1 } } })
+    for (const v of [0, -0.08]) { b.setVisual({ glass: { glowStrength: v } }); expect(fused()).toEqual([]) }
+    // turning off: the target has no glow (or strength 0), the spring still glows: it fuses at once
+    b.setStyle({ glass: { glow: { color: 'accent', strength: 0 } } }); b.setVisual({ glass: { glowStrength: 0.6 } })
+    expect(fused()).toEqual([['a', 'b']])
+    b.setStyle({ glass: {} }); expect(fused()).toEqual([['a', 'b']])
+    // the tint likewise: an animated tint on an untinted target fuses, a cleared one on a tinted target does not
+    b.setVisual({ glass: { tint: [1, 1, 1, 0.3] } }); expect(fused()).toEqual([['a', 'b']])
+    b.setStyle({ glass: { tint: 'accent' } }); b.setVisual({ glass: { tint: null } }); expect(fused()).toEqual([])
+  })
   it('the member that lifts the slab leads its look (a hover glint on any member shows on the slab); a pressed or hovered one leads a tie; opacity is the largest', () => {
     const s = createSurface({ width: 400, height: 100 })
     const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 100 })
@@ -623,9 +640,10 @@ describe('glass containers (GlassContainer, spec §5.2)', () => {
     const a = glass(0, 0, 40, 40), b = glass(44, 0, 0, 40)
     box.appendChild(a); box.appendChild(b); s.root.appendChild(box); layoutOf(s)
     expect(buildRenderList(s, theme, 'light').fused).toEqual([])
-    for (const bad of [{ spacing: -1 }, { spacing: Number.NaN }, { spacing: '16' }, 16]) {
+    // the bad value is in the message (GlassUIError prints `got` only beside `allowed`), as core's other single-value errors
+    for (const [bad, got] of [[{ spacing: -1 }, '-1'], [{ spacing: Number.NaN }, 'NaN'], [{ spacing: '16' }, '"16"'], [{}, 'undefined'], [16, '16（glassContainer 写成 { spacing: 16 }）']] as const) {
       box.setProp('glassContainer', bad)
-      expect(() => buildRenderList(s, theme, 'light')).toThrow(/^\[glassContainer\.spacing\] 必须是不小于 0 的有限数（pt）$/)
+      expect(() => buildRenderList(s, theme, 'light')).toThrow(`[glassContainer.spacing] 必须是不小于 0 的有限数（pt），得到 ${got}`)
     }
     box.setProp('glassContainer', null)
     expect(buildRenderList(s, theme, 'light').glass).toHaveLength(2)
