@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { uniform } from 'three/tsl'
 import { Texture, Vector2 } from 'three'
 import { GlassUIError } from '@glassui/core'
-import { fusedOutline, fusedField, fusedNormal, fusedBounds, fusedGrid, fusedSamples, fusedSmoothing, extrudeSlab, FUSED_MAX_CELLS, type Contour, type FusedShape, type SlabMesh } from '../src/glass/fused'
+import { fusedOutline, fusedField, fusedNormal, fusedBounds, fusedGrid, fusedSamples, fusedSmoothing, extrudeSlab, FUSED_MAX_CELLS, type Contour, type FusedShape, type FusedSmoothing, type SlabMesh } from '../src/glass/fused'
 import { profileAt } from '../src/glass/slab9'
 import { GlassBatch } from '../src/glass/batch'
 import { createGlassMaterial } from '../src/glass/material'
@@ -87,7 +87,7 @@ function capArea(m: SlabMesh, z: number): number {
  * does not cover its rings exactly once (its triangles' areas against the rings' net area, which must be positive);
  * normals off unit length, or off ±z on the caps' rings.
  */
-function faults(shapes: FusedShape[], spacing: number, K: number, opts: { step?: number; minSide?: number; k?: number } = {}): string {
+function faults(shapes: FusedShape[], spacing: number, K: number, opts: { step?: number; minSide?: number; k?: FusedSmoothing } = {}): string {
   const k = opts.k === undefined ? {} : { k: opts.k }
   const cs = fusedOutline(shapes, spacing, { ...(opts.step === undefined ? {} : { step: opts.step }), ...k })
   const m = extrudeSlab(cs, shapes, spacing, { ...profile, minSide: opts.minSide ?? profile.minSide }, K, k)
@@ -181,7 +181,7 @@ describe('fusedOutline', () => {
     const big = Math.max(...cs.map(c => Math.abs(area(c)))), exact = 800 * 600 - (4 - Math.PI) * 24 * 24
     expect(Math.abs(big - exact) / exact).toBeLessThan(0.01)
   })
-  it('samples the grid exactly as fusedField, culling per block the shapes that cannot be among the nearest two', () => {
+  it('samples the grid exactly as fusedField, culling per block the shapes that cannot be among the nearest two (three per pair)', () => {
     const layouts: FusedShape[][] = [
       [rect(0, 0, 80, 40, 20), rect(88, 0, 80, 40, 20)],
       Array.from({ length: 60 }, (_, k) => rect((k % 10) * 50, Math.floor(k / 10) * 50, 40, 40, 0)),
@@ -189,11 +189,11 @@ describe('fusedOutline', () => {
       [rect(0, 0, 100, 20), rect(0, 80, 100, 20), rect(0, 0, 20, 100), rect(80, 0, 20, 100)],   // overlapping
       [rect(0, 0, 300, 200, 24), rect(100, 60, 80, 40, 20), rect(320, 80, 12, 12, 6)],           // one inside another
     ]
-    for (const shapes of layouts) {
-      const g = fusedGrid(shapes, 16), f = fusedSamples(shapes, 16, g)
+    for (const shapes of layouts) for (const k of [32, fusedSmoothing(shapes, 16)]) {
+      const g = fusedGrid(shapes, 16, undefined, k), f = fusedSamples(shapes, 16, g, k)
       let mismatches = 0
-      for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) if (f[j * g.nx + i] !== fusedField(shapes, 16, g.x0 + i * g.step, g.y0 + j * g.step)) mismatches++
-      expect(mismatches, `${shapes.length} shapes`).toBe(0)
+      for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) if (f[j * g.nx + i] !== fusedField(shapes, 16, g.x0 + i * g.step, g.y0 + j * g.step, k)) mismatches++
+      expect(mismatches, `${shapes.length} shapes, ${typeof k === 'number' ? 'k 32' : 'per pair'}`).toBe(0)
     }
   })
   it('does not depend on the order of the shapes; four rounds around a hole leave one clean hole (no speck inside)', () => {
@@ -258,8 +258,8 @@ describe('fusedSmoothing: flatter necks (Task 17A)', () => {
       const tops: number[] = []
       for (let x = first; x <= -first + 1e-9; x += 2) tops.push(topAt(cs[0]!, x))
       // never below the members' tops (the fixed smoothing dips 7–10 pt at every neck); the smin's blend swells the
-      // tops beside each neck by ≈ 6–7 % of the half height (1.5 pt on these capsules, 1.66 on the rounds: the exact
-      // field's, not the grid's), which no k avoids while the neck keeps its full height
+      // tops beside each neck (measured on the exact field: 1.50 pt on these capsules, 1.66 on the rounds), which no k
+      // avoids while a round neck keeps its full height
       expect(Math.min(...tops), name).toBeGreaterThan(half - 0.5)
       expect(Math.max(...tops), name).toBeLessThan(half + 2)
     }
@@ -274,18 +274,90 @@ describe('fusedSmoothing: flatter necks (Task 17A)', () => {
     expect(last).toBeLessThan(52 * 0.25)
     const apart = circles(2, 16); expect(fusedOutline(apart, 16, { k: fusedSmoothing(apart, 16) })).toHaveLength(2)
   })
-  it('k follows the gap that holds the cluster together (the spanning tree’s largest edge)', () => {
-    const tight = [rect(0, 0, 52, 52, 26), rect(60, 0, 52, 52, 26), rect(127, 0, 52, 52, 26)]   // gaps 8 and 15
-    expect(fusedSmoothing(tight, 16)).toBeCloseTo(fusedSmoothing(circles(2, 15), 16), 6)
-    expect(fusedSmoothing([rect(0, 0, 52, 52, 26)], 16)).toBe(32)
-    // the gap is the radius-aware one core clusters by: two rounds placed diagonally are as far apart as their arcs
-    const a = 45 * Math.PI / 180, diag = [rect(0, 0, 52, 52, 26), rect(60 * Math.cos(a), 60 * Math.sin(a), 52, 52, 26)]
-    expect(fusedSmoothing(diag, 16)).toBeCloseTo(fusedSmoothing(circles(2, 8), 16), 6)
+  /** A row of `d` pt rounds with the given gaps between them. */
+  const row = (gaps: number[], d = 52) => {
+    const out = [rect(0, 0, d, d, d / 2)]
+    let x = d
+    for (const g of gaps) { out.push(rect(x + g, 0, d, d, d / 2)); x += g + d }
+    return out
+  }
+  /** The traced outline's height at pt x (the shapes' own frame), smoothed per pair. */
+  const heightAtPt = (shapes: FusedShape[], x: number) => {
+    const cs = fusedOutline(shapes, 16, { k: fusedSmoothing(shapes, 16) }), b = fusedBounds(shapes)
+    return Math.max(...cs.map(c => { const ys = ysAt(c, x - (b.x + b.width / 2)); return ys.length ? Math.max(...ys) - Math.min(...ys) : 0 }))
+  }
+  /** The exact field's top at pt x above the line y = cy (pt, y down), by bisection; 0 where (x, cy) is outside. */
+  const exactTop = (shapes: FusedShape[], k: FusedSmoothing, x: number, cy: number) => {
+    if (!(fusedField(shapes, 16, x, cy, k) < 0)) return 0
+    let lo = 0, hi = 200
+    for (let i = 0; i < 50; i++) { const m = (lo + hi) / 2; if (fusedField(shapes, 16, x, cy - m, k) < 0) lo = m; else hi = m }
+    return lo
+  }
+
+  it('k per pair: each pair from its own gap and the smaller corner radius (radius-aware, as core clusters)', () => {
+    const k = (shapes: FusedShape[], i = 0, j = 1) => { const t = fusedSmoothing(shapes, 16); return t.k[i * t.n + j]! }
     // flat(g) = 4 · (√((r + g/2)² + r²) − r) below half the spacing, 2 · spacing from the spacing on
-    expect(fusedSmoothing(circles(2, 8), 16)).toBeCloseTo(4 * (Math.hypot(26 + 4, 26) - 26), 9)
-    expect(fusedSmoothing(circles(2, 16), 16)).toBe(32); expect(fusedSmoothing(circles(2, 30), 16)).toBe(32)
+    expect(k(circles(2, 8))).toBeCloseTo(4 * (Math.hypot(26 + 4, 26) - 26), 9)
+    expect(k(circles(2, 16))).toBe(32); expect(k(circles(2, 30))).toBe(32)
+    const tight = row([8, 15])                                                                        // gaps 8 and 15
+    expect(k(tight, 0, 1)).toBeCloseTo(k(circles(2, 8)), 9); expect(k(tight, 1, 2)).toBeCloseTo(k(circles(2, 15)), 9)
+    expect(k(tight, 1, 0)).toBe(k(tight, 0, 1)); expect(k(tight, 0, 2)).toBe(32)                      // symmetric; far: 2 · spacing
+    // two rounds placed diagonally are as far apart as their arcs
+    const a = 45 * Math.PI / 180
+    expect(k([rect(0, 0, 52, 52, 26), rect(60 * Math.cos(a), 60 * Math.sin(a), 52, 52, 26)])).toBeCloseTo(k(circles(2, 8)), 6)
+    // the corner radius, not half the short side: 52-tall radius-12 rects blend as radius-12 corners (here exactly 32)
+    expect(k([rect(0, 0, 80, 52, 12), rect(88, 0, 80, 52, 12)])).toBeCloseTo(4 * (Math.hypot(12 + 4, 12) - 12), 9)
+    // the smaller of the two corners; a sharp corner counts as 1 pt (k stays above 2g: joined)
+    expect(k([rect(0, 0, 52, 52, 26), rect(60, 20, 12, 12, 6)])).toBeCloseTo(4 * (Math.hypot(6 + 4, 6) - 6), 9)
+    expect(k([rect(0, 0, 44, 44), rect(52, 0, 44, 44)])).toBeCloseTo(4 * (Math.hypot(1 + 4, 1) - 1), 9)
+    const one = fusedSmoothing([rect(0, 0, 52, 52, 26)], 16)
+    expect(one.n).toBe(1); expect(one.max).toBe(32)
   })
-  it('the thin-neck sweep still builds closed, single-covered slabs with the adaptive k', () => {
+  it('rounded rectangles fuse without horns: 52-tall radius-12 members at gap 8 keep a level top', () => {
+    const shapes = [rect(0, 0, 80, 52, 12), rect(88, 0, 80, 52, 12)], cs = fusedOutline(shapes, 16, { k: fusedSmoothing(shapes, 16) })
+    expect(cs).toHaveLength(1)
+    const tops: number[] = []
+    for (let x = -44; x <= 44; x += 1) tops.push(topAt(cs[0]!, x))                                  // centre to centre
+    // never under the members' top (26), and the blend's swell beside the neck is 1.12 pt on the exact field
+    expect(Math.min(...tops)).toBeGreaterThan(26 - 0.5); expect(Math.max(...tops)).toBeLessThan(26 + 1.25)
+  })
+  it('each neck follows its own gap: gaps 8, 8 and 14 in a row give two full necks and one thin', () => {
+    const shapes = row([8, 8, 14])
+    expect(heightAtPt(shapes, 56)).toBeGreaterThan(52 - 0.5); expect(heightAtPt(shapes, 116)).toBeGreaterThan(52 - 0.5)
+    expect(heightAtPt(shapes, 179)).toBeLessThan(30)                                                // ≈ 24.8 of 52
+  })
+  it('a member parting from a 3-member cluster leaves the other neck as it was across the split', () => {
+    const before = heightAtPt(row([8, 15.9]), 56)                                                   // the third still in
+    const after = heightAtPt(row([8]), 56)                                                          // core has let it go
+    expect(Math.abs(before - after)).toBeLessThan(0.5)
+    expect(after).toBeGreaterThan(52 - 0.5)
+  })
+  it('a 12 pt badge beside two rounds leaves their neck as without it', () => {
+    const pair = row([8]), badged = [...pair, rect(52 + 8 + 52 + 4, 20, 12, 12, 6)]
+    expect(Math.abs(heightAtPt(badged, 56) - heightAtPt(pair, 56))).toBeLessThan(0.5)
+  })
+  it('the outline has no notch where the second and third nearest trade places between pairs of different k', () => {
+    const layouts: [string, FusedShape[]][] = [
+      ['gaps 8, 8, 14', row([8, 8, 14])], ['a badge', [...row([8]), rect(116, 20, 12, 12, 6)]],
+      ['gaps 8, 15.5', row([8, 15.5])], ['mixed sizes', [rect(0, 0, 52, 52, 26), rect(56, 6, 40, 40, 20), rect(110, 0, 52, 52, 26)]],
+    ]
+    for (const [name, shapes] of layouts) {
+      const k = fusedSmoothing(shapes, 16), b = fusedBounds(shapes), cy = b.y + b.height / 2
+      const x0 = shapes[0]!.x + shapes[0]!.width / 2, x1 = shapes[shapes.length - 1]!.x + shapes[shapes.length - 1]!.width / 2
+      let step = 0
+      for (let x = x0; x < x1; x += 0.05) step = Math.max(step, Math.abs(exactTop(shapes, k, x + 0.01, cy) - exactTop(shapes, k, x, cy)))
+      // a step in the top over 0.01 pt: slope alone here (≈ 0.01); a notch was 0.7–1.3 pt with the nearest two's k
+      expect(step, name).toBeLessThan(0.05)
+    }
+  })
+  it('fusedSmoothing rejects shapes and spacings that are not finite; a table for other shapes is refused', () => {
+    expect(() => fusedSmoothing([rect(0, 0, NaN, 40)], 16)).toThrow(/fusedSmoothing.*有限数/)
+    expect(() => fusedSmoothing([rect(0, 0, 40, 40)], -1)).toThrow(GlassUIError)
+    const table = fusedSmoothing(circles(3, 8), 16)
+    expect(() => fusedOutline(circles(2, 8), 16, { k: table })).toThrow(/逐对平滑表/)
+    expect(() => extrudeSlab([], circles(2, 8), 16, profile, 4, { k: table })).toThrow(GlassUIError)
+  })
+  it('the thin-neck sweep still builds closed, single-covered slabs with the per-pair k', () => {
     const bad: string[] = []
     const check = (label: string, shapes: FusedShape[], K: number, opts: { step?: number; minSide?: number } = {}) => {
       const why = faults(shapes, 16, K, { ...opts, k: fusedSmoothing(shapes, 16) })
@@ -306,9 +378,13 @@ describe('fusedSmoothing: flatter necks (Task 17A)', () => {
       check(`D ${D} ${deg}° gap ${gap.toFixed(2)}`, diagonal(D, deg, gap), 4)
       check(`step 3.9 D ${D} ${deg}° gap ${gap.toFixed(2)}`, diagonal(D, deg, gap), 4, { step: 3.9 })
     }
-    // toolbars and a 2 × 2 grid at close gaps
+    // toolbars and a 2 × 2 grid at close gaps; mixed gaps, a badge, rounded rects, a member parting
     check('toolbar gap 8', Array.from({ length: 5 }, (_, i) => rect(i * 88, 0, 80, 44, 22)), 8, { minSide: 44 })
     check('grid gap 6', [0, 1, 2, 3].map(i => rect((i % 2) * 50, Math.floor(i / 2) * 50, 44, 44, 22)), 4, { minSide: 44 })
+    check('gaps 8, 8, 14', row([8, 8, 14]), 8, { minSide: 52 })
+    check('badge', [...row([8]), rect(116, 20, 12, 12, 6)], 4, { minSide: 12 })
+    for (const g3 of [15.5, 15.9, 15.99]) check(`third at ${g3}`, row([8, g3]), 4, { minSide: 52 })
+    for (const gap of [2, 8, 14]) for (const r of [2, 8, 12]) check(`rects r ${r} gap ${gap}`, [rect(0, 0, 80, 52, r), rect(80 + gap, 0, 80, 52, r), rect(160 + 2 * gap, 0, 80, 52, r)], 4, { minSide: 52 })
     expect(bad).toEqual([])
   }, 30_000)
 })

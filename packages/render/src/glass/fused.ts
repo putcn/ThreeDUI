@@ -8,9 +8,10 @@ import { profileAt, type SlabInstanceParams } from './slab9'
  * the 9-slice slab's fillet profile (`extrudeSlab`) into a plain mesh that `GlassBatch({ mesh })` draws through the
  * glass material (`meshVertex`).
  *
- * The smoothing k (pt) is `2 · spacing` unless given; a container passes `fusedSmoothing`, which flattens the necks of
- * close members and returns to `2 · spacing` as they part. Every step of one slab (field, normals, the grid's margin,
- * the extrusion) takes the same k.
+ * The smoothing k (pt) is `2 · spacing` for every pair of shapes unless given; a container passes `fusedSmoothing`, a
+ * k per pair from that pair's own gap and corners, which flattens the necks of close members and returns to
+ * `2 · spacing` as they part. Every step of one slab (field, normals, the grid's margin, the extrusion) takes the same
+ * smoothing.
  *
  * Frames: the shapes, `fusedField` and the point `fusedNormal` takes are in Surface pt (y down). The outline and the
  * extrusion share one frame: pt, y up, origin at the centre of the shapes' bounds (`fusedBounds`), back face at z = 0
@@ -27,6 +28,15 @@ export interface FusedShape { x: number; y: number; width: number; height: numbe
 export interface FusedProfile { thickness: number; fillet: number; filletBottom: number; minSide: number }
 /** A plain slab mesh: xyz positions and unit normals (3 floats per vertex each) and a triangle index. */
 export interface SlabMesh { positions: Float32Array; normals: Float32Array; index: Uint32Array }
+/**
+ * Per-pair smoothing (`fusedSmoothing`): `k[i · n + j]` (pt) for shapes i and j of the `n` it was built for, in their
+ * order (symmetric); `max` the largest.
+ */
+export interface FusedPairSmoothing { readonly n: number; readonly k: Float64Array; readonly max: number }
+/** A slab's smoothing: one k (pt) for every pair of shapes, or a k per pair (`fusedSmoothing`). */
+export type FusedSmoothing = number | FusedPairSmoothing
+/** The k the nearest two shapes i and j blend with. */
+const pairK = (k: FusedSmoothing, i: number, j: number): number => typeof k === 'number' ? k : k.k[i * k.n + j]!
 
 /**
  * The default smoothing `k` per pt of spacing. The polynomial smin lowers the field by at most k/4 (where the two
@@ -59,52 +69,70 @@ function smin(a: number, b: number, k: number): number {
 
 /**
  * The smooth union of the shapes' SDFs at (x, y) (Surface pt, y down; negative inside) with smoothing `k` (default
- * `2 · spacing`): `smin` of the nearest two (`Infinity` for no shapes; the one SDF for one shape). It depends on the
- * shapes but not on their order, so a symmetric layout gives a symmetric outline and a reorder changes nothing; two
- * shapes blend as the brief's polynomial smin, and nowhere is the field lowered by more than k/4 (folding smin over
- * every shape would add up where three or four meet: in a grid of rounds, a speck of glass inside each hole). It also
- * bounds the cost: only the nearest two count.
+ * `2 · spacing`; per pair: that of the two shapes blended): `smin` of the nearest two (`Infinity` for no shapes; the
+ * one SDF for one shape). With one k it depends on the shapes but not on their order, so a symmetric layout gives a
+ * symmetric outline and a reorder changes nothing; two shapes blend as the brief's polynomial smin, and nowhere is the
+ * field lowered by more than k/4 (folding smin over every shape would add up where three or four meet: in a grid of
+ * rounds, a speck of glass inside each hole). It also bounds the cost: only the nearest two count. With a k per pair,
+ * the least of the smins of the three pairs among the nearest three, each with its own k (`union3`): each neck follows
+ * its own pair's k, nowhere lowered by more than the largest k / 4, and no step where the second and third nearest
+ * trade places.
  */
-export function fusedField(shapes: readonly FusedShape[], spacing: number, x: number, y: number, k = spacing * SMOOTHING_PER_SPACING): number {
-  let a = Infinity, b = Infinity                                       // the nearest two SDFs, a ≤ b
-  for (const s of shapes) { const e = sdRound(s, x, y); if (e < a) { b = a; a = e } else if (e < b) b = e }
-  return b === Infinity ? a : smin(a, b, k)
+export function fusedField(shapes: readonly FusedShape[], spacing: number, x: number, y: number, k: FusedSmoothing = spacing * SMOOTHING_PER_SPACING): number {
+  // the nearest three SDFs, a ≤ b ≤ c, and their shapes
+  let a = Infinity, b = Infinity, c = Infinity, ia = -1, ib = -1, ic = -1
+  for (let i = 0; i < shapes.length; i++) {
+    const e = sdRound(shapes[i]!, x, y)
+    if (e < a) { c = b; ic = ib; b = a; ib = ia; a = e; ia = i } else if (e < b) { c = b; ic = ib; b = e; ib = i } else if (e < c) { c = e; ic = i }
+  }
+  return union3(a, b, c, ia, ib, ic, k)
 }
 
 /**
- * The smoothing k (pt) for a cluster's shapes: flat necks where its members sit close, `2 · spacing` (the default) as
- * they part. `g` is the largest edge of the minimum spanning tree over the members' radius-aware gaps (`glassGap`, as
- * core clusters them): the gap that holds the cluster together. `r` is half the smallest member's short side, and
- * `flat(g) = 4 · (√((r + g/2)² + r²) − r)` the k at which two such rounds a gap g apart are joined at their full height
- * at the midpoint (smin(a, a) = 0 there, a = √((r + g/2)² + r²) − r); `flat(g) ≥ 2g`, so the cluster stays joined.
- * Then `k = mix(flat(g), 2 · spacing, smoothstep(spacing / 2, spacing, g))`: necks at full height up to half the
- * spacing, thinning to the fixed smoothing's neck as g reaches the spacing, where the neck closes exactly when core's
- * clustering lets go. One member (or none): `2 · spacing`. The neck itself does not dip, but the smin's blend swells
- * the tops beside it by about 6–7 % of r (1.5 pt on 44 pt capsules at gap 8, 1.66 on 52 pt rounds): no k keeps the
- * neck at full height without that.
+ * The union of the nearest three SDFs a ≤ b ≤ c (of shapes ia, ib, ic): with one k, `smin(a, b)`; per pair, the least
+ * of the three pairs' smins, each with its pair's k — continuous where the second and third nearest trade places (the
+ * same three pairs either side), which `smin(a, b)` alone with its pair's k is not (it steps by up to about 1.3 pt
+ * there between pairs of different k). With one k the least is always `smin(a, b)` (smin rises with either argument),
+ * so the two agree exactly.
  */
-export function fusedSmoothing(shapes: readonly FusedShape[], spacing: number): number {
+function union3(a: number, b: number, c: number, ia: number, ib: number, ic: number, k: FusedSmoothing): number {
+  if (b === Infinity) return a
+  if (typeof k === 'number') return smin(a, b, k)
+  const ab = smin(a, b, pairK(k, ia, ib))
+  return c === Infinity ? ab : Math.min(ab, smin(a, c, pairK(k, ia, ic)), smin(b, c, pairK(k, ib, ic)))
+}
+
+/** The least neck radius `fusedSmoothing` assumes (pt): at r = 0, flat(g) = 2g exactly, a neck of zero width. */
+const MIN_NECK_RADIUS = 1
+
+/**
+ * The smoothing of a cluster's shapes, per pair (Task 17A): necks at full height where two members sit close,
+ * `2 · spacing` (the default) as they part — each pair from its own gap and corners alone, so one member parting, a
+ * looser gap elsewhere or a small badge leaves the other necks as they are. For shapes a and b: `g` their radius-aware
+ * gap (`glassGap`, as core clusters them), `r` the smaller of their corner radii (each clamped to half its short side,
+ * as the SDF clamps it; at least 1 pt), `flat(g) = 4 · (√((r + g/2)² + r²) − r)` the k at which two corners of radius
+ * r a gap g apart join at their full height at the midpoint (smin(a, a) = 0 there, a = √((r + g/2)² + r²) − r; above
+ * 2g, so the pair stays joined), and `k = mix(flat(g), 2 · spacing, smoothstep(spacing / 2, spacing, g))`: full-height
+ * necks up to half the spacing, thinning to the fixed smoothing's neck as g reaches the spacing, where the neck closes
+ * exactly when core's clustering lets go. The neck itself does not dip, but the smin's blend swells the tops beside it:
+ * measured on the exact field at gap 8, 1.50 pt on 80 × 44 capsules, 1.66 on 52 pt rounds, 1.00–1.12 on rounded
+ * rectangles of radius 2–12, 1.58 on a 200 × 120 panel of radius 24, 4.8 on 200 pt rounds; no k keeps a round neck at
+ * full height without it.
+ */
+export function fusedSmoothing(shapes: readonly FusedShape[], spacing: number): FusedPairSmoothing {
   checkSpacing('fusedSmoothing', spacing)
-  const n = shapes.length, wide = spacing * SMOOTHING_PER_SPACING
-  if (n < 2) return wide
-  // Prim's over the complete graph of gaps (n is a container's member count): the largest edge taken
-  const best = new Float64Array(n).fill(Infinity), done = new Uint8Array(n)
-  let g = 0, cur = 0
-  done[0] = 1
-  for (let added = 1; added < n; added++) {
-    let next = -1
-    for (let j = 0; j < n; j++) {
-      if (done[j]) continue
-      best[j] = Math.min(best[j]!, glassGap(shapes[cur]!, shapes[j]!))
-      if (next < 0 || best[j]! < best[next]!) next = j
-    }
-    g = Math.max(g, best[next]!); done[next] = 1; cur = next
+  checkShapes('fusedSmoothing', shapes)
+  const n = shapes.length, wide = spacing * SMOOTHING_PER_SPACING, k = new Float64Array(n * n).fill(wide)
+  const corner = (s: FusedShape) => Math.max(0, Math.min(s.radius, s.width / 2, s.height / 2))
+  let max = wide
+  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+    const a = shapes[i]!, b = shapes[j]!, g = glassGap(a, b), r = Math.max(MIN_NECK_RADIUS, Math.min(corner(a), corner(b)))
+    const flat = 4 * (Math.sqrt((r + g / 2) ** 2 + r * r) - r), t = smoothstep(0.5 * spacing, spacing, g)
+    const kk = flat * (1 - t) + wide * t                               // (exactly 2 · spacing at t = 1)
+    k[i * n + j] = kk; k[j * n + i] = kk
+    max = Math.max(max, kk)
   }
-  let r = Infinity
-  for (const s of shapes) r = Math.min(r, s.width / 2, s.height / 2)
-  r = Math.max(r, 0)
-  const flat = 4 * (Math.sqrt((r + g / 2) ** 2 + r * r) - r), t = smoothstep(0.5 * spacing, spacing, g)
-  return flat * (1 - t) + wide * t                                     // (exactly 2 · spacing at t = 1)
+  return { n, k, max }
 }
 
 /** Nodes per side of the blocks `fusedSamples` culls the shapes for. */
@@ -118,16 +146,19 @@ const BLOCK = 8
  * distance moved): two shapes are then nearer than it at every node of the block, so it is never one of the nearest
  * two — whatever the smoothing.
  */
-export function fusedSamples(shapes: readonly FusedShape[], spacing: number, grid: { step: number; x0: number; y0: number; nx: number; ny: number }, k = spacing * SMOOTHING_PER_SPACING): Float64Array {
+export function fusedSamples(shapes: readonly FusedShape[], spacing: number, grid: { step: number; x0: number; y0: number; nx: number; ny: number }, k: FusedSmoothing = spacing * SMOOTHING_PER_SPACING): Float64Array {
   const { step, x0, y0, nx, ny } = grid
   const field = new Float64Array(nx * ny), cand = new Int32Array(shapes.length)
   for (let bj = 0; bj < ny; bj += BLOCK) for (let bi = 0; bi < nx; bi += BLOCK) {
     const i1 = Math.min(bi + BLOCK, nx) - 1, j1 = Math.min(bj + BLOCK, ny) - 1
     const ax = x0 + bi * step, bx = x0 + i1 * step, ay = y0 + bj * step, by = y0 + j1 * step
     const mx = (ax + bx) / 2, my = (ay + by) / 2, r = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2) / 2
-    let h1 = Infinity, h2 = Infinity                                   // the least two upper bounds
-    for (const s of shapes) { const h = sdRound(s, mx, my) + r; if (h < h1) { h2 = h1; h1 = h } else if (h < h2) h2 = h }
-    const reach = h2 + 1e-6                                             // (the margin absorbs rounding)
+    let h1 = Infinity, h2 = Infinity, h3 = Infinity                    // the least three upper bounds
+    for (const s of shapes) {
+      const h = sdRound(s, mx, my) + r
+      if (h < h1) { h3 = h2; h2 = h1; h1 = h } else if (h < h2) { h3 = h2; h2 = h } else if (h < h3) h3 = h
+    }
+    const reach = (typeof k === 'number' ? h2 : h3) + 1e-6              // (the margin absorbs rounding)
     let nc = 0
     shapes.forEach((s, q) => {
       const gx = Math.max(s.x - bx, ax - (s.x + s.width), 0), gy = Math.max(s.y - by, ay - (s.y + s.height), 0)
@@ -135,9 +166,12 @@ export function fusedSamples(shapes: readonly FusedShape[], spacing: number, gri
     })
     for (let j = bj; j <= j1; j++) for (let i = bi; i <= i1; i++) {
       const x = x0 + i * step, y = y0 + j * step
-      let a = Infinity, b = Infinity
-      for (let c = 0; c < nc; c++) { const e = sdRound(shapes[cand[c]!]!, x, y); if (e < a) { b = a; a = e } else if (e < b) b = e }
-      field[j * nx + i] = b === Infinity ? a : smin(a, b, k)
+      let a = Infinity, b = Infinity, c = Infinity, ia = -1, ib = -1, ic = -1
+      for (let m = 0; m < nc; m++) {
+        const q = cand[m]!, e = sdRound(shapes[q]!, x, y)
+        if (e < a) { c = b; ic = ib; b = a; ib = ia; a = e; ia = q } else if (e < b) { c = b; ic = ib; b = e; ib = q } else if (e < c) { c = e; ic = q }
+      }
+      field[j * nx + i] = union3(a, b, c, ia, ib, ic, k)
     }
   }
   return field
@@ -147,7 +181,7 @@ export function fusedSamples(shapes: readonly FusedShape[], spacing: number, gri
  * The gradient of `fusedField` at (x, y) (Surface pt, y down; per pt) by central differences, as (x, y) y up: about
  * unit length on a plain SDF, shorter where two shapes blend, near 0 at a bridge's saddle.
  */
-function fusedGradient(shapes: readonly FusedShape[], spacing: number, x: number, y: number, k: number): [number, number] {
+function fusedGradient(shapes: readonly FusedShape[], spacing: number, x: number, y: number, k: FusedSmoothing): [number, number] {
   const e = 0.25
   const gx = fusedField(shapes, spacing, x + e, y, k) - fusedField(shapes, spacing, x - e, y, k)
   const gy = fusedField(shapes, spacing, x, y + e, k) - fusedField(shapes, spacing, x, y - e, k)
@@ -158,7 +192,7 @@ function fusedGradient(shapes: readonly FusedShape[], spacing: number, x: number
  * The unit outward gradient of `fusedField` (smoothing `k`) at (x, y) (Surface pt, y down), by central differences, as
  * (x, y) in the outline's y-up frame; (0, 0) where the field is flat.
  */
-export function fusedNormal(shapes: readonly FusedShape[], spacing: number, x: number, y: number, k = spacing * SMOOTHING_PER_SPACING): [number, number] {
+export function fusedNormal(shapes: readonly FusedShape[], spacing: number, x: number, y: number, k: FusedSmoothing = spacing * SMOOTHING_PER_SPACING): [number, number] {
   const [gx, gy] = fusedGradient(shapes, spacing, x, y, k), l = Math.hypot(gx, gy) || 1
   return [gx / l, gy / l]
 }
@@ -244,7 +278,14 @@ const finite = (...v: number[]) => v.every(Number.isFinite)
 function checkSpacing(scope: string, spacing: number): void {
   if (!(spacing >= 0) || !Number.isFinite(spacing)) throw new GlassUIError(scope, 'spacing 必须是不小于 0 的有限数', { got: String(spacing) })
 }
-function checkSmoothing(scope: string, k: number): void {
+function checkShapes(scope: string, shapes: readonly FusedShape[]): void {
+  for (const s of shapes) if (!finite(s.x, s.y, s.width, s.height, s.radius)) throw new GlassUIError(scope, '形状的位置、尺寸和圆角必须是有限数', { got: `x ${s.x}, y ${s.y}, ${s.width} × ${s.height}, radius ${s.radius}` })
+}
+function checkSmoothing(scope: string, k: FusedSmoothing, n: number): void {
+  if (typeof k !== 'number') {
+    if (k.n !== n) throw new GlassUIError(scope, `逐对平滑表是为 ${k.n} 个形状建的，这里有 ${n} 个（应为同一组形状的 fusedSmoothing）`)
+    return
+  }
   if (!(k >= 0) || !Number.isFinite(k)) throw new GlassUIError(scope, 'k（融合的平滑宽度，pt）必须是不小于 0 的有限数', { got: String(k) })
 }
 
@@ -259,15 +300,15 @@ export const FUSED_MAX_CELLS = 40_000
 /**
  * The sampling grid of `fusedOutline` (Surface pt): `nx × ny` nodes `step` apart from (x0, y0), covering the shapes'
  * bounds plus `max(spacing, k / 4) + 2·step` (the outline reaches at most k/4 past the shapes; k defaults to
- * `2 · spacing`). The default step is `clamp(minSide / 24, 0.5, 2)` (`minSide` the shortest side of any
+ * `2 · spacing`, and a per-pair smoothing gives its largest). The default step is `clamp(minSide / 24, 0.5, 2)` (`minSide` the shortest side of any
  * shape), coarsened until the grid has at most `FUSED_MAX_CELLS` nodes; a given `step` (positive, finite) is kept as
  * is. A coarsened step traces a member under a few steps across roughly (one under about one step can vanish).
  */
-export function fusedGrid(shapes: readonly FusedShape[], spacing: number, step?: number, k = spacing * SMOOTHING_PER_SPACING): { step: number; x0: number; y0: number; nx: number; ny: number } {
+export function fusedGrid(shapes: readonly FusedShape[], spacing: number, step?: number, k: FusedSmoothing = spacing * SMOOTHING_PER_SPACING): { step: number; x0: number; y0: number; nx: number; ny: number } {
   checkSpacing('fusedGrid', spacing)
-  checkSmoothing('fusedGrid', k)
+  checkSmoothing('fusedGrid', k, shapes.length)
   if (step !== undefined && (!(step > 0) || !Number.isFinite(step))) throw new GlassUIError('fusedGrid', 'step 必须是正的有限数', { got: String(step) })
-  const b = fusedBounds(shapes), reach = Math.max(spacing, k / 4)
+  const b = fusedBounds(shapes), reach = Math.max(spacing, (typeof k === 'number' ? k : k.max) / 4)
   const layout = (st: number) => {
     const margin = reach + 2 * st
     return { step: st, x0: b.x - margin, y0: b.y - margin, nx: Math.ceil((b.width + 2 * margin) / st) + 1, ny: Math.ceil((b.height + 2 * margin) / st) + 1 }
@@ -292,11 +333,11 @@ export function fusedGrid(shapes: readonly FusedShape[], spacing: number, step?:
  * (Douglas–Peucker, ε = 0.1 · step). A few typed arrays per call and none per cell, at the cost `FUSED_MAX_CELLS`
  * notes: it reruns whenever a cluster's shapes change (a press or hover tilt does, every frame for a while).
  */
-export function fusedOutline(shapes: readonly FusedShape[], spacing: number, opts: { step?: number; k?: number } = {}): Contour[] {
+export function fusedOutline(shapes: readonly FusedShape[], spacing: number, opts: { step?: number; k?: FusedSmoothing } = {}): Contour[] {
   checkSpacing('fusedOutline', spacing)
   const k = opts.k ?? spacing * SMOOTHING_PER_SPACING
-  checkSmoothing('fusedOutline', k)
-  for (const s of shapes) if (!finite(s.x, s.y, s.width, s.height, s.radius)) throw new GlassUIError('fusedOutline', '形状的位置、尺寸和圆角必须是有限数', { got: `x ${s.x}, y ${s.y}, ${s.width} × ${s.height}, radius ${s.radius}` })
+  checkSmoothing('fusedOutline', k, shapes.length)
+  checkShapes('fusedOutline', shapes)
   if (opts.step !== undefined && (!(opts.step > 0) || !Number.isFinite(opts.step))) throw new GlassUIError('fusedOutline', 'step 必须是正的有限数', { got: String(opts.step) })
   if (!shapes.length) return []
 
@@ -498,13 +539,13 @@ function unfold(q: Float64Array, n: number): void {
  * that the profile's fillets fit it (as on a 9-slice slab). Walls join consecutive rings (outward: material lies left
  * of every contour); the top cap triangulates the plateau edge (ring 2K+1, normal +z) and the back cap ring 0
  * (normal −z), holes included, on those rings' own vertices — the fillet profile's end rings already carry exactly
- * those normals.
+ * those normals — with any T-junction earcut leaves across a straight run of a ring closed (`mendCap`).
  */
-export function extrudeSlab(contours: readonly Contour[], shapes: readonly FusedShape[], spacing: number, profile: FusedProfile, K: number, opts: { k?: number } = {}): SlabMesh {
+export function extrudeSlab(contours: readonly Contour[], shapes: readonly FusedShape[], spacing: number, profile: FusedProfile, K: number, opts: { k?: FusedSmoothing } = {}): SlabMesh {
   if (!Number.isInteger(K) || K < 1) throw new GlassUIError('extrudeSlab', 'K 必须是不小于 1 的整数（每段圆角的环数）', { got: String(K) })
   checkSpacing('extrudeSlab', spacing)
   const smoothing = opts.k ?? spacing * SMOOTHING_PER_SPACING
-  checkSmoothing('extrudeSlab', smoothing)
+  checkSmoothing('extrudeSlab', smoothing, shapes.length)
   for (const name of ['thickness', 'minSide'] as const) {
     if (!(profile[name] > 0) || !Number.isFinite(profile[name])) throw new GlassUIError('extrudeSlab', `profile.${name} 必须是正的有限数`, { got: String(profile[name]) })
   }
@@ -582,16 +623,71 @@ export function extrudeSlab(contours: readonly Contour[], shapes: readonly Fused
       const pts = loops.map(ci => contours[ci]!.map((_, i) => { const v = 3 * vertex(ci, k, i); return new Vector2(positions[v]!, positions[v + 1]!) }))
       const faces = ShapeUtils.triangulateShape(pts[0]!, pts.slice(1))
       // face indices run over the loops as triangulated (it drops a loop's repeated end point, shortening that loop)
-      const map: number[] = []
-      loops.forEach((ci, q) => { for (let i = 0; i < pts[q]!.length; i++) map.push(vertex(ci, k, i)) })
+      const map: number[] = [], starts = [0]
+      loops.forEach((ci, q) => { for (let i = 0; i < pts[q]!.length; i++) map.push(vertex(ci, k, i)); starts.push(map.length) })
+      // each triangle wound by its own sign (counter-clockwise faces +z); a zero-area one has none and is dropped, the
+      // T-junctions that leaves (or earcut leaves across a collinear run of the ring) mended (`mendCap`)
+      const tris: number[] = [], loose: number[] = []
       for (const f of faces) {
-        const A = map[f[0]!]!, B = map[f[1]!]!, C = map[f[2]!]!
-        const cross = (positions[3 * B]! - positions[3 * A]!) * (positions[3 * C + 1]! - positions[3 * A + 1]!) - (positions[3 * B + 1]! - positions[3 * A + 1]!) * (positions[3 * C]! - positions[3 * A]!)
-        if ((cross < 0) === up) index.push(A, C, B); else index.push(A, B, C)   // counter-clockwise faces +z
+        const A = map[f[0]!]!, B = map[f[1]!]!, C = map[f[2]!]!, cross = cross2(positions, A, B, C)
+        if (cross === 0) loose.push(A, B, C)
+        else if ((cross < 0) === up) tris.push(A, C, B); else tris.push(A, B, C)
       }
+      mendCap(tris, loose, loops.map((_, q) => map.slice(starts[q]!, starts[q + 1]!)), positions)
+      for (const v of tris) index.push(v)
     }
   })
   return { positions, normals, index: Uint32Array.from(index) }
+}
+
+/** Twice the signed xy area of the triangle (A, B, C) of `positions` (vertex indices). */
+function cross2(positions: Float32Array, A: number, B: number, C: number): number {
+  return (positions[3 * B]! - positions[3 * A]!) * (positions[3 * C + 1]! - positions[3 * A + 1]!) - (positions[3 * B + 1]! - positions[3 * A + 1]!) * (positions[3 * C]! - positions[3 * A]!)
+}
+
+/**
+ * Closes a cap's T-junctions. Where the ring runs straight through a vertex (a collinear run), earcut may span the run
+ * with one triangle edge while smaller triangles end at the vertex in the middle — watertight in exact arithmetic, but
+ * not a closed mesh. Such an edge is found unmatched: no triangle of `tris` (vertex triples, wound) uses it the other
+ * way and it is no edge of the ring (`loops`: each loop's vertices in ring order). An end of an unmatched edge (or a
+ * vertex of a dropped zero-area triangle, `loose`) lying strictly inside another unmatched edge, within 1e-6 pt of its
+ * line, splits that edge's triangle in two, keeping the winding, until none does. Unmatched edges are rare (usually
+ * none), so this costs one pass over the cap's edges.
+ */
+function mendCap(tris: number[], loose: readonly number[], loops: readonly (readonly number[])[], positions: Float32Array): void {
+  const V = positions.length / 3, key = (a: number, b: number) => a * V + b   // a directed edge as one number
+  const ringEdge = new Set<number>()
+  for (const l of loops) l.forEach((v, i) => { const w = l[(i + 1) % l.length]!; ringEdge.add(key(v, w)); ringEdge.add(key(w, v)) })
+  for (let pass = 0; pass < 64; pass++) {
+    const has = new Set<number>()
+    for (let t = 0; t < tris.length; t += 3) for (let e = 0; e < 3; e++) has.add(key(tris[t + e]!, tris[t + (e + 1) % 3]!))
+    /** Unmatched edges: [triangle offset, edge index]. */
+    const open: [number, number][] = [], ends = new Set<number>(loose)
+    for (let t = 0; t < tris.length; t += 3) for (let e = 0; e < 3; e++) {
+      const A = tris[t + e]!, B = tris[t + (e + 1) % 3]!
+      if (has.has(key(B, A)) || ringEdge.has(key(A, B))) continue
+      open.push([t, e]); ends.add(A); ends.add(B)
+    }
+    if (!open.length) return
+    let split = false
+    for (const [t, e] of open) {
+      const A = tris[t + e]!, B = tris[t + (e + 1) % 3]!, C = tris[t + (e + 2) % 3]!
+      const ax = positions[3 * A]!, ay = positions[3 * A + 1]!, dx = positions[3 * B]! - ax, dy = positions[3 * B + 1]! - ay, l2 = dx * dx + dy * dy
+      if (!(l2 > 0)) continue
+      for (const M of ends) {
+        if (M === A || M === B || M === C) continue
+        const vx = positions[3 * M]! - ax, vy = positions[3 * M + 1]! - ay, u = (vx * dx + vy * dy) / l2
+        if (!(u > 1e-9 && u < 1 - 1e-9) || Math.abs(vx * dy - vy * dx) / Math.sqrt(l2) >= 1e-6) continue
+        // (A, B, C) with M on A–B → (A, M, C) and (M, B, C)
+        tris[t] = A; tris[t + 1] = M; tris[t + 2] = C
+        tris.push(M, B, C)
+        split = true
+        break
+      }
+      if (split) break                                                    // offsets moved: recount
+    }
+    if (!split) return
+  }
 }
 
 /**
