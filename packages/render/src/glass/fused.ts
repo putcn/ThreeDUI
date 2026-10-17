@@ -3,9 +3,10 @@ import { GlassUIError } from '@glassui/core'
 import { profileAt, type SlabInstanceParams } from './slab9'
 
 /*
- * Fused glass (GlassContainer, spec §5.2): nearby glass shapes drawn as one slab — the zero contours of the smooth
- * union of their rounded-rect SDFs (`fusedOutline`), extruded with the 9-slice slab's fillet profile (`extrudeSlab`)
- * into a plain mesh that `GlassBatch({ mesh })` draws through the glass material (`meshVertex`).
+ * Fused glass (GlassContainer, spec §5.2): nearby glass shapes drawn as one slab — the zero contours (`fusedOutline`)
+ * of the smooth union of their rounded-rect SDFs (`fusedField`: the polynomial smin of the nearest two), extruded with
+ * the 9-slice slab's fillet profile (`extrudeSlab`) into a plain mesh that `GlassBatch({ mesh })` draws through the
+ * glass material (`meshVertex`).
  *
  * Frames: the shapes, `fusedField` and the point `fusedNormal` takes are in Surface pt (y down). The outline and the
  * extrusion share one frame: pt, y up, origin at the centre of the shapes' bounds (`fusedBounds`), back face at z = 0
@@ -15,7 +16,10 @@ import { profileAt, type SlabInstanceParams } from './slab9'
 export type Contour = [number, number][]
 /** An axis-aligned rounded rect in Surface pt (already through its instance transform). */
 export interface FusedShape { x: number; y: number; width: number; height: number; radius: number }
-/** The slab profile `extrudeSlab` follows (pt); the fillets are clamped as on a 9-slice slab `minSide` wide and high. */
+/**
+ * The slab profile `extrudeSlab` follows (pt); the fillets are clamped as on a 9-slice slab `minSide` wide and high, so
+ * `minSide` is the smallest member's short side.
+ */
 export interface FusedProfile { thickness: number; fillet: number; filletBottom: number; minSide: number }
 /** A plain slab mesh: xyz positions and unit normals (3 floats per vertex each) and a triangle index. */
 export interface SlabMesh { positions: Float32Array; normals: Float32Array; index: Uint32Array }
@@ -42,12 +46,63 @@ function smin(a: number, b: number, k: number): number {
   return Math.min(a, b) - h * h * k * 0.25
 }
 
-/** The smooth union of the shapes' SDFs at (x, y) (Surface pt, y down; negative inside); `Infinity` for no shapes. */
+/**
+ * The smooth union of the shapes' SDFs at (x, y) (Surface pt, y down; negative inside): `smin` of the nearest two
+ * (`Infinity` for no shapes; the one SDF for one shape). It depends on the shapes but not on their order, so a symmetric
+ * layout gives a symmetric outline and a reorder changes nothing; two shapes blend as the brief's polynomial smin, and
+ * nowhere is the field lowered by more than k/4 (folding smin over every shape would add up where three or four meet:
+ * in a grid of rounds, a speck of glass inside each hole). It also bounds the cost: only the nearest two count.
+ */
 export function fusedField(shapes: readonly FusedShape[], spacing: number, x: number, y: number): number {
-  const k = spacing * SMOOTHING_PER_SPACING
-  let d = Infinity
-  for (const s of shapes) { const e = sdRound(s, x, y); d = d === Infinity ? e : smin(d, e, k) }
-  return d
+  let a = Infinity, b = Infinity                                       // the nearest two SDFs, a ≤ b
+  for (const s of shapes) { const e = sdRound(s, x, y); if (e < a) { b = a; a = e } else if (e < b) b = e }
+  return b === Infinity ? a : smin(a, b, spacing * SMOOTHING_PER_SPACING)
+}
+
+/** Nodes per side of the blocks `fusedSamples` culls the shapes for. */
+const BLOCK = 8
+
+/**
+ * `fusedField` at every node of `grid` (`fusedGrid`), row by row: identical values, at a cost nearly independent of the
+ * member count. Per block of BLOCK × BLOCK nodes, a shape is dropped when the block lies off its bounding box and the
+ * distance between them (a lower bound of its SDF there) exceeds the second least of the shapes' upper bounds over the
+ * block (each SDF at the block's centre plus its half-diagonal: an SDF changes by at most the distance moved): two
+ * shapes are then nearer than it at every node of the block, so it is never one of the nearest two.
+ */
+export function fusedSamples(shapes: readonly FusedShape[], spacing: number, grid: { step: number; x0: number; y0: number; nx: number; ny: number }): Float64Array {
+  const { step, x0, y0, nx, ny } = grid, k = spacing * SMOOTHING_PER_SPACING
+  const field = new Float64Array(nx * ny), cand = new Int32Array(shapes.length)
+  for (let bj = 0; bj < ny; bj += BLOCK) for (let bi = 0; bi < nx; bi += BLOCK) {
+    const i1 = Math.min(bi + BLOCK, nx) - 1, j1 = Math.min(bj + BLOCK, ny) - 1
+    const ax = x0 + bi * step, bx = x0 + i1 * step, ay = y0 + bj * step, by = y0 + j1 * step
+    const mx = (ax + bx) / 2, my = (ay + by) / 2, r = Math.sqrt((bx - ax) ** 2 + (by - ay) ** 2) / 2
+    let h1 = Infinity, h2 = Infinity                                   // the least two upper bounds
+    for (const s of shapes) { const h = sdRound(s, mx, my) + r; if (h < h1) { h2 = h1; h1 = h } else if (h < h2) h2 = h }
+    const reach = h2 + 1e-6                                             // (the margin absorbs rounding)
+    let nc = 0
+    shapes.forEach((s, q) => {
+      const gx = Math.max(s.x - bx, ax - (s.x + s.width), 0), gy = Math.max(s.y - by, ay - (s.y + s.height), 0)
+      if ((gx === 0 && gy === 0) || !(Math.sqrt(gx * gx + gy * gy) > reach)) cand[nc++] = q   // overlapping: no bound
+    })
+    for (let j = bj; j <= j1; j++) for (let i = bi; i <= i1; i++) {
+      const x = x0 + i * step, y = y0 + j * step
+      let a = Infinity, b = Infinity
+      for (let c = 0; c < nc; c++) { const e = sdRound(shapes[cand[c]!]!, x, y); if (e < a) { b = a; a = e } else if (e < b) b = e }
+      field[j * nx + i] = b === Infinity ? a : smin(a, b, k)
+    }
+  }
+  return field
+}
+
+/**
+ * The gradient of `fusedField` at (x, y) (Surface pt, y down; per pt) by central differences, as (x, y) y up: about
+ * unit length on a plain SDF, shorter where two shapes blend, near 0 at a bridge's saddle.
+ */
+function fusedGradient(shapes: readonly FusedShape[], spacing: number, x: number, y: number): [number, number] {
+  const e = 0.25
+  const gx = fusedField(shapes, spacing, x + e, y) - fusedField(shapes, spacing, x - e, y)
+  const gy = fusedField(shapes, spacing, x, y + e) - fusedField(shapes, spacing, x, y - e)
+  return [gx / (2 * e), -gy / (2 * e)]                       // y down → y up
 }
 
 /**
@@ -55,11 +110,8 @@ export function fusedField(shapes: readonly FusedShape[], spacing: number, x: nu
  * outline's y-up frame; (0, 0) where the field is flat.
  */
 export function fusedNormal(shapes: readonly FusedShape[], spacing: number, x: number, y: number): [number, number] {
-  const e = 0.25
-  const gx = fusedField(shapes, spacing, x + e, y) - fusedField(shapes, spacing, x - e, y)
-  const gy = fusedField(shapes, spacing, x, y + e) - fusedField(shapes, spacing, x, y - e)
-  const l = Math.hypot(gx, gy) || 1
-  return [gx / l, -gy / l]                                   // y down → y up
+  const [gx, gy] = fusedGradient(shapes, spacing, x, y), l = Math.hypot(gx, gy) || 1
+  return [gx / l, gy / l]
 }
 
 /** The shapes' bounding rect (Surface pt): the fused frame's origin is its centre. */
@@ -145,17 +197,22 @@ function checkSpacing(scope: string, spacing: number): void {
 }
 
 /**
- * The most grid nodes `fusedOutline` samples under its default step (a few hundred KB of field and links, a couple of
- * ms per call): a small member (step 0.5 pt) in a large cluster would otherwise sample millions, every frame of a press.
+ * The most grid nodes `fusedOutline` samples under its default step (a few hundred KB of field and links): a small
+ * member (step 0.5 pt) in a large cluster would otherwise sample millions, every frame of a press. A call's cost is
+ * about nodes × the members near each block (`fusedSamples`), so nearly flat in the member count — measured under Node
+ * on the development Mac: a 5-capsule toolbar (11 k nodes) ≈ 0.5 ms, 30 rounds or 60 squares at the cap ≈ 1.6–1.9 ms.
  */
 export const FUSED_MAX_CELLS = 40_000
 
 /**
  * The sampling grid of `fusedOutline` (Surface pt): `nx × ny` nodes `step` apart from (x0, y0), covering the shapes'
  * bounds plus `spacing + 2·step`. The default step is `clamp(minSide / 24, 0.5, 2)` (`minSide` the shortest side of any
- * shape), coarsened until the grid has at most `FUSED_MAX_CELLS` nodes; a given `step` is kept as is.
+ * shape), coarsened until the grid has at most `FUSED_MAX_CELLS` nodes; a given `step` (positive, finite) is kept as
+ * is. A coarsened step traces a member under a few steps across roughly (one under about one step can vanish).
  */
 export function fusedGrid(shapes: readonly FusedShape[], spacing: number, step?: number): { step: number; x0: number; y0: number; nx: number; ny: number } {
+  checkSpacing('fusedGrid', spacing)
+  if (step !== undefined && (!(step > 0) || !Number.isFinite(step))) throw new GlassUIError('fusedGrid', 'step 必须是正的有限数', { got: String(step) })
   const b = fusedBounds(shapes)
   const layout = (st: number) => {
     const margin = spacing + 2 * st
@@ -176,9 +233,9 @@ export function fusedGrid(shapes: readonly FusedShape[], spacing: number, step?:
  * clockwise. Shapes a gap of less than `spacing` apart join into one contour with a smooth bridge; farther ones keep
  * their own. Marching squares over a grid of `step` pt (default `clamp(minSide / 24, 0.5, 2)`, `minSide` the shortest
  * side of any shape; coarsened to at most `FUSED_MAX_CELLS` nodes: `fusedGrid`) covering the bounds plus
- * `spacing + 2·step`, edge points interpolated linearly, then simplified
- * (Douglas–Peucker, ε = 0.1 · step). O(grid · shapes) with a few typed arrays per call and none per cell: it reruns
- * whenever a cluster's shapes change (a press or hover tilt does, every frame for a while).
+ * `spacing + 2·step`, sampled by `fusedSamples`, edge points interpolated linearly, then simplified
+ * (Douglas–Peucker, ε = 0.1 · step). A few typed arrays per call and none per cell, at the cost `FUSED_MAX_CELLS`
+ * notes: it reruns whenever a cluster's shapes change (a press or hover tilt does, every frame for a while).
  */
 export function fusedOutline(shapes: readonly FusedShape[], spacing: number, opts: { step?: number } = {}): Contour[] {
   checkSpacing('fusedOutline', spacing)
@@ -188,8 +245,7 @@ export function fusedOutline(shapes: readonly FusedShape[], spacing: number, opt
 
   const { step, x0, y0, nx, ny } = fusedGrid(shapes, spacing, opts.step)
   const b = fusedBounds(shapes), cx = b.x + b.width / 2, cy = b.y + b.height / 2
-  const field = new Float64Array(nx * ny)
-  for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) field[j * nx + i] = fusedField(shapes, spacing, x0 + i * step, y0 + j * step)
+  const field = fusedSamples(shapes, spacing, { step, x0, y0, nx, ny })
 
   // link[enter edge] = the exit edge its segment runs to (−1: no crossing, or already chained)
   const link = new Int32Array(2 * nx * ny).fill(-1)
@@ -240,49 +296,100 @@ function contains(c: Contour, x: number, y: number): boolean {
 /**
  * Per contour point, the factor (≤ 1) its insets are scaled by so that the inset rings of glass thinner than twice
  * `maxInset` stay apart: `min(1, 0.45 · d / maxInset)`, d the distance to the nearest contour segment across the glass
- * from it — inward of the point (along −n), with glass halfway there (`inside`: not a separate blob or the mouth of a
- * bay), and either on another contour (a hole's rim across a thin band) or far along its own (an arc length over twice
- * the distance: the far side of a bridge, not the point's own neighbours). Two facing sides then each reach at most
- * 0.45 · d in. Sampling the field along −n cannot find a neck's far side (there the normals run diagonally across it),
- * hence the contour itself. O(N²) over all contour points (N in the hundreds); the field is sampled only for a
- * candidate nearer than both the nearest so far and maxInset / 0.45 (beyond which nothing is squeezed).
+ * from it — the straight path there runs through the glass all the way by the traced outline (it leaves the point into
+ * the glass and crosses no outline segment: not across the mouth of a bay or out to a separate blob) — and either on
+ * another contour (a hole's rim across a thin band) or far along its own (an arc length over twice the distance: the
+ * far side of a bridge, not the point's own neighbours). Two sides across the glass then each reach at most 0.45 · d
+ * in. The traced outline decides, not the field: it is what the mesh is built on, and near a bridge's saddle the two
+ * disagree (a grid cell can join a pinch whose true field is just positive). Sampling the field along −n would not find
+ * a neck's far side either (there the normals run diagonally across it). Only segments within maxInset / 0.45 matter
+ * (nothing farther squeezes), so the segments are bucketed in cells that wide and each point scans its 3 × 3 cells:
+ * linear in the contour points.
  */
-function insetScales(contours: readonly Contour[], normals: readonly Float64Array[], maxInset: number, inside: (x: number, y: number) => boolean): Float64Array[] {
+function insetScales(contours: readonly Contour[], maxInset: number): Float64Array[] {
   const out = contours.map(c => new Float64Array(c.length).fill(1))
   if (!(maxInset > 0)) return out
-  // every point flat: position, outward normal, arc length along its contour, its contour and index there, the next
-  // point (its segment's end)
+  // every point flat: position, arc length along its contour, its contour and index there, its neighbours (the next
+  // is its segment's end)
   let N = 0
   for (const c of contours) N += c.length
-  const X = new Float64Array(N), Y = new Float64Array(N), NX = new Float64Array(N), NY = new Float64Array(N), S = new Float64Array(N)
-  const C = new Int32Array(N), I = new Int32Array(N), next = new Int32Array(N), perimeter: number[] = []
-  let o = 0
+  const X = new Float64Array(N), Y = new Float64Array(N), S = new Float64Array(N)
+  const C = new Int32Array(N), I = new Int32Array(N), prev = new Int32Array(N), next = new Int32Array(N), perimeter: number[] = []
+  let o = 0, x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
   contours.forEach((c, ci) => {
-    const n = c.length, on = normals[ci]!
+    const n = c.length
     let arc = 0
     for (let i = 0; i < n; i++) {
       const [x, y] = c[i]!, [x2, y2] = c[(i + 1) % n]!
-      X[o + i] = x; Y[o + i] = y; NX[o + i] = on[2 * i]!; NY[o + i] = on[2 * i + 1]!; S[o + i] = arc; C[o + i] = ci; I[o + i] = i
-      next[o + i] = o + (i + 1) % n
+      X[o + i] = x; Y[o + i] = y; S[o + i] = arc; C[o + i] = ci; I[o + i] = i
+      prev[o + i] = o + (i + n - 1) % n; next[o + i] = o + (i + 1) % n
       arc += Math.sqrt((x2 - x) ** 2 + (y2 - y) ** 2)
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y)
     }
     perimeter.push(arc)
     o += n
   })
   const reach = maxInset / 0.45                                          // only a side nearer than this squeezes anything
+  // segment buckets (compressed rows): every cell a segment's bounding box overlaps; cells at least `reach` wide (at
+  // most 256 across)
+  const cell = Math.max(reach, (x1 - x0) / 256, (y1 - y0) / 256)
+  const gw = Math.floor((x1 - x0) / cell) + 1, gh = Math.floor((y1 - y0) / cell) + 1
+  const cellOf = (v: number, v0: number, g: number) => Math.min(g - 1, Math.max(0, Math.floor((v - v0) / cell)))
+  const span = (j: number) => {
+    const ax = X[j]!, ay = Y[j]!, bx = X[next[j]!]!, by = Y[next[j]!]!
+    return [cellOf(Math.min(ax, bx), x0, gw), cellOf(Math.max(ax, bx), x0, gw), cellOf(Math.min(ay, by), y0, gh), cellOf(Math.max(ay, by), y0, gh)] as const
+  }
+  const start = new Int32Array(gw * gh + 1)
+  for (let j = 0; j < N; j++) { const [c0, c1, r0, r1] = span(j); for (let r = r0; r <= r1; r++) for (let q = c0; q <= c1; q++) start[r * gw + q + 1]!++ }
+  for (let q = 0; q < gw * gh; q++) start[q + 1]! += start[q]!
+  const bucket = new Int32Array(start[gw * gh]!), fill = start.slice(0, gw * gh)
+  for (let j = 0; j < N; j++) { const [c0, c1, r0, r1] = span(j); for (let r = r0; r <= r1; r++) for (let q = c0; q <= c1; q++) bucket[fill[r * gw + q]!++] = j }
+  // a segment in several cells is visited once per scan: `seen[j] === stamp`
+  const seen = new Int32Array(N).fill(-1)
+  let stamp = 0
+  const scan = (px: number, py: number, visit: (j: number) => boolean | void) => {
+    stamp++
+    const cq = cellOf(px, x0, gw), cr = cellOf(py, y0, gh)
+    for (let r = Math.max(0, cr - 1); r <= Math.min(gh - 1, cr + 1); r++) for (let q = Math.max(0, cq - 1); q <= Math.min(gw - 1, cq + 1); q++) {
+      for (let b = start[r * gw + q]!; b < start[r * gw + q + 1]!; b++) {
+        const j = bucket[b]!
+        if (seen[j] === stamp) continue
+        seen[j] = stamp
+        if (visit(j) === false) return
+      }
+    }
+  }
+  /** The path from point i to i + q runs through the glass: it leaves i into the glass and crosses no outline segment. */
+  const throughGlass = (i: number, qx: number, qy: number) => {
+    // the glass lies left of the contour's direction: at a convex vertex inside both edges' left sides, else either's
+    const px = X[i]!, py = Y[i]!, ix = px - X[prev[i]!]!, iy = py - Y[prev[i]!]!, ox = X[next[i]!]! - px, oy = Y[next[i]!]! - py
+    const leftIn = ix * qy - iy * qx > 0, leftOut = ox * qy - oy * qx > 0
+    if (!(ix * oy - iy * ox > 0 ? leftIn && leftOut : leftIn || leftOut)) return false
+    let clear = true
+    scan(px, py, j => {
+      const ax = X[j]!, ay = Y[j]!, ex = X[next[j]!]! - ax, ey = Y[next[j]!]! - ay, den = qx * ey - qy * ex
+      if (den === 0) return
+      const t = ((ax - px) * ey - (ay - py) * ex) / den, u = ((ax - px) * qy - (ay - py) * qx) / den
+      if (t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9) { clear = false; return false }
+    })
+    return clear
+  }
+  const near: number[] = []
   for (let i = 0; i < N; i++) {
-    const px = X[i]!, py = Y[i]!, nx = NX[i]!, ny = NY[i]!, ci = C[i]!, L = perimeter[ci]!
-    let d = reach                                                        // so the field is rarely sampled
-    for (let j = 0; j < N; j++) {
+    const px = X[i]!, py = Y[i]!, ci = C[i]!, L = perimeter[ci]!
+    let d = reach
+    near.length = 0
+    scan(px, py, j => { near.push(j) })                                   // (throughGlass scans too: collect first)
+    for (const j of near) {
       const ax = X[j]!, ay = Y[j]!, dx = X[next[j]!]! - ax, dy = Y[next[j]!]! - ay, l2 = dx * dx + dy * dy
       const t = l2 > 0 ? Math.min(1, Math.max(0, ((px - ax) * dx + (py - ay) * dy) / l2)) : 0
       const qx = ax + t * dx - px, qy = ay + t * dy - py, dist = Math.sqrt(qx * qx + qy * qy)
-      if (dist >= d || qx * nx + qy * ny >= 0) continue                   // no nearer, or not inward of P
+      if (dist >= d) continue                                            // no nearer
       if (C[j] === ci) {
         const along = Math.abs(S[j]! + t * Math.sqrt(l2) - S[i]!)
         if (Math.min(along, L - along) <= 2 * dist) continue             // a neighbour along the contour
       }
-      if (!inside(px + qx / 2, py + qy / 2)) continue                     // empty between: nothing to cross
+      if (!throughGlass(i, qx, qy)) continue                             // not across the glass: nothing to cross
       d = dist
     }
     out[ci]![I[i]!] = Math.min(1, (0.45 * d) / maxInset)
@@ -321,11 +428,18 @@ function unfold(q: Float64Array, n: number): void {
  * `fusedOutline(shapes, spacing)`'s contours. Each contour point P, with outward normal n (`fusedNormal`), gets the
  * 9-slice slab's rings 0 … 2K+1 (`profileAt` for a slab `minSide` wide and high): ring k at P − n·inset_k, z = z_k,
  * normal normalize(n·nr_k, nz_k); where a ring would fold over (inset past a corner sharper than the fillet) its loop
- * collapses onto the crossing (`unfold`), and where the glass is thinner than twice its insets (a bridge just under the
- * spacing, where two shapes barely join) each point's insets shrink to its local feature size (`insetScales`), so the
- * two sides' rings never cross. Walls join consecutive rings (outward: material lies left of every contour); the top
- * cap triangulates the plateau edge (ring 2K+1, normal +z) and the back cap ring 0 (normal −z), holes included, on
- * those rings' own vertices — the fillet profile's end rings already carry exactly those normals.
+ * collapses onto the crossing (`unfold`). Where the glass is thinner than twice its insets (a bridge just under — or,
+ * as traced, just over — the spacing) each point's insets shrink so that it moves at most 0.45 × its distance to the
+ * nearest outline segment straight across the glass (`insetScales`), and near a bridge's saddle, where the field's
+ * gradient is weak or points into the outline, n is the traced polyline's own normal. Two sides across the glass then
+ * keep apart; the tests sweep pairs of rounds, capsules and rounded rects, axis-aligned and diagonal, within 0.2 pt
+ * either side of the spacing at the default and at coarsened steps, and every mesh is closed with single-cover caps.
+ * Not covered: a member thinner than twice the profile's insets, whose straight sides the simplified outline leaves as
+ * single segments that see each other only around its ends — `minSide` must be the smallest member's short side, so
+ * that the profile's fillets fit it (as on a 9-slice slab). Walls join consecutive rings (outward: material lies left
+ * of every contour); the top cap triangulates the plateau edge (ring 2K+1, normal +z) and the back cap ring 0
+ * (normal −z), holes included, on those rings' own vertices — the fillet profile's end rings already carry exactly
+ * those normals.
  */
 export function extrudeSlab(contours: readonly Contour[], shapes: readonly FusedShape[], spacing: number, profile: FusedProfile, K: number): SlabMesh {
   if (!Number.isInteger(K) || K < 1) throw new GlassUIError('extrudeSlab', 'K 必须是不小于 1 的整数（每段圆角的环数）', { got: String(K) })
@@ -348,21 +462,21 @@ export function extrudeSlab(contours: readonly Contour[], shapes: readonly Fused
   const offsets: number[] = []
   const vertex = (ci: number, k: number, i: number) => offsets[ci]! + k * contours[ci]!.length + i
 
-  // outward normals per contour point
+  // outward normals per contour point: the field's gradient (`fusedNormal`), unless it is weak (|∇f| < 0.5: near a
+  // bridge's saddle, where it points anywhere — the outline traced there may even pinch where the field does not) or
+  // points into the traced outline; then the polyline's own, right of its tangent, which the outline agrees with
   const outward = contours.map(c => {
     const n = c.length, on = new Float64Array(2 * n)
     c.forEach(([x, y], i) => {
-      let [ox, oy] = fusedNormal(shapes, spacing, x + cx, cy - y)
-      if (ox === 0 && oy === 0) {
-        // a flat field (a bridge exactly at its pinch): the polyline's own outward normal, right of its tangent
-        const [px, py] = c[(i + n - 1) % n]!, [qx, qy] = c[(i + 1) % n]!, l = Math.hypot(qx - px, qy - py) || 1
-        ox = (qy - py) / l; oy = -(qx - px) / l
-      }
-      on[2 * i] = ox; on[2 * i + 1] = oy
+      const [gx, gy] = fusedGradient(shapes, spacing, x + cx, cy - y), g = Math.hypot(gx, gy)
+      const [px, py] = c[(i + n - 1) % n]!, [qx, qy] = c[(i + 1) % n]!, l = Math.hypot(qx - px, qy - py) || 1
+      const tx = (qy - py) / l, ty = -(qx - px) / l
+      const weak = g < 0.5 || gx * tx + gy * ty <= 0
+      on[2 * i] = weak ? tx : gx / g; on[2 * i + 1] = weak ? ty : gy / g
     })
     return on
   })
-  const scales = insetScales(contours, outward, Math.max(...prof.map(r => r.inset)), (x, y) => fusedField(shapes, spacing, x + cx, cy - y) < 0)
+  const scales = insetScales(contours, Math.max(...prof.map(r => r.inset)))
 
   let base = 0
   contours.forEach((c, ci) => {

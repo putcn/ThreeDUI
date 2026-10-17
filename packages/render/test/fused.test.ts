@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { uniform } from 'three/tsl'
 import { Texture, Vector2 } from 'three'
 import { GlassUIError } from '@glassui/core'
-import { fusedOutline, fusedField, fusedNormal, fusedBounds, fusedGrid, extrudeSlab, FUSED_MAX_CELLS, type Contour, type FusedShape, type SlabMesh } from '../src/glass/fused'
+import { fusedOutline, fusedField, fusedNormal, fusedBounds, fusedGrid, fusedSamples, extrudeSlab, FUSED_MAX_CELLS, type Contour, type FusedShape, type SlabMesh } from '../src/glass/fused'
 import { profileAt } from '../src/glass/slab9'
 import { GlassBatch } from '../src/glass/batch'
 import { createGlassMaterial } from '../src/glass/material'
@@ -81,6 +81,39 @@ function capArea(m: SlabMesh, z: number): number {
   return sum
 }
 
+/**
+ * What is wrong with the fused slab of `shapes` ('' when nothing): welded open edges; proper crossings in its back
+ * (ring 0) or plateau (ring 2K+1) ring; a ring turned over (its signed area not the sign of its contour's); a cap that
+ * does not cover its rings exactly once (its triangles' areas against the rings' net area, which must be positive);
+ * normals off unit length, or off ±z on the caps' rings.
+ */
+function faults(shapes: FusedShape[], spacing: number, K: number, opts: { step?: number; minSide?: number } = {}): string {
+  const cs = fusedOutline(shapes, spacing, opts.step === undefined ? {} : { step: opts.step })
+  const m = extrudeSlab(cs, shapes, spacing, { ...profile, minSide: opts.minSide ?? profile.minSide }, K)
+  const why: string[] = []
+  const open = openEdges(m)
+  if (open) why.push(`${open} open edges`)
+  for (const [k, z] of [[0, 0], [2 * K + 1, profile.thickness]] as const) {
+    const rings = ringOf(m, cs, K, k)
+    const x = crossings(rings)
+    if (x) why.push(`ring ${k}: ${x} crossings`)
+    rings.forEach((r, i) => { if (Math.sign(area(r)) !== Math.sign(area(cs[i]!))) why.push(`ring ${k} of contour ${i} turned over`) })
+    const net = rings.reduce((sum, r) => sum + area(r), 0), cap = capArea(m, z)
+    if (!(net > 0) || Math.abs(cap - net) / net > 1e-4) why.push(`cap ${k}: ${(cap / net).toFixed(4)} × its rings`)
+  }
+  let worst = 0, n = 0
+  for (let v = 0; v < m.normals.length; v += 3) worst = Math.max(worst, Math.abs(Math.hypot(m.normals[v]!, m.normals[v + 1]!, m.normals[v + 2]!) - 1))
+  for (const c of cs) {
+    for (let i = 0; i < c.length; i++) for (const k of [0, 2 * K + 1]) worst = Math.max(worst, 1 - Math.abs(m.normals[3 * (n + k * c.length + i) + 2]!))
+    n += (2 * K + 2) * c.length
+  }
+  if (worst > 1e-5) why.push(`normals off by ${worst}`)
+  return why.join(', ')
+}
+const round = (cx: number, cy: number, D: number) => rect(cx - D / 2, cy - D / 2, D, D, D / 2)
+/** Two rounds D across, the second `gap` from the first along `deg` degrees (y down). */
+const diagonal = (D: number, deg: number, gap: number) => [round(0, 0, D), round((D + gap) * Math.cos(deg * Math.PI / 180), (D + gap) * Math.sin(deg * Math.PI / 180), D)]
+
 describe('fusedOutline', () => {
   it('two distant shapes keep two contours; within spacing they fuse into one with a bridge', () => {
     const far = fusedOutline([rect(0, 0, 40, 40, 20), rect(100, 0, 40, 40, 20)], 16)
@@ -146,6 +179,39 @@ describe('fusedOutline', () => {
     expect(cs).toHaveLength(2)
     const big = Math.max(...cs.map(c => Math.abs(area(c)))), exact = 800 * 600 - (4 - Math.PI) * 24 * 24
     expect(Math.abs(big - exact) / exact).toBeLessThan(0.01)
+  })
+  it('samples the grid exactly as fusedField, culling per block the shapes that cannot be among the nearest two', () => {
+    const layouts: FusedShape[][] = [
+      [rect(0, 0, 80, 40, 20), rect(88, 0, 80, 40, 20)],
+      Array.from({ length: 60 }, (_, k) => rect((k % 10) * 50, Math.floor(k / 10) * 50, 40, 40, 0)),
+      Array.from({ length: 30 }, (_, k) => round((k % 6) * 50, Math.floor(k / 6) * 50, 40)),
+      [rect(0, 0, 100, 20), rect(0, 80, 100, 20), rect(0, 0, 20, 100), rect(80, 0, 20, 100)],   // overlapping
+      [rect(0, 0, 300, 200, 24), rect(100, 60, 80, 40, 20), rect(320, 80, 12, 12, 6)],           // one inside another
+    ]
+    for (const shapes of layouts) {
+      const g = fusedGrid(shapes, 16), f = fusedSamples(shapes, 16, g)
+      let mismatches = 0
+      for (let j = 0; j < g.ny; j++) for (let i = 0; i < g.nx; i++) if (f[j * g.nx + i] !== fusedField(shapes, 16, g.x0 + i * g.step, g.y0 + j * g.step)) mismatches++
+      expect(mismatches, `${shapes.length} shapes`).toBe(0)
+    }
+  })
+  it('does not depend on the order of the shapes; four rounds around a hole leave one clean hole (no speck inside)', () => {
+    const grid = Array.from({ length: 12 }, (_, k) => round((k % 4) * 50, Math.floor(k / 4) * 50, 40))
+    const shuffled = [...grid].sort((a, b) => ((a.x * 7 + a.y * 13) % 11) - ((b.x * 7 + b.y * 13) % 11))
+    expect(fusedOutline(shuffled, 16)).toEqual(fusedOutline(grid, 16))
+    expect(fusedOutline([...grid].reverse(), 16)).toEqual(fusedOutline(grid, 16))
+    const four = fusedOutline(grid.filter(s => s.x < 60 && s.y < 60), 16).map(area)
+    expect(four.filter(a => a > 0)).toHaveLength(1); expect(four.filter(a => a < 0)).toHaveLength(1)
+    // a symmetric layout gives a symmetric outline: every hole of the 4 × 3 grid alike
+    const holes = fusedOutline(grid, 16).map(area).filter(a => a < 0)
+    expect(holes).toHaveLength(6)
+    for (const h of holes) expect(h).toBeCloseTo(holes[0]!, 6)
+  })
+  it('fusedGrid rejects a step or spacing that is not a positive (spacing: non-negative) finite number', () => {
+    const shapes = [rect(0, 0, 40, 40)]
+    for (const step of [0, -1, NaN, Infinity]) expect(() => fusedGrid(shapes, 16, step), `step ${step}`).toThrow(/fusedGrid.*step 必须是正的有限数/)
+    expect(() => fusedGrid(shapes, NaN)).toThrow(GlassUIError)
+    expect(fusedGrid(shapes, 16, 1.5).step).toBe(1.5)
   })
   it('rejects a spacing, step or shape that is not a finite number (and outlines nothing for no shapes)', () => {
     expect(fusedOutline([], 16)).toEqual([])
@@ -215,25 +281,25 @@ describe('extrudeSlab', () => {
       ['circles', x => rect(x, 0, 40, 40, 20)], ['capsules', x => rect(x, 0, 80, 40, 20)], ['r30', x => rect(x, 0, 120, 60, 30)],
     ]
     for (const [name, shape] of pairs) for (const gap of [15.8, 15.85, 15.9, 15.95, 15.99]) for (const K of [4, 8]) {
-      const first = shape(0), shapes = [first, shape(first.width + gap)], label = `${name} gap ${gap} K ${K}`
-      const minSide = Math.min(first.width, first.height)
-      const cs = fusedOutline(shapes, 16), m = extrudeSlab(cs, shapes, 16, { ...profile, minSide }, K)
-      expect(openEdges(m), label).toBe(0)
-      for (const k of [0, 2 * K + 1]) expect(crossings(ringOf(m, cs, K, k)), `${label} ring ${k}`).toBe(0)
-      // the squeezed profile's normals stay unit, and the caps' rings keep facing ±z
-      let worst = 0, n = 0
-      for (let v = 0; v < m.normals.length; v += 3) worst = Math.max(worst, Math.abs(Math.hypot(m.normals[v]!, m.normals[v + 1]!, m.normals[v + 2]!) - 1))
-      for (const c of cs) {
-        for (let i = 0; i < c.length; i++) for (const k of [0, 2 * K + 1]) worst = Math.max(worst, 1 - Math.abs(m.normals[3 * (n + k * c.length + i) + 2]!))
-        n += (2 * K + 2) * c.length
-      }
-      expect(worst, label).toBeLessThan(1e-5)
-      // the caps cover their rings once: their triangles' areas sum to the rings' (net of holes) area
-      for (const [k, z] of [[2 * K + 1, 8], [0, 0]] as const) {
-        const ring = ringOf(m, cs, K, k).reduce((s, c) => s + area(c), 0)
-        expect(Math.abs(capArea(m, z) - ring) / ring, `${label} cap ${k}`).toBeLessThan(1e-4)
-      }
+      const first = shape(0)
+      expect(faults([first, shape(first.width + gap)], 16, K, { minSide: Math.min(first.width, first.height) }), `${name} gap ${gap} K ${K}`).toBe('')
     }
+  })
+  it('a pinch traced across the spacing (diagonal rounds just under or over it) keeps its rings uncrossed and its caps single', () => {
+    // the review's repro: 45°, gap 16.01 — the grid joins a neck whose true field is just positive
+    expect(faults([rect(0, 0, 40.5, 40.5, 20.25), rect(39.9586, 39.9586, 40.5, 40.5, 20.25)], 16, 4)).toBe('')
+    const bad: string[] = []
+    // the default step, within 0.2 pt either side of the spacing
+    for (const D of [40, 42.5, 44]) for (const deg of [30, 45, 60]) for (let g = 0; g <= 40; g++) {
+      const gap = 15.8 + g * 0.01, why = faults(diagonal(D, deg, gap), 16, 4)
+      if (why) bad.push(`D ${D} ${deg}° gap ${gap.toFixed(2)}: ${why}`)
+    }
+    // a coarsened step (as FUSED_MAX_CELLS gives a large cluster), where the traced pinch reaches farther over
+    for (const D of [40, 42, 44]) for (const deg of [15, 45, 75]) for (let g = 0; g <= 22; g++) {
+      const gap = 15.9 + g * 0.01, why = faults(diagonal(D, deg, gap), 16, 4, { step: 3.9 })
+      if (why) bad.push(`step 3.9 D ${D} ${deg}° gap ${gap.toFixed(2)}: ${why}`)
+    }
+    expect(bad).toEqual([])
   })
   it('a separate blob facing another, even nearly touching, keeps its full fillets (only glass between squeezes them)', () => {
     for (const gap of [16.02, 16.1, 17]) {
