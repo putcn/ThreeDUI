@@ -12,7 +12,14 @@ export const GLASS_ATTRS = ['iRect', 'iShape', 'iCorner', 'iMat0', 'iMat1', 'iMa
 export const GLOW_SOFTNESS = 0.04
 export const REFLECTION_STRENGTH = 0.2
 
-export interface TouchState { u: number; v: number; press: number }
+/**
+ * A press glow: the touch point (`u`, `v`: from the slab rect's centre, in fractions of its width and height, v up) and
+ * its strength. `extent` (a fused slab's only): the glow's size in fractions of the slab rect, the pressed member's
+ * (`pressTarget`), packed into a mesh batch's `iCorner.xy`; without it the glow spans the slab, as on element glass.
+ */
+export interface TouchState { u: number; v: number; press: number; extent?: readonly [number, number] }
+/** The smallest glow extent packed (a fraction of the slab rect): the material divides by it. */
+export const MIN_GLOW_EXTENT = 1e-3
 
 /**
  * The thinnest slab packed (pt). The refraction and the Beer–Lambert tint divide by the thickness, so a slab of 0 — a
@@ -26,7 +33,8 @@ export const clampPt = (v: number, lo: number, hi: number): number => Number.isF
  * All glass elements of one Surface as instances of the shared slab geometry, sorted far→near by `z` — or, built from
  * `{ mesh }`, a fused slab (`extrudeSlab`, scaled to units and centred on its instance's rect) as the base geometry
  * instead of the 9-slice: `position`, `slabNormal` and an index in place of `slab`, `userData.vertex = 'mesh'`, the same
- * instance attributes and `update`.
+ * instance attributes and `update` — but `iCorner.xy` holds the press glow's extent (`TouchState.extent`, clamped to
+ * [`MIN_GLOW_EXTENT`, 1]; 1, 1 without one) in place of the corner exponent and profile a mesh does not use.
  */
 export class GlassBatch {
   readonly geometry: InstancedBufferGeometry
@@ -53,7 +61,7 @@ export class GlassBatch {
    * none darkens (nested glass, spatial spec §2.4: its index would collide with the outer batch's).
    */
   update(instances: readonly GlassInstance[], s: SurfaceDims, touch?: ReadonlyMap<Node, TouchState>, opts: { luma?: boolean; lumaBase?: number } = {}): void {
-    const luma = opts.luma !== false, lumaBase = opts.lumaBase ?? 0
+    const luma = opts.luma !== false, lumaBase = opts.lumaBase ?? 0, mesh = this.geometry.userData.vertex === 'mesh'
     const sorted = [...instances].sort((a, b) => a.z - b.z)
     this.sorted = sorted.map(i => i.node)
     const b = this.buffer
@@ -66,7 +74,10 @@ export class GlassBatch {
       // never 0 thick, fillets within [0, thickness] (the slab profile then fits them into it)
       const thickness = clampPt(p.thickness, MIN_THICKNESS, Infinity)
       b.set(i, 'iShape', inst.radius / ppu, thickness / ppu, clampPt(p.fillet, 0, thickness) / ppu, clampPt(p.filletBottom, 0, thickness) / ppu)
-      b.set(i, 'iCorner', p.cornerExponent, p.profile === 'lens' ? 1 : 0, p.lift, p.edgeGlow)
+      const t = touch?.get(inst.node)
+      // a mesh has no 9-slice corners or profile to place (`meshVertex`): its iCorner.xy carry the press glow's extent
+      if (mesh) b.set(i, 'iCorner', clampPt(t?.extent?.[0] ?? 1, MIN_GLOW_EXTENT, 1), clampPt(t?.extent?.[1] ?? 1, MIN_GLOW_EXTENT, 1), p.lift, p.edgeGlow)
+      else b.set(i, 'iCorner', p.cornerExponent, p.profile === 'lens' ? 1 : 0, p.lift, p.edgeGlow)
       writeMatrixRows(b, i, instanceMatrix(inst, s, this.m))
       b.set(i, 'iOptics', p.ior, p.dispersion, p.roughness, p.scatter)
       if (p.tint) b.set(i, 'iTint', srgbToLinear(p.tint[0]), srgbToLinear(p.tint[1]), srgbToLinear(p.tint[2]), p.absorption)
@@ -75,7 +86,6 @@ export class GlassBatch {
       else b.set(i, 'iGlow', 0, 0, 0, 0)
       // luma index: only clear + adaptive glass samples the backdrop luma pass (adaptive darkening)
       b.set(i, 'iGlow2', p.glow?.split ?? -1, GLOW_SOFTNESS, inst.opacity, luma && p.variant === 'clear' && p.adaptive ? lumaBase + i : -1)
-      const t = touch?.get(inst.node)
       b.set(i, 'iTouch', t?.u ?? 0, t?.v ?? 0, t?.press ?? 0, REFLECTION_STRENGTH)
       writeClip(b, i, inst.clip)
     })

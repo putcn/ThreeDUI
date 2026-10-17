@@ -1063,11 +1063,15 @@ export class Surface extends Object3D<SurfaceEventMap> {
       const t = g?.transform, k = t ? Math.sqrt(Math.abs(t.a * t.d - t.b * t.c)) : 0
       if (g && t && k > 1e-6 && g.rect.width > 0 && g.rect.height > 0) {
         const [cx, cy] = apply(t, g.rect.x + g.rect.width / 2, g.rect.y + g.rect.height / 2)
-        this.touch.set(g.key, { u: (pt[0] - cx) / (g.rect.width * k), v: (cy - pt[1]) / (g.rect.height * k), press: 1 })
+        const touch: TouchState = { u: (pt[0] - cx) / (g.rect.width * k), v: (cy - pt[1]) / (g.rect.height * k), press: 1 }
+        // on a fused slab the glow takes the pressed member's size, not the whole slab's
+        if (g.member) touch.extent = [g.member.width / g.rect.width, g.member.height / g.rect.height]
+        this.touch.set(g.key, touch)
       }
     }
     const after = this.touch.entries().next().value
-    return before?.[0] !== after?.[0] || before?.[1].u !== after?.[1].u || before?.[1].v !== after?.[1].v
+    const a = before?.[1], b = after?.[1]
+    return before?.[0] !== after?.[0] || a?.u !== b?.u || a?.v !== b?.v || a?.extent?.[0] !== b?.extent?.[0] || a?.extent?.[1] !== b?.extent?.[1]
   }
 
   /**

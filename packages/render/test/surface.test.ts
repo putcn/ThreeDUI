@@ -1769,7 +1769,7 @@ describe('glass containers: fused slabs (GlassContainer, spec §5.2)', () => {
     s.setQuality(QUALITY.high)
     expect(meshBatches(s).length).toBeGreaterThan(0); expect(s.glass.nodes).toEqual([far])
   })
-  it('a press on a member glows on the fused slab, at the pointer in the slab\'s bounds', () => {
+  it('a press on a member glows on the fused slab, at the pointer in the slab\'s bounds, as large as that member', () => {
     const { s, b } = fusedSurface()
     b.setStyle({ pressed: {} })                                                   // no press scale: the shapes stay
     s.tick(0)
@@ -1777,9 +1777,11 @@ describe('glass containers: fused slabs (GlassContainer, spec §5.2)', () => {
     s.setPointer([127.5, 40]); s.pointer.down(127.5, 40); s.tick(0)
     expect(b.state.pressed).toBe(true)
     expect(s.fused.batches[0]!.buffer.get(0, 'iTouch').slice(0, 3)).toEqual([0.25, 0.25, 1])
+    expect(s.fused.batches[0]!.buffer.get(0, 'iCorner').slice(0, 2)).toEqual([Math.fround(80 / 170), 1])   // b's 80 × 40 of the 170 × 40 slab
     expect(s.glass.buffer.get(0, 'iTouch')[2]).toBe(0)                            // not on the far glass
     s.pointer.up(127.5, 40); s.tick(0)
     expect(s.fused.batches[0]!.buffer.get(0, 'iTouch').slice(0, 3)).toEqual([0, 0, 0])
+    expect(s.fused.batches[0]!.buffer.get(0, 'iCorner').slice(0, 2)).toEqual([1, 1])
   })
   it('adaptive darkening: the fused slab reads the luma texel after the element glass\'s, packed with its bounds', () => {
     const { s } = fusedSurface(ctx, { glass: { variant: 'clear', adaptive: true } })

@@ -257,16 +257,16 @@ export class FusedGlass {
 /**
  * The glass a press on `pressed` glows on (spec §5.4): the nearest at or above it, a fused member included. While
  * clusters draw fused (`fuse`) a member stands for its slab: the glow lands in the slab's rect (untransformed), keyed by
- * the cluster's first member, the node of the slab's instance (`FusedGlass`). Its key, rect and transform; null when no
- * glass is above it.
+ * the cluster's first member, the node of the slab's instance (`FusedGlass`), and `member` is the pressed member's rect,
+ * whose size the glow takes there (`TouchState.extent`). Its key, rect and transform; null when no glass is above it.
  */
-export function pressTarget(list: RenderList, pressed: Node, fuse: boolean): { key: Node; rect: Rect; transform: Mat2D } | null {
+export function pressTarget(list: RenderList, pressed: Node, fuse: boolean): { key: Node; rect: Rect; transform: Mat2D; member?: Rect } | null {
   for (let n: Node | null = pressed; n; n = n.parent) {
     const g = list.glass.find(i => i.node === n)
     if (g) return { key: g.node, rect: g.rect, transform: g.transform }
     for (const f of list.fused) {
       const m = f.members.find(i => i.node === n)
-      if (m) return fuse ? { key: f.members[0]!.node, rect: f.rect, transform: f.transform } : { key: m.node, rect: m.rect, transform: m.transform }
+      if (m) return fuse ? { key: f.members[0]!.node, rect: f.rect, transform: f.transform, member: m.rect } : { key: m.node, rect: m.rect, transform: m.transform }
     }
   }
   return null

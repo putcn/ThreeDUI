@@ -83,6 +83,30 @@ describe('createGlassMaterial', () => {
     const slab = new GlassBatch(); slab.update([inst], s)
     expect(() => createGlassMaterial({ ...opts, geometry: slab.geometry })).toThrow(/K = 99/)   // the 9-slice still checks K
   })
+  it('the press glow: element glass\'s spans its slab uv; a fused slab\'s takes the pressed member\'s extent round the touch (not the whole slab)', () => {
+    const glowOf = (material: { emissiveNode: unknown }) => nodesOf(material.emissiveNode).find(n => n.constructor.type === 'VarNode' && n.name === 'glassPressGlow')!
+    const gauss = (dx: number, dy: number) => Math.exp(-(dx * dx + dy * dy) / 0.36)
+    // a 290 × 52 pt slab (units: / 100) pressed a fifth of its width left of its centre, over a 52 pt member
+    const W = 2.9, H = 0.52, u = -0.2, ext = [52 / 290, 1]
+    const fused = createGlassMaterial({ geometry: fusedBatch().geometry, K: 0, backdrop: 'panel', side: 'front', surface, content: new Texture() }).material
+    const at = (x: number, y: number) => evalNode(glowOf(fused), { position: [x, y, 0.04], iRect: [0, 0, W, H], iTouch: [u, 0, 1, 0.2], iCorner: [ext[0]!, ext[1]!, 0.1, 0.8] })[0]!
+    const tx = u * W
+    expect(at(tx, 0)).toBeCloseTo(1, 12)                                              // full at the touch
+    expect(at(tx + 0.26, 0)).toBeCloseTo(gauss(0.5, 0), 12)                           // half a member away
+    expect(at(tx + 0.52, 0)).toBeCloseTo(gauss(1, 0), 12)                             // a member away: ≈ 0.06
+    expect(at(tx + 0.52, 0)).toBeLessThan(0.07)
+    expect(at(W / 2, 0)).toBeLessThan(1e-6)                                           // the far end stays dark
+    expect(at(tx, H / 2)).toBeCloseTo(gauss(0, 0.5), 12)                              // across: the member's own height
+    // with the slab's own extent (1, 1: no member known) it spans the slab, as element glass's does
+    const whole = evalNode(glowOf(fused), { position: [tx + 0.52, 0, 0.04], iRect: [0, 0, W, H], iTouch: [u, 0, 1, 0.2], iCorner: [1, 1, 0.1, 0.8] })[0]!
+    expect(whole).toBeCloseTo(gauss(0.52 / W, 0), 12); expect(whole).toBeGreaterThan(0.9)
+    // element glass: in its slab uv from the touch (vGlassGeom pinned: the 9-slice vertex stage is tested on its own)
+    const b = new GlassBatch(); b.update([inst], s)
+    const slab = createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface, content: new Texture() }).material
+    const el = (su: number, sv: number) => evalNode(glowOf(slab), { vGlassGeom: [0.04, 0.08, su, sv], iTouch: [0.1, -0.2, 0.5, 0.2] })[0]!
+    expect(el(0.6, 0.3)).toBeCloseTo(0.5, 12)
+    expect(el(0.9, 0.3)).toBeCloseTo(0.5 * gauss(0.3, 0), 12); expect(el(0.6, 0.8)).toBeCloseTo(0.5 * gauss(0, 0.5), 12)
+  })
   it('requires content for the panel variant', () => {
     const b = new GlassBatch(); b.update([inst], s)
     expect(() => createGlassMaterial({ geometry: b.geometry, K: b.K, backdrop: 'panel', side: 'front', surface })).toThrow(/content/)

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { InstancedBufferGeometry, Matrix3, Vector3 } from 'three'
 import { GlassUIError, Node, IDENTITY, scaleAbout, type GlassInstance, type ResolvedGlass } from '@glassui/core'
-import { GlassBatch, GLASS_ATTRS, MIN_THICKNESS } from '../src/glass/batch'
+import { GlassBatch, GLASS_ATTRS, MIN_GLOW_EXTENT, MIN_THICKNESS } from '../src/glass/batch'
 import { meshVertex, slabVertex } from '../src/glass/vertex'
 import { extrudeSlab, fusedOutline, type SlabMesh } from '../src/glass/fused'
 import { createSlabBaseGeometry, evalSlabVertex, type SlabInstanceParams } from '../src/glass/slab9'
@@ -109,13 +109,27 @@ describe('GlassBatch({ mesh })', () => {
     expect(g.hasAttribute('normal')).toBe(false)              // three would light it unlike the 9-slice (createFusedGeometry)
     expect(g.getIndex()!.array).toBe(mesh.index)
     for (const name of GLASS_ATTRS) expect(g.hasAttribute(name)).toBe(true)
-    // update packs exactly as the 9-slice batch does
+    // update packs as the 9-slice batch does, but iCorner.xy: the press glow's extent (1, 1 without a touch)
     const slab = new GlassBatch()
     for (const batch of [b, slab]) batch.update([inst('b', 2), inst('a', 1)], s)
     expect(b.nodes.map(n => n.id)).toEqual(['a', 'b']); expect(g.instanceCount).toBe(2)
-    for (const name of GLASS_ATTRS) for (const i of [0, 1]) expect(b.buffer.get(i, name)).toEqual(slab.buffer.get(i, name))
+    for (const name of GLASS_ATTRS) for (const i of [0, 1]) {
+      const want = slab.buffer.get(i, name)
+      expect(b.buffer.get(i, name)).toEqual(name === 'iCorner' ? [1, 1, ...want.slice(2)] : want)
+    }
     // never frustum-culled by its own (slab-local) positions: the instances place it
     expect(g.boundingSphere!.radius).toBeGreaterThan(1e5)
+  })
+  it('packs a press\'s glow extent into a mesh\'s iCorner.xy (clamped to [MIN_GLOW_EXTENT, 1]); the 9-slice keeps its corner and profile there', () => {
+    const b = new GlassBatch({ mesh: fusedMesh() }), slab = new GlassBatch()
+    const a = inst('a', 1), c = inst('c', 2), d = inst('d', 3)
+    const touch = new Map([[a.node, { u: -0.4, v: 0, press: 1, extent: [52 / 290, 1] as const }], [c.node, { u: 0, v: 0, press: 1, extent: [0, 3] as const }]])
+    b.update([a, c, d], s, touch); slab.update([a, c, d], s, touch)
+    expect(b.buffer.get(0, 'iCorner')).toEqual(f32([52 / 290, 1, 0.1, 0.8]))
+    expect(b.buffer.get(1, 'iCorner').slice(0, 2)).toEqual(f32([MIN_GLOW_EXTENT, 1]))
+    expect(b.buffer.get(2, 'iCorner').slice(0, 2)).toEqual([1, 1])                   // no press: the whole slab
+    for (const i of [0, 1, 2]) expect(slab.buffer.get(i, 'iCorner').slice(0, 2)).toEqual([2, 0])
+    expect(b.buffer.get(0, 'iTouch')).toEqual(slab.buffer.get(0, 'iTouch'))
   })
   it('dispose frees the mesh with the instances: the geometry dispatches dispose once', () => {
     const b = new GlassBatch({ mesh: fusedMesh() })

@@ -223,7 +223,13 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const vTint = varying(iTint, 'vGlassTint')
   const vGlow = varying(iGlow, 'vGlassGlow')
   const vGlow2 = varying(vec4(iGlow2.xy, iCorner.zw), 'vGlassGlow2')
-  const vTouch = varying(iTouch, 'vGlassTouch')
+  // the press glow's touch: element glass's in its slab uv (the fragment measures from it); a fused slab's (mesh) as
+  // the offset from the touch itself, in the pressed member's extent (iCorner.xy, fractions of the slab rect: the batch
+  // packs them there), so the glow lights about that member round the touch, not the whole slab. Affine in the
+  // position either way: interpolated exactly, and one varying either way
+  const vTouch = mesh
+    ? varying(vec4(v.slabLocal.xy.div(iRect.zw).sub(iTouch.xy).div(iCorner.xy), iTouch.zw), 'vGlassTouch')
+    : varying(iTouch, 'vGlassTouch')
   const vClip = varying(vec4(clipPt.sub(iClipRect.xy.add(half)), half.sub(clipRadius)), 'vGlassClip')
   // writeClip packs width −1 for "no clip"; a clip collapsed to width 0 still clips everything
   const vMisc = varying(vec4(iGlow2.zw, select(iClipRect.z.greaterThanEqual(0), max(clipRadius, 0), float(-1)), toView), 'vGlassMisc')
@@ -235,7 +241,7 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const tint = vTint.xyz, absorption = vTint.w                           // linear
   const glowColor = vGlow.xyz, glowStrength = vGlow.w
   const split = vGlow2.x, soft = vGlow2.y, lift = vGlow2.z, edgeGlow = vGlow2.w
-  const touch = vTouch.xy, press = vTouch.z, reflection = vTouch.w
+  const press = vTouch.z, reflection = vTouch.w
   const opacity = vMisc.x, lumaIndex = vMisc.y, clipR = vMisc.z          // clipR < 0: no clip
   const slabToView = vMisc.w                                             // view units per slab unit
 
@@ -403,9 +409,10 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const fade = opacity.mul(o.surface.opacity ?? float(1))
   m.opacityNode = fade
 
-  // press glow around the touch point (centred slab uv), light leaking at the steep rims, and the inner glow layer
-  const dt = slabUV.sub(0.5).sub(touch)
-  const pressGlow = exp(dot(dt, dt).negate().div(0.36)).mul(press)
+  // press glow around the touch point (centred slab uv; a fused slab's in its pressed member's extent), light leaking
+  // at the steep rims, and the inner glow layer
+  const dt = mesh ? vTouch.xy : slabUV.sub(0.5).sub(vTouch.xy)
+  const pressGlow = exp(dot(dt, dt).negate().div(0.36)).mul(press).toVar('glassPressGlow')
   // lit left of the split; `1 − smoothstep` keeps edge0 < edge1 (a reversed smoothstep is undefined in GLSL)
   const mask = select(split.lessThan(0), float(1), float(1).sub(smoothstep(split.sub(soft), split.add(soft), slabUV.x)))
   const emissive = vec3(pressGlow.mul(0.45)).add(tint.mul(pressGlow.mul(0.25)))
