@@ -507,7 +507,7 @@ describe('glass containers (GlassContainer, spec §5.2)', () => {
     expect(f.shapes[1]).toMatchObject({ x: 90, y: 0, width: 80, height: 40 })
     expect(f.shapes[0]!.radius).toBeCloseTo(18); expect(f.shapes[1]!.radius).toBe(20)  // capsule radii, scaled with their shapes
   })
-  it('the fused instance: the container\'s node, the first member\'s params, opacity, clip and z, the tallest elevation, untransformed and untilted', () => {
+  it('the fused instance: the container\'s node, the first member\'s clip, z and slab geometry, the raised member\'s elevation and look, untransformed and untilted', () => {
     const s = createSurface({ width: 400, height: 100 })
     const clip = new Node('box', 'clip'); clip.setStyle({ position: 'absolute', left: 0, top: 0, width: 300, height: 100, overflow: 'hidden' })
     const box = new Node('box', 'box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ position: 'absolute', left: 10, top: 20, width: 300, height: 60, opacity: 0.5 })
@@ -517,7 +517,7 @@ describe('glass containers (GlassContainer, spec §5.2)', () => {
     const rl = buildRenderList(s, theme, 'light')
     const f = rl.fused[0]!, [ma, mb] = f.members
     expect(f.node).toBe(box); expect(f.spacing).toBe(16)
-    expect(f.params).toBe(ma!.params); expect(f.params.thickness).toBe(7)
+    expect(f.params).toEqual({ ...mb!.params, thickness: 7, fillet: ma!.params.fillet, filletBottom: ma!.params.filletBottom, profile: ma!.params.profile })   // b lifts the slab
     expect(f.elevation).toBe(6); expect(mb!.elevation).toBe(6); expect(ma!.elevation).toBe(0)
     expect(f.opacity).toBe(0.5); expect(f.z).toBe(ma!.z); expect(f.clip).toEqual(ma!.clip); expect(f.clip).toMatchObject({ x: 0, y: 0, width: 300, height: 100 })
     expect(f.transform).toEqual(IDENTITY); expect(f.tilt).toEqual({ x: 0, y: 0 }); expect(f.scale).toBe(1)
@@ -538,14 +538,70 @@ describe('glass containers (GlassContainer, spec §5.2)', () => {
     const none = buildRenderList(plain, theme, 'light')
     expect(none.fused).toEqual([]); expect(none.glass).toHaveLength(2)
   })
-  it('the gap is the distance between the rects: diagonal neighbours join only within spacing of each other', () => {
+  it('the gap is the distance between the shapes, rounded corners included, and must be under the spacing (as the fused outline joins them)', () => {
     const s = createSurface({ width: 400, height: 200 })
     const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 200 })
-    const a = glass(0, 0, 40, 40), b = glass(52, 52, 40, 40)           // 12 × 12 apart: 17 pt > 16
+    const a = glass(0, 0, 40, 40), b = glass(52, 52, 40, 40)           // squares 12 × 12 apart: 17 pt > 16
+    for (const n of [a, b]) n.setStyle({ radius: 0 })
     box.appendChild(a); box.appendChild(b); s.root.appendChild(box); layoutOf(s)
     expect(buildRenderList(s, theme, 'light').fused).toEqual([])
     b.setStyle({ left: 50, top: 50 }); layoutOf(s)                      // 10 × 10: 14 pt
     expect(buildRenderList(s, theme, 'light').fused).toHaveLength(1)
+    // 44 pt circles 8 × 8 apart diagonally: their bounds 11.3 pt apart, their arcs 29.5 (the outline would not bridge them)
+    const c = glass(0, 0, 44, 44), d = glass(52, 52, 44, 44)
+    box.removeChild(a); box.removeChild(b); box.appendChild(c); box.appendChild(d); layoutOf(s)
+    expect(buildRenderList(s, theme, 'light').fused).toEqual([])
+    d.setStyle({ left: 36, top: 36 }); layoutOf(s)                      // centres 50.9 apart: arcs 6.9 apart
+    expect(buildRenderList(s, theme, 'light').fused).toHaveLength(1)
+    // exactly the spacing apart: not joined (the outline would only pinch there)
+    d.setStyle({ left: 60, top: 0 }); layoutOf(s)
+    expect(buildRenderList(s, theme, 'light').fused).toEqual([])
+    d.setStyle({ left: 59 }); layoutOf(s)                               // 15 pt (layout rounds to whole pt)
+    expect(buildRenderList(s, theme, 'light').fused).toHaveLength(1)
+  })
+  it('only plain members fuse: a glowing or tinted one (a primary Button) stays single with its rim and glow, and the cluster splits around it', () => {
+    const s = createSurface({ width: 400, height: 100 })
+    const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 100 })
+    const a = glass(0, 0, 80, 40, 'a'), p = glass(90, 0, 80, 40, 'primary'), c = glass(180, 0, 80, 40, 'c')
+    p.setStyle({ glass: { glow: { color: 'accent', strength: 1.1 }, tint: 'accent', absorption: 1.4 } })
+    box.appendChild(a); box.appendChild(p); box.appendChild(c); s.root.appendChild(box); layoutOf(s)
+    let rl = buildRenderList(s, theme, 'light')
+    expect(rl.fused).toEqual([])                                                       // a and c are 100 pt apart without it
+    expect(rl.glass.map(g => g.node.id)).toEqual(['a', 'primary', 'c'])
+    expect(rl.decorations.filter(d => d.kind === 'rim').map(d => d.node.id)).toEqual(['a', 'primary', 'c'])
+    expect(rl.glass[1]!.params.glow).toMatchObject({ strength: 1.1 })
+    // beside two plain ones: they fuse, it stays single
+    p.setStyle({ left: 180 }); c.setStyle({ left: 90 }); layoutOf(s)
+    rl = buildRenderList(s, theme, 'light')
+    expect(rl.fused.map(f => f.members.map(m => m.node.id))).toEqual([['a', 'c']])
+    expect(rl.glass.map(g => g.node.id)).toEqual(['primary']); expect(rl.decorations.filter(d => d.kind === 'rim').map(d => d.node.id)).toEqual(['primary'])
+    // tinted alone, or a variant of its own, keeps it single too; a glow of strength 0 (a Switch that is off) fuses
+    p.setStyle({ glass: { tint: 'accent' } })
+    expect(buildRenderList(s, theme, 'light').fused[0]!.members.map(m => m.node.id)).toEqual(['a', 'c'])
+    p.setStyle({ glass: { variant: 'clear' } })
+    expect(buildRenderList(s, theme, 'light').fused[0]!.members.map(m => m.node.id)).toEqual(['a', 'c'])
+    p.setStyle({ glass: { glow: { color: 'accent', strength: 0 } } })
+    expect(buildRenderList(s, theme, 'light').fused[0]!.members.map(m => m.node.id)).toEqual(['a', 'primary', 'c'])
+  })
+  it('the member that lifts the slab leads its look (a hover glint on any member shows on the slab); a pressed or hovered one leads a tie; opacity is the largest', () => {
+    const s = createSurface({ width: 400, height: 100 })
+    const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 100 })
+    const a = glass(0, 0, 80, 40, 'a'), b = glass(90, 0, 60, 30, 'b'), c = glass(160, 0, 80, 40, 'c')
+    for (const n of [a, b, c]) n.setStyle({ hover: { glass: { specularIntensity: 1.35, edgeGlow: 1.1 } } })
+    box.appendChild(a); box.appendChild(b); box.appendChild(c); s.root.appendChild(box); layoutOf(s)
+    const slab = () => buildRenderList(s, theme, 'light').fused[0]!
+    expect(slab().params.specularIntensity).toBe(theme.glass.specularIntensity)        // at rest: the first member's
+    b.setState({ hover: true }); b.elevation = 6
+    let f = slab()
+    expect(f.elevation).toBe(6); expect(f.params.specularIntensity).toBe(1.35); expect(f.params.edgeGlow).toBe(1.1)   // b's glint
+    expect(f.params.thickness).toBe(f.members[0]!.params.thickness); expect(f.params.thickness).not.toBe(f.members[1]!.params.thickness)   // the slab keeps a's height
+    b.elevation = 0                                                                    // a tie: the hovered member leads
+    expect(slab().params.specularIntensity).toBe(1.35)
+    b.setState({ hover: false }); c.setState({ pressed: true }); c.setStyle({ pressed: { glass: { edgeGlow: 0.5 } } })
+    expect(slab().params.edgeGlow).toBe(0.5)                                           // the pressed one
+    c.setState({ pressed: false }); a.setStyle({ opacity: 0.4 }); b.setStyle({ opacity: 0.7 })
+    f = slab()
+    expect(f.params).toBe(f.members[0]!.params); expect(f.opacity).toBe(1)              // c's (the largest)
   })
   it('glass inside a member rides on it (not a member); a nested container takes its own glass', () => {
     const s = createSurface({ width: 400, height: 200 })
@@ -569,7 +625,7 @@ describe('glass containers (GlassContainer, spec §5.2)', () => {
     expect(buildRenderList(s, theme, 'light').fused).toEqual([])
     for (const bad of [{ spacing: -1 }, { spacing: Number.NaN }, { spacing: '16' }, 16]) {
       box.setProp('glassContainer', bad)
-      expect(() => buildRenderList(s, theme, 'light')).toThrow(/\[glassContainer\.spacing\]/)
+      expect(() => buildRenderList(s, theme, 'light')).toThrow(/^\[glassContainer\.spacing\] 必须是不小于 0 的有限数（pt）$/)
     }
     box.setProp('glassContainer', null)
     expect(buildRenderList(s, theme, 'light').glass).toHaveLength(2)

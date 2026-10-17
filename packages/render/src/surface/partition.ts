@@ -20,7 +20,8 @@ export interface Partition {
  *
  * Glass containers (spec §5.2): every fused member counts as glass, so what sits on it rides on top as on any glass.
  * While its cluster draws fused (`opts.fuse`, default true; false in the 'fill' glass mode, which draws the members
- * alone) it rides on the fused slab: `liftFor` lifts it onto the slab's top (`fusedOf`).
+ * alone) it rides on the fused slab: `liftFor` lifts it onto the slab's top (`fusedOf`), and a member's focus ring
+ * drops the member's tilt (the slab is untilted).
  */
 export function partition(rl: RenderList, opts: { fuse?: boolean } = {}): Partition {
   const glass = new Map<Node, GlassInstance>(), fusedOf = new Map<GlassInstance, FusedGlassInstance>()
@@ -48,7 +49,12 @@ export function partition(rl: RenderList, opts: { fuse?: boolean } = {}): Partit
     else if (d.kind === 'shadow') out.content.shadows.push(d)
     else { out.foreground.rims.push(d); nearest(d.node) }
   }
-  for (const p of rl.panels) (nearest(p.node) ? out.foreground.panels : out.content.panels).push(p)
+  for (const p of rl.panels) {
+    const g = nearest(p.node)
+    if (!g) out.content.panels.push(p)
+    // a fused member's own panel is its focus ring: on the untilted slab, it drops the member's hover tilt
+    else out.foreground.panels.push(p.node === g.node && fusedOf.has(g) && (p.tilt.x !== 0 || p.tilt.y !== 0) ? { ...p, tilt: { x: 0, y: 0 } } : p)
+  }
   for (const t of rl.text) (nearest(t.node) ? out.foreground.text : out.content.text).push(t)
   for (const i of rl.images) (nearest(i.node) ? out.foreground.images : out.content.images).push(i)
   return out

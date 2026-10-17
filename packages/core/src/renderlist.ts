@@ -58,9 +58,13 @@ export interface GlassShape { x: number; y: number; width: number; height: numbe
  * A cluster of glass that a glass container (`props.glassContainer`, spec §5.2) fuses into one slab: `node` is the
  * container; `members` the clustered glass instances in list order (their rims dropped, their pools and shadows kept);
  * `shapes` their rects through their own transforms (a pressed member's shrinks), in the same order; `spacing` the
- * container's. `params`, `opacity`, `scale`, `z` and `clip` are the first member's; `elevation` the tallest member's (a
- * hovered member lifts the whole slab); `rect` the shapes' bounds; `transform` is `IDENTITY` (the shapes are already
- * transformed) and `tilt` 0 (tilts do not compose: a member's hover tilt has no slab of its own to bend).
+ * container's. `elevation` is the tallest member's (a hovered member lifts the whole slab), and `params` that member's
+ * (its hover glint shows on the slab it lifts; on a tie, a pressed member's, then a hovered one's, then the first's),
+ * but for the slab's geometry — `thickness`, `fillet`, `filletBottom` and `profile` stay the first member's, so the
+ * slab neither changes height nor rebuilds when the hover moves along it. `opacity` is the members' largest (one
+ * fading in or out does not dim the others); `scale`, `z` and `clip` are the first member's; `rect` the shapes'
+ * bounds; `transform` is `IDENTITY` (the shapes are already transformed) and `tilt` 0 (tilts do not compose: a
+ * member's hover tilt has no slab of its own to bend).
  */
 export interface FusedGlassInstance extends InstanceTransform { node: Node; members: GlassInstance[]; shapes: GlassShape[]; spacing: number; params: ResolvedGlass; rect: Rect; z: number; clip?: ClipRect }
 export interface RenderList { panels: PanelInstance[]; glass: GlassInstance[]; text: TextInstance[]; decorations: DecorationInstance[]; images: ImageInstance[]; fused: FusedGlassInstance[] }
@@ -163,7 +167,8 @@ function containerSpacing(n: Node): number | null {
   if (c === undefined || c === null || c === false) return null
   const spacing = typeof c === 'object' ? (c as { spacing?: unknown }).spacing : undefined
   if (typeof spacing !== 'number' || !Number.isFinite(spacing) || spacing < 0) {
-    throw new GlassUIError('glassContainer.spacing', `必须是不小于 0 的有限数（pt），实际为 ${typeof c === 'object' ? String(spacing) : String(c)}`)
+    const v = typeof c === 'object' ? spacing : c
+    throw new GlassUIError('glassContainer.spacing', '必须是不小于 0 的有限数（pt）', { got: typeof v === 'number' ? String(v) : String(JSON.stringify(v)) })
   }
   return spacing
 }
@@ -179,26 +184,46 @@ function shapeOf(g: GlassInstance): GlassShape {
   return { x: cx - width / 2, y: cy - height / 2, width, height, radius: g.radius * Math.sqrt(Math.abs(t.a * t.d - t.b * t.c)) }
 }
 
-/** The distance between two rects (0 when they touch or overlap). */
+/**
+ * The distance between two rounded rects (0 when they touch or overlap): each is its core rect (inset by its radius,
+ * clamped to half its shorter side as the fused outline clamps it) grown by a disc of that radius, so it is the
+ * distance between the cores less both radii. The fused outline joins two shapes exactly when this is under the
+ * spacing (`fusedOutline` in the render package): two circles placed diagonally are as far apart as their arcs are.
+ */
 function gapBetween(p: GlassShape, q: GlassShape): number {
-  const dx = Math.max(0, q.x - (p.x + p.width), p.x - (q.x + q.width)), dy = Math.max(0, q.y - (p.y + p.height), p.y - (q.y + q.height))
-  return Math.sqrt(dx * dx + dy * dy)
+  const rp = Math.max(0, Math.min(p.radius, p.width / 2, p.height / 2)), rq = Math.max(0, Math.min(q.radius, q.width / 2, q.height / 2))
+  const dx = Math.max(0, (q.x + rq) - (p.x + p.width - rp), (p.x + rp) - (q.x + q.width - rq))
+  const dy = Math.max(0, (q.y + rq) - (p.y + p.height - rp), (p.y + rp) - (q.y + q.height - rq))
+  return Math.max(0, Math.sqrt(dx * dx + dy * dy) - rp - rq)
 }
 
 /**
- * Clusters a container's members (spec §5.2): two join when the gap between their shapes (`shapeOf`) is ≤ its spacing,
- * transitively; a member with an empty or non-finite shape joins none. Each cluster of two or more becomes one
- * `FusedGlassInstance` in `out` (in the order of its first member), its members' glass and rims put in `drop`.
+ * Whether a member's look lets it fuse: no glow (none, or of strength 0: a Switch that is off) and no tint. A glowing
+ * or tinted member (a primary Button, a checked Switch, a selected item) stays single glass with its own rim and pool:
+ * the slab has one look over its whole outline, and a glow or its split there would smear across the other members.
+ */
+const fusible = (p: ResolvedGlass): boolean => (p.glow === null || p.glow.strength <= 0) && p.tint === null
+
+/** How a member ranks among the members sharing the slab's elevation: a pressed one, then a hovered one, leads it. */
+const leadRank = (g: GlassInstance): number => g.node.state.pressed ? 2 : g.node.state.hover ? 1 : 0
+
+/**
+ * Clusters a container's members (spec §5.2): two join when the gap between their shapes (`shapeOf`, `gapBetween`) is
+ * under its spacing (as the fused outline joins them), they share a variant and both can fuse (`fusible`),
+ * transitively; a member with an empty or non-finite shape joins none, nor does one that cannot fuse (so a cluster
+ * splits around it when that leaves a wider gap). Each cluster of two or more becomes one `FusedGlassInstance` in
+ * `out` (in the order of its first member), its members' glass and rims put in `drop`.
  */
 function cluster(c: Container, out: FusedGlassInstance[], drop: Set<GlassInstance | DecorationInstance>): void {
   const ms = c.members, n = ms.length
   if (n < 2) return
   const shapes = ms.map(m => shapeOf(m.glass))
-  const ok = shapes.map(s => [s.x, s.y, s.width, s.height, s.radius].every(Number.isFinite) && s.width > 0 && s.height > 0)
+  const ok = shapes.map((s, i) => [s.x, s.y, s.width, s.height, s.radius].every(Number.isFinite) && s.width > 0 && s.height > 0 && fusible(ms[i]!.glass.params))
   const up = Array.from({ length: n }, (_, i) => i)
   const find = (i: number): number => { while (up[i] !== i) { up[i] = up[up[i]!]!; i = up[i]! } return i }
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-    if (ok[i] && ok[j] && gapBetween(shapes[i]!, shapes[j]!) <= c.spacing) { const a = find(i), b = find(j); if (a !== b) up[Math.max(a, b)] = Math.min(a, b) }
+    if (!ok[i] || !ok[j] || ms[i]!.glass.params.variant !== ms[j]!.glass.params.variant) continue
+    if (gapBetween(shapes[i]!, shapes[j]!) < c.spacing) { const a = find(i), b = find(j); if (a !== b) up[Math.max(a, b)] = Math.min(a, b) }
   }
   const groups = new Map<number, number[]>()
   for (let i = 0; i < n; i++) { const r = find(i), g = groups.get(r); if (g) g.push(i); else groups.set(r, [i]) }   // roots are their sets' least index: groups in first-member order
@@ -208,9 +233,17 @@ function cluster(c: Container, out: FusedGlassInstance[], drop: Set<GlassInstanc
     for (const i of idx) { drop.add(ms[i]!.glass); drop.add(ms[i]!.rim) }
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
     for (const s of sh) { x0 = Math.min(x0, s.x); y0 = Math.min(y0, s.y); x1 = Math.max(x1, s.x + s.width); y1 = Math.max(y1, s.y + s.height) }
+    // the member that lifts the slab leads its look; the slab's geometry stays the first member's
+    let lead = first, opacity = first.opacity
+    for (const m of members) {
+      if (m.elevation > lead.elevation || (m.elevation === lead.elevation && leadRank(m) > leadRank(lead))) lead = m
+      opacity = Math.max(opacity, m.opacity)
+    }
+    const f = first.params
+    const params = lead === first ? f : { ...lead.params, thickness: f.thickness, fillet: f.fillet, filletBottom: f.filletBottom, profile: f.profile }
     out.push({
-      node: c.node, members, shapes: sh, spacing: c.spacing, params: first.params, rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, z: first.z,
-      elevation: Math.max(...members.map(m => m.elevation)), scale: first.scale, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity: first.opacity, ...defined({ clip: first.clip }),
+      node: c.node, members, shapes: sh, spacing: c.spacing, params, rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, z: first.z,
+      elevation: lead.elevation, scale: first.scale, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity, ...defined({ clip: first.clip }),
     })
   }
 }
@@ -228,10 +261,11 @@ function cluster(c: Container, out: FusedGlassInstance[], drop: Set<GlassInstanc
  *
  * Glass containers (spec §5.2): a node with `props.glassContainer = { spacing }` (pt, finite, ≥ 0; anything else throws
  * a `GlassUIError`; null or false is no container) collects the glass whose nearest container it is, glass nested in
- * glass aside (that rides on its glass, as it does anywhere). After its subtree it clusters them (`cluster`): a cluster
- * of one stays plain glass with its rim and pool; a larger one becomes a `FusedGlassInstance` in `fused`, its members
- * leaving `glass` and their rims leaving `decorations` (the fused slab's own edges are lit by its shell), their pools
- * and shadows kept. A container nested in another completes, and lists its clusters, first.
+ * glass aside (that rides on its glass, as it does anywhere). After its subtree it clusters them (`cluster`: closer than
+ * the spacing, of one variant, neither glowing nor tinted): a cluster of one stays plain glass with its rim and pool; a
+ * larger one becomes a `FusedGlassInstance` in `fused`, its members leaving `glass` and their rims leaving
+ * `decorations` (the fused slab's own edges are lit by its shell), their pools and shadows kept. A container nested in
+ * another completes, and lists its clusters, first.
  */
 export function buildRenderList(surface: SurfaceModel, theme: Theme, scheme: ColorScheme): RenderList {
   const rl: RenderList = { panels: [], glass: [], text: [], decorations: [], images: [], fused: [] }

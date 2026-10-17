@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, vi } from 'vitest'
 import { createCanvas } from '@napi-rs/canvas'
 import { AlwaysDepth, Color, CustomBlending, DataTexture, FramebufferTexture, FrontSide, PerspectiveCamera, Group, HalfFloatType, Mesh, Object3D, OneFactor, OneMinusSrcAlphaFactor, PlaneGeometry, Texture, UnsignedByteType, Vector2, Vector3, type Material, type RenderTarget } from 'three'
 import { MeshPhysicalNodeMaterial, MeshStandardNodeMaterial, type MeshBasicNodeMaterial } from 'three/webgpu'
-import { Node, createYogaLayout, AnimationRuntime, defaultTheme as theme, resolveColor } from '@glassui/core'
+import { Node, buildRenderList, createYogaLayout, AnimationRuntime, defaultTheme as theme, resolveColor } from '@glassui/core'
 import { SystemFontEngine } from '@glassui/text'
 import { Surface, createContentMaterial, fillColors, CONTENT_ORDER, SLAB_FROST, SURFACE_ORDER, type SurfaceContext } from '../src/surface/surface'
 import { FILL, SLAB_BEHIND } from '../src/glass/frost'
@@ -18,6 +18,8 @@ import { QUALITY } from '../src/quality'
 import { toColor } from '../src/color'
 import { evalNode } from './fixtures/tsl-eval'
 import { SHADOW_DECAL } from '../src/decoration/material'
+import { fusedProfile, fusedShapes } from '../src/surface/fused'
+import { extrudeSlab, fusedOutline } from '../src/glass/fused'
 
 let ctx: SurfaceContext
 beforeAll(async () => {
@@ -1642,8 +1644,8 @@ describe('Surface: drop shadows of raised glass (spatial §11.7)', () => {
 
 describe('glass containers: fused slabs (GlassContainer, spec §5.2)', () => {
   /** A Surface whose root holds a container with two close glass nodes (`a`, `b`: 10 pt apart) and one far one. */
-  function fusedSurface(c: SurfaceContext = ctx, opts: { ptPerUnit?: number; labels?: boolean; glass?: Record<string, unknown>; background?: string } = {}) {
-    const s = new Surface({ width: 400, height: 100, ptPerUnit: opts.ptPerUnit ?? 1, ...(opts.background ? { background: opts.background } : {}) }, c)
+  function fusedSurface(c: SurfaceContext = ctx, opts: { ptPerUnit?: number; labels?: boolean; glass?: Record<string, unknown>; background?: string; placement?: 'world' } = {}) {
+    const s = new Surface({ width: 400, height: 100, ptPerUnit: opts.ptPerUnit ?? 1, ...(opts.background ? { background: opts.background } : {}), ...(opts.placement ? { placement: opts.placement } : {}) }, c)
     const box = new Node('box', 'bar'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ position: 'absolute', left: 0, top: 0, width: 400, height: 100 })
     const at = (id: string, left: number) => {
       const g = new Node('glass', id); g.setStyle({ position: 'absolute', left, top: 30, width: 80, height: 40, radius: 'capsule', ...(opts.glass ? { glass: opts.glass } : {}) }); box.appendChild(g)
@@ -1853,6 +1855,74 @@ describe('glass containers: fused slabs (GlassContainer, spec §5.2)', () => {
       expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
     })
   }
+  it('a pointer moving while pressed (a touch change only) rewrites the glow alone: same mesh, same outer instances (the luma does not repack)', () => {
+    const { s, b } = fusedSurface(ctx, { glass: { variant: 'clear', adaptive: true } })
+    b.setStyle({ pressed: {} }); s.tick(0)
+    s.setPointer([127.5, 40]); s.pointer.down(127.5, 40); s.tick(0)
+    const geometry = s.fused.batches[0]!.geometry, outer = s.fused.outer
+    expect(outer).toHaveLength(1)
+    s.setPointer([60, 60]); s.tick(0)
+    expect(s.fused.batches[0]!.buffer.get(0, 'iTouch').slice(0, 3)).toEqual([-25 / 170, -0.25, 1].map(Math.fround))
+    expect(s.fused.batches[0]!.geometry).toBe(geometry); expect(s.fused.outer).toBe(outer)
+  })
+  it('clusters keep their draws by member: one dissolving leaves the next one\'s mesh alone', () => {
+    const s = new Surface({ width: 400, height: 100, ptPerUnit: 1 }, ctx)
+    const box = new Node('box', 'bar'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ position: 'absolute', left: 0, top: 0, width: 400, height: 100 })
+    const at = (left: number) => { const g = new Node('glass'); g.setStyle({ position: 'absolute', left, top: 30, width: 40, height: 40, radius: 'capsule' }); box.appendChild(g); return g }
+    const [, b] = [at(0), at(50), at(200), at(250)]
+    s.root.appendChild(box); s.tick(0)
+    expect(s.fused.batches).toHaveLength(2)
+    const second = s.fused.batches[1]!.geometry
+    b!.setStyle({ left: 120 }); s.tick(0)                                         // the first pair comes apart
+    expect(s.fused.batches).toHaveLength(1); expect(s.fused.batches[0]!.geometry).toBe(second)
+  })
+  it('a fused member\'s focus ring drops its hover tilt on the flat slab; drawn alone (\'fill\') it keeps it', () => {
+    const { s, b } = fusedSurface({ ...ctx })
+    b.setProp('tabIndex', 0); b.setState({ focused: true, focusVisible: true }); b.tilt = { x: 0.05, y: 0.05 }; s.tick(0)
+    expect(s.foregroundPanels.buffer.count).toBe(1)
+    expect(s.foregroundPanels.buffer.get(0, 'iMat0').slice(0, 3)).toEqual([1, 0, 0]); expect(s.foregroundPanels.buffer.get(0, 'iMat2').slice(0, 3)).toEqual([0, 0, 1])
+    s.setQuality(QUALITY.minimal)
+    expect(s.foregroundPanels.buffer.get(0, 'iMat2')[0]).not.toBe(0)
+  })
+  it('a primary Button between two plain ones stays single glass with its rim and glow; hovering the second member glints the slab', () => {
+    const { s, a, b } = fusedSurface()
+    const p = new Node('glass', 'primary'); p.setStyle({ position: 'absolute', left: 180, top: 30, width: 80, height: 40, radius: 'capsule', glass: { glow: { color: 'accent', strength: 1.1 } } })
+    a.parent!.insertBefore(p, a.parent!.children[2]!); s.tick(0)
+    expect(s.glass.nodes.map(n => n.id)).toEqual(['primary', 'far'])
+    expect(s.glass.buffer.get(0, 'iGlow')[3]).toBeCloseTo(1.1); expect(s.rims.buffer.count).toBe(2)
+    for (const n of [a, b]) n.setStyle({ hover: { glass: { edgeGlow: 1.1 } } })
+    b.setState({ hover: true }); b.elevation = 6; s.tick(0)
+    expect(s.fused.batches[0]!.buffer.get(0, 'iCorner')[3]).toBeCloseTo(1.1)       // b's glint on the slab it lifts
+  })
+  it('the mesh is extruded on the smallest member\'s short side, so the fillets fit it', () => {
+    const s = new Surface({ width: 400, height: 100, ptPerUnit: 2 }, ctx)
+    const box = new Node('box', 'bar'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ position: 'absolute', left: 0, top: 0, width: 400, height: 100 })
+    const a = new Node('glass', 'a'); a.setStyle({ position: 'absolute', left: 0, top: 30, width: 80, height: 40, radius: 'capsule', glass: { thickness: 20, fillet: 10, filletBottom: 6 } })
+    const b = new Node('glass', 'b'); b.setStyle({ position: 'absolute', left: 90, top: 44, width: 12, height: 12, radius: 3 })
+    box.appendChild(a); box.appendChild(b); s.root.appendChild(box); s.tick(0)
+    const f = buildRenderList(s.model, theme, 'light').fused[0]!, shapes = fusedShapes(f), profile = fusedProfile(f, shapes)
+    expect(profile).toEqual({ thickness: 20, fillet: 10, filletBottom: 6, minSide: 12 })
+    const mesh = (minSide: number) => extrudeSlab(fusedOutline(shapes, 16), shapes, 16, { ...profile, minSide }, s.glass.K).positions.map(v => v / 2)
+    const drawn = s.fused.batches[0]!.geometry.getAttribute('position').array
+    expect(Array.from(drawn)).toEqual(Array.from(mesh(12)))
+    expect(Array.from(drawn)).not.toEqual(Array.from(mesh(40)))                     // a's own short side would not fit b
+  })
+  it('a 3D attachment on a fused member stands on the slab\'s top; in \'fill\' on its member\'s own', () => {
+    const { s, a, b } = fusedSurface({ ...ctx }, { placement: 'world' })
+    b.setStyle({ glass: { thickness: 5 } })
+    const vp = new Node('box', 'vp'); vp.setStyle({ position: 'absolute', left: 10, top: 5, width: 20, height: 20 }); b.appendChild(vp)
+    s.attach3D(vp, new Object3D()); a.elevation = 6; s.tick(0)
+    expect(s.viewports.get(vp)!.base).toBeCloseTo(6 + T)                              // a lifts the slab; its thickness is a's
+    s.setQuality(QUALITY.minimal); s.tick(0)
+    expect(s.viewports.get(vp)!.base).toBeCloseTo(5)
+  })
+  it('removing a container frees its slab\'s draws', () => {
+    const { s, box } = fusedSurface()
+    const geometry = s.fused.batches[0]!.geometry
+    let freed = 0; geometry.addEventListener('dispose', () => { freed++ })
+    s.root.removeChild(box); s.tick(0)
+    expect(freed).toBe(1); expect(s.fused.batches).toEqual([]); expect(meshBatches(s)).toEqual([])
+  })
   it('dispose frees the fused meshes, batches and materials', () => {
     const { s } = fusedSurface()
     const draws = meshBatches(s), freed: string[] = []
