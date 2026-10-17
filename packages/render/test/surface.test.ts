@@ -1843,6 +1843,12 @@ describe('glass containers: fused slabs (GlassContainer, spec §5.2)', () => {
           expect(buildShaders(m.material as MeshPhysicalNodeMaterial, m.geometry, forceWebGL, true).vertex.length).toBeGreaterThan(0)
         }
         expect(new Set(draws.flatMap(m => materialGraph(m.material as Material)).filter(n => n.isTextureNode).map(n => n.value))).toContain(s.contentPass.texture)
+        // the low tier (straight through) and medium build too
+        for (const q of [QUALITY.low, QUALITY.medium]) {
+          s.setQuality(q)
+          expect(s.error).toBeNull()
+          for (const m of meshBatches(s)) expect(buildShaders(m.material as MeshPhysicalNodeMaterial, m.geometry, forceWebGL).varyings.length).toBeLessThanOrEqual(11)
+        }
       } finally { spy.mockRestore() }
       expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])
     })
