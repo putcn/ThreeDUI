@@ -272,9 +272,9 @@ it('M3: the box variants hover by their fill (their lift and tilt are flat in th
   const d = mountGlass(() => h(Button, { variant: 'filled', label: 'x', loading: true })).c
   expect(all(d, 'box').find(n => n.props.tabIndex !== undefined)!.style.hover).toBeUndefined()
 })
-it('M6, M7: the manifest says glassId waits for GlassContainer, and that switching between glass and box variants remounts', () => {
+it('M6, M7: the manifest says what glassId does (Task 17), and that switching between glass and box variants remounts', () => {
   const m = glassComponents().find(g => g.glass.name === 'Button')!.glass
-  expect((m.props.shape.glassId as { description?: string }).description).toMatch(/GlassContainer.*现在设置它没有效果/)
+  expect((m.props.shape.glassId as { description?: string }).description).toMatch(/glassEffectID.*500 ms.*形变.*GlassContainer/)
   expect(JSON.stringify(m.mistakes)).toMatch(/重建.*焦点.*动画/)
 })
 it('Button is registered with complete manifest metadata', () => {

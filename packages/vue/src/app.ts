@@ -37,7 +37,7 @@ const provideOwn = <T>(app: App, key: InjectionKey<T>, value: T): void => { (app
 export function createGlassApp(component: Component, opts: GlassAppOptions, rootProps?: Record<string, unknown>): GlassApp {
   // a missing Teleport target is reported, not thrown: to this app's error handler (console + marker), whichever is set then
   const report = (err: unknown): void => { const handler = app.config.errorHandler; if (handler) handler(err, null, 'Teleport'); else console.error('[glassui]', err) }
-  const app = createGlassRenderer({ root: opts.root, onError: report }).createApp(component, rootProps)
+  const app = createGlassRenderer({ root: opts.root, onError: report, ...(opts.motion ? { motion: opts.motion } : {}) }).createApp(component, rootProps)
   provideOwn(app, GLASS_ROOT, opts.root)
   provideOwn(app, GLASS_OPTIONS, { motion: opts.motion ?? 'live', createCanvas: opts.createCanvas ?? domCanvas })
   if (opts.parent) {

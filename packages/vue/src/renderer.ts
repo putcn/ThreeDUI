@@ -1,8 +1,9 @@
 import {
-  callWithAsyncErrorHandling, createRenderer, ErrorCodes, markRaw, normalizeClass, toRaw,
+  callWithAsyncErrorHandling, createRenderer, ErrorCodes, markRaw, normalizeClass, queuePostFlushCb, toRaw,
   type CreateAppFunction, type RendererOptions, type RootRenderFunction,
 } from '@vue/runtime-core'
-import { GlassUIError, Node, parseTw, UI_EVENT_TYPES, validateStyle, type NodeType, type Style, type UIEventType } from '@glassui/core'
+import { absoluteRect, GlassUIError, Node, parseTw, scrollOffset, UI_EVENT_TYPES, validateStyle, type NodeType, type Rect, type Style, type UIEventType } from '@glassui/core'
+import { liveSurface } from './motion'
 import type { GlassRoot } from './root'
 
 /** The elements a template can use (spec §8.1); `anchor` nodes are Vue's own (comments). */
@@ -103,6 +104,8 @@ const EVENT_PROPS = UI_EVENT_TYPES.map(t => `on${t[0]!.toUpperCase()}${t.slice(1
 
 export interface GlassRendererOptions {
   root: GlassRoot
+  /** `'frozen'`: no glassId morph (transitions complete at once). Default `'live'`; `createGlassApp` passes its own. */
+  motion?: 'live' | 'frozen'
   /**
    * Reports an error that must not be thrown: a Teleport target that is not there (`querySelector` runs inside Vue's
    * post-flush callbacks for `defer`, which do not catch). Default `console.error`; `createGlassApp` passes its app's
@@ -111,16 +114,103 @@ export interface GlassRendererOptions {
   onError?: (err: unknown) => void
 }
 
+/** How long a glassId node that left waits for its successor (ms). */
+export const MORPH_WINDOW_MS = 500
+/** The keys a glassId morph animates, and the spring each gets where the node's own style has no transition for it. */
+const MORPH_KEYS = ['x', 'y', 'width', 'height'] as const
+/** A glassId node's `props.glassId`, when it has one (a string). */
+const glassIdOf = (n: Node): string | null => typeof n.props.glassId === 'string' ? n.props.glassId : null
+
+/**
+ * Where `n` is drawn, in its tree root's (Surface) pt: its absolute rect, with its animated rect (`visual`, mid-morph or
+ * mid-transition) in place of its layout one.
+ */
+function drawnRect(n: Node): Rect {
+  const a = absoluteRect(n), v = n.visual, l = n.layout
+  if (!v) return a
+  return { x: a.x - l.x + (v.x ?? l.x), y: a.y - l.y + (v.y ?? l.y), width: v.width ?? l.width, height: v.height ?? l.height }
+}
+/** The origin of `parent`'s children's layout frame in its tree root's pt (`absoluteRect(child) − child.layout`). */
+function frameOf(parent: Node): { x: number; y: number } {
+  const a = absoluteRect(parent), o = scrollOffset(parent)
+  return { x: a.x - o.x, y: a.y - o.y }
+}
+
 /**
  * A Vue renderer over core `Node`s (spec §8.1). `querySelector` (Teleport's `to`) looks through the containers its
  * apps are mounted in and every Surface of `root`: `#id` finds a node by id, a bare name a `portal` with that `name`;
  * a miss is reported as a `GlassUIError` through `opts.onError` (Vue itself only warns and drops the children) and
  * yields a detached placeholder. An error while mounting goes to `app.config.errorHandler` when one is set (Vue rethrows it from `mount`
  * otherwise), after the nodes the failed mount inserted into the container are taken out again.
+ *
+ * glassId morphs (Apple's `glassEffectID`): a node with a string `props.glassId` that leaves the tree (`remove`, itself
+ * or in a removed subtree; held content stays and does not count) leaves its drawn rect (`drawnRect`) under that id
+ * for `MORPH_WINDOW_MS`. A node with that glassId inserted fresh (not moved) within the window grows out of it: once
+ * the update's inserts and removes are all done (a post-flush callback, so the order Vue patches the two places in does
+ * not matter, nor a new place mounted inside a subtree not attached yet), `root.anim.seed` gets the old rect in the
+ * new parent's layout frame (`old − frameOf(parent)`), and a `morph` style layer adds `smooth` springs for the keys
+ * of `MORPH_KEYS` the node's style has none for; the layer comes off when the node settles (`whenSettled`). A matched
+ * entry is used up. Matching is per renderer (`createGlassApp` makes one per app: no match across apps) and within one
+ * tree: the new node must be in the same tree root as the old one was, and that a live Surface's (one a tick will
+ * see), else nothing is seeded (a seed in a tree nobody ticks would keep its state and its `whenSettled` waiter
+ * forever). Motion `'frozen'` and `root.anim.reducedMotion` skip the morph. A morphing node that leaves before any tick
+ * saw it leaves the rect it was seeded from (it was never drawn elsewhere); its state goes with the next tick of its
+ * Surface, which no longer finds it (`AnimationRuntime.tick`), and that tick settles its waiter.
  */
 export function createGlassRenderer(opts: GlassRendererOptions): { render: RootRenderFunction<Node>; createApp: CreateAppFunction<Node> } {
   const { root } = opts
   const report = opts.onError ?? ((err: unknown) => { console.error('[glassui]', err) })
+  const motion = opts.motion ?? 'live'
+
+  /**
+   * glassId → where its node was drawn when it left, the tree it left (weakly: a Surface disposed meanwhile is not kept
+   * alive by it), and when (`performance.now()`). Entries past the window go at the next record or match.
+   */
+  const left = new Map<string, { rect: Rect; tree: WeakRef<Node>; at: number }>()
+  const prune = (now: number): void => { for (const [id, l] of left) if (now - l.at > MORPH_WINDOW_MS) left.delete(id) }
+  /** Fresh glassId nodes inserted in this update, matched once it is done (`matchMorphs`). */
+  const entering = new Set<Node>()
+  /** Morphing nodes no tick has seen yet → the rect they were seeded from (where they still are, to the eye). */
+  const unseen = new WeakMap<Node, Rect>()
+  /** Each morphing node's current morph: a settle of an earlier one leaves a later one's layer on. */
+  const morphs = new WeakMap<Node, object>()
+  const leaving = (n: Node): void => {
+    let tree: WeakRef<Node> | null = null, now = 0
+    n.walk(x => {
+      const id = glassIdOf(x)
+      if (id === null) return
+      if (!tree) { tree = new WeakRef(n.root); prune(now = performance.now()) }
+      // moving: where it is drawn; else, seeded but not laid out yet, where it was seeded from (it was never drawn elsewhere)
+      left.set(id, { rect: x.visual ? drawnRect(x) : unseen.get(x) ?? drawnRect(x), tree, at: now })
+    })
+  }
+  const morph = (n: Node, parent: Node, from: Rect): void => {
+    const o = frameOf(parent)
+    root.anim.seed(n, { x: from.x - o.x, y: from.y - o.y, width: from.width, height: from.height })
+    const own = n.style.transition ?? {}
+    const springs = Object.fromEntries(MORPH_KEYS.filter(k => own[k] === undefined).map(k => [k, 'smooth']))
+    if (Object.keys(springs).length) setStyleLayer(n, 'morph', { transition: springs })
+    const token = {}
+    morphs.set(n, token); unseen.set(n, from)
+    void root.afterTick().then(() => { if (morphs.get(n) === token) unseen.delete(n) })
+    void root.anim.whenSettled(n).then(() => {
+      if (morphs.get(n) !== token) return
+      morphs.delete(n); unseen.delete(n)
+      setStyleLayer(n, 'morph', null)
+    })
+  }
+  const matchMorphs = (): void => {
+    prune(performance.now())
+    const fresh = [...entering]
+    entering.clear()
+    if (motion !== 'live' || root.anim.reducedMotion) return
+    for (const n of fresh) {
+      const id = glassIdOf(n), l = id === null ? undefined : left.get(id), parent = n.parent
+      if (id === null || !l || !parent || n.root !== l.tree.deref() || !liveSurface(root, n)) continue
+      left.delete(id)
+      morph(n, parent, l.rect)
+    }
+  }
   const containers = new Set<Node>()
   const textNode = (t: string): Node => { const n = markRaw(new Node('text')); n.setProp('value', t); if (t === '') n.replaceStyle(EMPTY); return n }
   const searched = (): Node[] => [...containers, ...root.surfaces.map(s => s.root)]
@@ -160,8 +250,18 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
     },
     // raw nodes only, whatever Vue hands over: a Teleport target held in a deep `ref` arrives as a reactive proxy, and a
     // proxy stored as a parent (or child) breaks the core's identity checks (`PointerTracker`'s `p === this.root`)
-    insert(c, p, a) { toRaw(p).insertBefore(toRaw(c), a ? toRaw(a) : null) },
-    remove(c) { const n = toRaw(c); if (!isHeld(n)) n.remove() },   // held content stays until its Surface goes
+    insert(c, p, a) {
+      const n = toRaw(c), fresh = n.parent === null
+      toRaw(p).insertBefore(n, a ? toRaw(a) : null)
+      // a fresh glassId node (not a move): matched against the ones that left once this update is done
+      if (fresh && glassIdOf(n) !== null) { entering.add(n); queuePostFlushCb(matchMorphs) }
+    },
+    remove(c) {
+      const n = toRaw(c)
+      if (isHeld(n)) return   // held content stays until its Surface goes
+      leaving(n)
+      n.remove()
+    },
     parentNode: n => toRaw(n).parent,
     nextSibling(n) { const r = toRaw(n), p = r.parent; return p ? p.children[p.children.indexOf(r) + 1] ?? null : null },
     querySelector: teleportTarget,

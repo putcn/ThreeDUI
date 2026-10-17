@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // The component gallery (`?scene=gallery`): every @glassui/vue component, section by section. The content sits on the
 // wall with no glass under it (spec §8.3: glass on controls, never on content areas); the controls (Buttons, Switches,
-// Checkboxes, Inputs) are glass right on the wall, with no panel behind them. The Dialog section's Button opens a
+// Checkboxes, Inputs) are glass right on the wall, with no panel behind them; the Glass Container section fuses a
+// toolbar of them into one slab and morphs a glassId between places. The Dialog section's Button opens a
 // <Dialog>: a glass panel of its own over a scrim that dims the whole screen. Beside the column stands a world-layer
 // <Surface>: a glass panel in the scene, turned about Y, with hover, clicks and an Input of its own.
 import { computed, h, onBeforeUnmount, ref, type FunctionalComponent } from 'vue'
-import { Box, Button, Checkbox, Dialog, Icon, ICON_NAMES, Input, Stack, Surface, Switch, Text, useScheme } from '@glassui/vue'
+import { Box, Button, Checkbox, Dialog, GlassContainer, Icon, ICON_NAMES, Input, Stack, Surface, Switch, Text, useScheme } from '@glassui/vue'
 
 // The page is a vertical `scroll` (the wheel scrolls it once later sections outgrow the viewport). No page fill: the
 // content sits on the wall itself, which the later sections' glass refracts.
@@ -54,6 +55,19 @@ const save = () => {
   saveTimer = setTimeout(() => { saving.value = false }, 1600)
 }
 onBeforeUnmount(() => clearTimeout(saveTimer))
+
+/**
+ * The Glass Container section. A toolbar of circle icon Buttons: at gap 8, under its spacing 16, one liquid slab; widened
+ * to gap 24 they slide apart (an x spring on each) and the slab pinches into single glass. A swap bar: the star (one
+ * glassId) moves between the bar's two ends, growing out of its old place over the others. The dock pattern (Task 19C):
+ * the selected item is glowing glass (it stands apart) keyed to re-mount, its glassId moving the highlight.
+ */
+const toolbar = ['plus', 'minus', 'search', 'heart', 'gear'] as const
+const wide = ref(false)
+const toolbarGap = computed(() => wide.value ? 24 : 8)
+const swapLeft = ref(true), swapMiddle = ['mail', 'search', 'gear'] as const
+const tabs = [{ name: 'mail', icon: 'mail' }, { name: 'star', icon: 'star' }, { name: 'heart', icon: 'heart' }, { name: 'user', icon: 'user' }] as const
+const tab = ref<(typeof tabs)[number]['name']>('star')
 
 /** The Switch & Checkbox section: every toggle is v-model'd, so each flips when pressed. */
 const wifi = ref(true), bluetooth = ref(false), remember = ref(true), notify = ref(false), agree = ref(true), news = ref(false)
@@ -266,6 +280,57 @@ const cancelRename = () => { outcome.value = '已取消'; renaming.value = false
         <Stack :gap="10" align="start" :style="{ maxWidth: 560 }">
           <Button variant="glassProminent" size="large" label="创建账号" trailing-icon="arrow-right" full-width @press="presses++" />
           <Text :value="presses ? `press 触发了 ${presses} 次` : '点按、Enter 或空格都会触发 press；Tab 聚焦时显示焦点环'" size="sm" color="secondaryLabel" />
+        </Stack>
+      </Stack>
+
+      <Stack id="containers" :gap="24">
+        <Stack :gap="12">
+          <Stack direction="horizontal" justify="between" align="end">
+            <Text value="Glass Container" size="xl" :weight="700" />
+            <Text value="玻璃容器 · 相距小于 spacing 的素玻璃融成一块 · glassId 形变" size="sm" color="secondaryLabel" :style="{ marginBottom: 3 }" />
+          </Stack>
+          <Box :style="{ height: 1, bg: 'separator' }" />
+        </Stack>
+
+        <!-- the toolbar: fused at gap 8 (under spacing 16), apart at gap 24; the Buttons slide (an x spring each) -->
+        <Stack direction="horizontal" :gap="40" align="end" wrap>
+          <Stack :gap="10">
+            <GlassContainer id="containers-toolbar" :spacing="16" :gap="toolbarGap">
+              <Button v-for="i in toolbar" :key="i" shape="circle" :leading-icon="i" :style="{ transition: { x: 'smooth' } }" />
+            </GlassContainer>
+            <Caption :value="`工具栏 TOOLBAR · spacing 16 · gap ${toolbarGap}`" />
+          </Stack>
+          <Stack :gap="10">
+            <Button id="containers-widen" :label="wide ? '收拢到 gap 8' : '拉开到 gap 24'" :leading-icon="wide ? 'minus' : 'plus'" @press="wide = !wide" />
+            <Caption value="间距超过 spacing 时各自分开" />
+          </Stack>
+        </Stack>
+
+        <!-- glassId: the star leaves one end and mounts at the other; the new one grows out of the old place -->
+        <Stack :gap="10">
+          <Stack direction="horizontal" :gap="24" align="center">
+            <GlassContainer id="containers-swap-bar" :spacing="16" :gap="8">
+              <Button v-if="swapLeft" key="l" shape="circle" leading-icon="star" glass-id="gallery-swap" />
+              <Box v-else key="lx" :style="{ width: 52, height: 52 }" />
+              <Button v-for="i in swapMiddle" :key="i" shape="circle" :leading-icon="i" />
+              <Button v-if="!swapLeft" key="r" shape="circle" leading-icon="star" glass-id="gallery-swap" />
+              <Box v-else key="rx" :style="{ width: 52, height: 52 }" />
+            </GlassContainer>
+            <Button id="containers-swap" :label="swapLeft ? '换到右边' : '换到左边'" :trailing-icon="swapLeft ? 'chevron-right' : 'chevron-left'" @press="swapLeft = !swapLeft" />
+          </Stack>
+          <Caption value="GLASSID 形变 · 同一 glass-id 的按钮换个位置重新挂载时，从旧处长过去，与相遇的玻璃融合" />
+        </Stack>
+
+        <!-- the selected item: glowing glass stands apart (like Apple's selected toolbar item); keyed to re-mount, its
+             glassId moves the highlight to the new one -->
+        <Stack :gap="10">
+          <GlassContainer id="containers-tabs" :spacing="16" :gap="8">
+            <Button
+              v-for="t in tabs" :key="t.name === tab ? `${t.name}-on` : t.name" shape="circle" :leading-icon="t.icon"
+              :variant="t.name === tab ? 'glassProminent' : 'glass'" :glass-id="t.name === tab ? 'gallery-tab' : undefined" @press="tab = t.name"
+            />
+          </GlassContainer>
+          <Caption value="选中项 SELECTED · 发光的玻璃单独成块，点别的图标试试" />
         </Stack>
       </Stack>
 

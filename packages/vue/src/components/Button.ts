@@ -79,7 +79,7 @@ export const Button = defineGlassComponent({
     loading: z.boolean().default(false).describe('加载中：内容换成三个轮流变亮的点，宽度不变，按钮不响应'),
     disabled: z.boolean().default(false).describe('禁用：变淡（不透明度 0.4），不响应指针和键盘，不在 Tab 顺序里'),
     fullWidth: z.boolean().default(false).describe('在父容器的交叉轴上拉满（纵向容器里即占满整行宽度）'),
-    glassId: z.string().optional().describe('玻璃形变标识，只在 GlassContainer 里生效（GlassContainer 尚未提供，Task 17 起；现在设置它没有效果）：同一 glassId 的按钮从一处换到另一处时，从旧位置形变过去'),
+    glassId: z.string().optional().describe('玻璃形变标识（对应 Apple 的 glassEffectID）：同一 glassId 的按钮被移除、500 ms 内在别处出现时，新按钮从旧按钮的位置和大小形变到自己的位置（同一应用、同一 Surface 里才匹配）；在 GlassContainer 里与相遇的素玻璃融合。换位置要让按钮重新挂载：v-if 两处各放一个，或换 key'),
   }),
   events: { press: { payload: "{ pointerType: 'mouse' | 'touch' | 'pen' | 'xr' | 'keyboard' }", description: '按钮被触发：点击（带指针类型）、Enter 键，或空格键松开（keyboard）；禁用或加载中时不发' } },
   slots: { default: '代替 label 的内容', leading: '代替 leadingIcon 的前置内容', trailing: '代替 trailingIcon 的后置内容' },
@@ -94,6 +94,7 @@ export const Button = defineGlassComponent({
     { mistake: '<Button variant="primary" />', fix: '主操作用 variant="glassProminent"，次要操作用默认的 glass' },
     { mistake: '<Button><Text value="保存" /></Button>', fix: '<Button label="保存" />：label 按尺寸取字号，按 variant 取颜色与字重' },
     { mistake: '<Stack><Button label="确定" /></Stack>（以为按钮按内容宽度）', fix: '纵向 Stack 默认 align stretch，会把按钮拉满整行：按内容宽度用 <Stack align="start">（或 center）；要拉满就明写 full-width' },
+    { mistake: '<Button v-for="t in tabs" :key="t" glass-id="tab-active" :variant="t === tab ? \'glassProminent\' : \'glass\'" />（以为切换选中项时高亮会形变过去）', fix: '只有选中的那个带 glass-id，并让它在选中项变化时重新挂载：:key="t === tab ? t + \'-on\' : t"、:glass-id="t === tab ? \'tab-active\' : undefined"；同一个按钮只换属性不会形变，几个按钮同时带同一个 glass-id 也不会' },
     { mistake: '<Button :variant="saved ? \'filled\' : \'glass\'" />（运行时在玻璃与非玻璃外观之间切换）', fix: 'glass、glassProminent 是玻璃节点，filled、tinted、plain 是普通 box：两组之间切换会重建按钮节点，焦点和进行中的动画（上浮、倾斜、按压）都会丢失；运行时切换外观就在同一组里切（glass ↔ glassProminent，或 filled ↔ tinted ↔ plain）' },
   ],
   // names from other UI kits and icon sets → ours, for the error's suggestion only
