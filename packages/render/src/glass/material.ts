@@ -8,7 +8,7 @@ import {
 import { GlassUIError } from '@glassui/core'
 import { GLASS_ATTRS } from './batch'
 import { FILL, FROST } from './frost'
-import { slabVertex } from './vertex'
+import { meshVertex, slabVertex } from './vertex'
 import { sdfNode } from '../panel/sdf'
 import type { SurfaceUniforms } from '../flat'
 
@@ -27,9 +27,12 @@ import type { SurfaceUniforms } from '../flat'
 export type GlassMode = 'refract' | 'straight' | 'fill'
 
 export interface GlassMaterialOptions {
-  /** The batch geometry (`GlassBatch.geometry`); its instance attributes are read by name. */
+  /**
+   * The batch geometry (`GlassBatch.geometry`); its instance attributes are read by name. A fused slab's
+   * (`userData.vertex === 'mesh'`) is placed by `meshVertex`, the 9-slice slab's by `slabVertex`.
+   */
   geometry: InstancedBufferGeometry
-  /** Profile segments the geometry was built with (`GlassBatch.K`). */
+  /** Profile segments the geometry was built with (`GlassBatch.K`); unused for a fused slab's mesh. */
   K: number
   /** `'panel'`: refract the Surface's content RT (class 2). `'screen'`: refract what is already on screen (class 3). */
   backdrop: 'panel' | 'screen'
@@ -193,7 +196,10 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   // three compiles a missing attribute to zeros (opacity 0: invisible glass), so fail here instead
   for (const name of GLASS_ATTRS) if (!o.geometry.hasAttribute(name)) throw new GlassUIError('createGlassMaterial', `几何体缺少实例属性 "${name}"（应为 GlassBatch.geometry）`)
   const mode = o.mode ?? 'refract', fill = mode === 'fill'
-  const v = slabVertex(o.geometry, o.K)
+  // a fused slab: its mesh is the slab-local position itself, its outline no rounded rect for the fill's border band
+  const mesh = o.geometry.userData.vertex === 'mesh'
+  if (mesh && fill) throw new GlassUIError('createGlassMaterial', 'fill 模式不画融合玻璃（应拆回单个玻璃实例）')
+  const v = mesh ? meshVertex(o.geometry) : slabVertex(o.geometry, o.K)
   const { size, ptPerUnit } = o.surface
 
   // ── vertex stage: instance attributes (by name, see slabVertex) → packed varyings ──────────────────────────────
@@ -210,7 +216,8 @@ export function createGlassMaterial(o: GlassMaterialOptions): GlassMaterial {
   const clipRadius = min(iClipT.z, min(half.x, half.y))
   // view units per slab unit: the slab's z axis (the instance matrix's third column) mapped to view space
   const toView = length(modelViewMatrix.mul(vec4(iMat0.z, iMat1.z, iMat2.z, 0)).xyz)
-  // depth = slab-local z: the height above the slab's own back face, in slab units (as iShape.y)
+  // depth = slab-local z: the height above the slab's own back face, in slab units (as iShape.y); the slab uv spans the
+  // rect (a fused slab's: its shapes' bounds)
   const vGeom = varying(vec4(v.slabLocal.z, iShape.y, v.slabLocal.x.div(iRect.z).add(0.5), v.slabLocal.y.div(iRect.w).add(0.5)), 'vGlassGeom')
   const vOptics = varying(iOptics, 'vGlassOptics')
   const vTint = varying(iTint, 'vGlassTint')

@@ -5,6 +5,7 @@ import { Node, IDENTITY, scaleAbout, GlassUIError, type GlassInstance, type Reso
 import { GlassBatch, GLASS_ATTRS } from '../src/glass/batch'
 import { createGlassMaterial, pyramidMix, DepthCapture, ScreenCapture } from '../src/glass/material'
 import { evalSlabVertex, type SlabInstanceParams } from '../src/glass/slab9'
+import { extrudeSlab, fusedOutline } from '../src/glass/fused'
 import { evalNode } from './fixtures/tsl-eval'
 import { buildShaders } from './fixtures/build-shaders'
 import { FILL, FROST } from '../src/glass/frost'
@@ -14,6 +15,14 @@ const s = { width: 400, height: 300, ptPerUnit: 100 }
 const params: ResolvedGlass = { thickness: 8, fillet: 2.4, filletBottom: 1.6, profile: 'fillet', scatter: 0.05, lift: 0.1, edgeGlow: 0.8, ior: 1.5, dispersion: 0.8, roughness: 0.06, tint: null, absorption: 0, glow: null, cornerExponent: 2, envIntensity: 1, specularIntensity: 1, innerGlow: 0, adaptive: true, variant: 'regular' }
 const inst: GlassInstance = { node: new Node('glass'), rect: { x: 10, y: 10, width: 100, height: 40 }, radius: 20, z: 1, params, elevation: 0, scale: 1, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity: 1 }
 const surface = { size: uniform(new Vector2(4, 3)), ptPerUnit: uniform(100) }
+/** A fused-glass batch (`userData.vertex = 'mesh'`): two capsules 8 pt apart, in units (1 / 100), packed with `inst`. */
+function fusedBatch(): GlassBatch {
+  const shapes = [{ x: 0, y: 0, width: 80, height: 40, radius: 20 }, { x: 88, y: 0, width: 80, height: 40, radius: 20 }]
+  const m = extrudeSlab(fusedOutline(shapes, 16), shapes, 16, { thickness: 8, fillet: 2.4, filletBottom: 1.6, minSide: 40 }, 4)
+  const b = new GlassBatch({ mesh: { ...m, positions: m.positions.map(v => v / 100) } })
+  b.update([inst], s)
+  return b
+}
 
 interface GraphNode {
   constructor: { type?: string }; name?: string; node?: GraphNode; method?: string; aNode?: GraphNode; bNode?: GraphNode
@@ -61,6 +70,18 @@ describe('createGlassMaterial', () => {
     expect(g.material.backdropNode).toBe(before)
     g.setLuma(new Texture(), 8)
     expect(g.material.backdropNode).toBe(before)
+  })
+  it('places a fused mesh (userData.vertex = \'mesh\') by its own positions and the matrix rows, whatever K; never in fill mode', () => {
+    const b = fusedBatch()
+    const opts = { geometry: b.geometry, K: 99, backdrop: 'panel', side: 'front', surface, content: new Texture() } as const
+    const m = createGlassMaterial(opts).material
+    // no slab attribute in the vertex stage: the mesh position itself, through the rows
+    const attrs = { position: [0.5, -0.1, 0.04], iMat0: [2, 0, 0, 1], iMat1: [0, 2, 0, -1], iMat2: [0, 0, 2, 0.5] }
+    expect(evalNode(m.positionNode, attrs)).toEqual([2, -1.2, 0.58])
+    expect(() => createGlassMaterial({ ...opts, mode: 'fill' })).toThrow(GlassUIError)
+    expect(() => createGlassMaterial({ ...opts, mode: 'fill' })).toThrow('fill 模式不画融合玻璃（应拆回单个玻璃实例）')
+    const slab = new GlassBatch(); slab.update([inst], s)
+    expect(() => createGlassMaterial({ ...opts, geometry: slab.geometry })).toThrow(/K = 99/)   // the 9-slice still checks K
   })
   it('requires content for the panel variant', () => {
     const b = new GlassBatch(); b.update([inst], s)
@@ -479,11 +500,12 @@ describe('glass material shaders (generated under Node)', () => {
       const warnings: string[] = []
       const spy = vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warnings.push(a.map(String).join(' ')) })
       try {
-        const b = new GlassBatch(); b.update([inst], s)
+        const slab = new GlassBatch(); slab.update([inst], s)
+        const fused = fusedBatch()
         // behind: a glass Surface's element glass (the slab's capture under the content), `reject` with its depth too
         // `pyramid`: the high tier's blur pyramid (4 levels) in place of the content's mips
         type Mode = 'refract' | 'straight' | 'fill'
-        const make = (backdrop: 'panel' | 'screen', side: 'front' | 'back', behind = false, reject = false, pyramid = false, mode: Mode = 'refract', dispersion = true) =>
+        const make = (b: GlassBatch, backdrop: 'panel' | 'screen', side: 'front' | 'back', behind = false, reject = false, pyramid = false, mode: Mode = 'refract', dispersion = true) =>
           createGlassMaterial({
             geometry: b.geometry, K: b.K, backdrop, side, surface, mode, dispersion, fill: new Color(0.9, 0.9, 0.92), ...(backdrop === 'panel' ? { border: new Color(0.27, 0.27, 0.31) } : {}),
             ...(backdrop === 'panel'
@@ -499,12 +521,19 @@ describe('glass material shaders (generated under Node)', () => {
           ['panel', 'front', false, false, false, 'straight'], ['panel', 'front', true, true, false, 'straight'], ['panel', 'back', true, false, false, 'straight'], ['screen', 'front', false, false, false, 'straight'],
           ['panel', 'front', false, false, false, 'fill'], ['panel', 'front', true, true, true, 'fill'], ['panel', 'back', true, false, false, 'fill'], ['screen', 'front', false, false, false, 'fill'], ['screen', 'back', false, false, false, 'fill'],
         ]
-        for (const [backdrop, side, behind, reject, pyramid, mode = 'refract', dispersion = true] of variants) {
-          const label = `${backdrop} ${side} ${mode}${behind ? ' behind' : ''}${reject ? ' reject' : ''}${pyramid ? ' pyramid' : ''}${dispersion ? '' : ' no-dispersion'}`
-          const out = buildShaders(make(backdrop, side, behind, reject, pyramid, mode, dispersion), b.geometry, forceWebGL)
+        let slabVaryings = 0
+        for (const [backdrop, side, behind, reject, pyramid, mode = 'refract', dispersion = true] of variants) for (const b of [slab, fused]) {
+          // fused glass draws in every mode but 'fill' (there a cluster's members draw singly, with their rims)
+          if (b === fused && mode === 'fill') continue
+          const label = `${b === fused ? 'fused ' : ''}${backdrop} ${side} ${mode}${behind ? ' behind' : ''}${reject ? ' reject' : ''}${pyramid ? ' pyramid' : ''}${dispersion ? '' : ' no-dispersion'}`
+          const out = buildShaders(make(b, backdrop, side, behind, reject, pyramid, mode, dispersion), b.geometry, forceWebGL)
           // 8 packs, the slab normal, three's view position and direction; WebGPU guarantees 16 inter-stage variables and
           // WebGL2 15 varying vectors, and three's runtime extras (fog, log depth…) need room
           expect(out.varyings.length, `${label}: ${out.varyings.join(' ')}`).toBeLessThanOrEqual(11)
+          // the fused mesh costs no varying the same variant's 9-slice slab does not (three lights a geometry with a
+          // `normal` attribute differently, spending one on it: createFusedGeometry)
+          if (b === slab) slabVaryings = out.varyings.length
+          else expect(out.varyings.length, label).toBe(slabVaryings)
           expect(out.fragment, label).toContain('discard')   // the clip mask
           // element glass on minimal: its outline's shape for the border band, in the varying the view position left
           expect(out.varyings.includes('vGlassOutline'), label).toBe(mode === 'fill' && backdrop === 'panel')
@@ -516,9 +545,11 @@ describe('glass material shaders (generated under Node)', () => {
           expect(copies.includes('ViewportTextureNode'), label).toBe(mode !== 'fill' && (backdrop === 'screen' || behind))
           expect(copies.includes('ViewportDepthTextureNode'), label).toBe(mode === 'refract' && (backdrop === 'screen' || reject))
         }
-        for (const [behind, reject, mode] of [[false, false, 'refract'], [true, false, 'refract'], [true, true, 'refract'], [true, false, 'straight'], [false, false, 'fill']] as const) {
-          const shadow = buildShaders(make('panel', 'front', behind, reject, false, mode), b.geometry, forceWebGL, true)
+        for (const [behind, reject, mode] of [[false, false, 'refract'], [true, false, 'refract'], [true, true, 'refract'], [true, false, 'straight'], [false, false, 'fill']] as const) for (const b of [slab, fused]) {
+          if (b === fused && mode === 'fill') continue
+          const shadow = buildShaders(make(b, 'panel', 'front', behind, reject, false, mode), b.geometry, forceWebGL, true)
           expect(shadow.fragment).toContain('discard')  // clipped (or faded-out) glass casts no shadow
+          expect(shadow.varyings.length).toBeLessThanOrEqual(11)
         }
       } finally { spy.mockRestore() }
       expect(warnings.filter(w => !w.includes('Vertex attribute "position" not found'))).toEqual([])

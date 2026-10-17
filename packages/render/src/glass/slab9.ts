@@ -40,8 +40,11 @@ export function slabProfile(p: SlabInstanceParams): { fb: number; f: number; wal
   return { fb, f, wall: p.thickness - f - fb, maxInset, bezel: maxInset * 0.6 }
 }
 
-/** Inset and height of ring `ring`, plus the unit profile normal (radial-outward r, z) — mirrors the TSL. */
-function profileAt(ring: number, K: number, p: SlabInstanceParams): { inset: number; z: number; nr: number; nz: number } {
+/**
+ * Inset and height of ring `ring` (0 … 2K+1), plus the unit profile normal (radial-outward r, z) — mirrors the TSL. Also
+ * the profile a fused slab's rings follow (`extrudeSlab`).
+ */
+export function profileAt(ring: number, K: number, p: SlabInstanceParams): { inset: number; z: number; nr: number; nz: number } {
   const { fb, f, wall, bezel } = slabProfile(p)
   if (p.profile === 1) {
     // lens: a quarter-circle height h(x) = √(1 − (1−x)²) over the bevel, x eased by ^1.6 so rings bunch at the rim

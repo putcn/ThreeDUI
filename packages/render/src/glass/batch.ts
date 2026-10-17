@@ -3,6 +3,7 @@ import type { GlassInstance, Node } from '@glassui/core'
 import { InstanceBuffer } from '../instances'
 import { instanceMatrix, writeClip, writeMatrixRows } from '../transform'
 import { createSlabBaseGeometry } from './slab9'
+import { createFusedGeometry, type SlabMesh } from './fused'
 import { surfaceToLocal, type SurfaceDims } from '../units'
 import { srgbToLinear } from '../color'
 
@@ -21,19 +22,26 @@ export const MIN_THICKNESS = 0.01
 /** `v` clamped to [lo, hi]; a non-finite `v` is `lo`. */
 const clampPt = (v: number, lo: number, hi: number): number => Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : lo
 
-/** All glass elements of one Surface as instances of the shared slab geometry, sorted far→near by `z`. */
+/**
+ * All glass elements of one Surface as instances of the shared slab geometry, sorted far→near by `z` — or, built from
+ * `{ mesh }`, a fused slab (`extrudeSlab`, scaled to units and centred on its instance's rect) as the base geometry
+ * instead of the 9-slice: `position`, `slabNormal` and an index in place of `slab`, `userData.vertex = 'mesh'`, the same
+ * instance attributes and `update`.
+ */
 export class GlassBatch {
   readonly geometry: InstancedBufferGeometry
   readonly buffer: InstanceBuffer
   private sorted: Node[] = []
   private m = new Matrix4()
 
-  constructor(K?: number, S?: number) {
-    this.geometry = createSlabBaseGeometry(K, S)
+  constructor(K?: number, S?: number)
+  constructor(base: { mesh: SlabMesh })
+  constructor(base?: number | { mesh: SlabMesh }, S?: number) {
+    this.geometry = typeof base === 'object' ? createFusedGeometry(base.mesh) : createSlabBaseGeometry(base, S)
     this.buffer = new InstanceBuffer(this.geometry, GLASS_ATTRS)
   }
 
-  /** Profile segments of the base geometry (the TSL vertex stage needs it to classify rings). */
+  /** Profile segments of the base geometry (the TSL vertex stage needs it to classify rings); 0 for a mesh. */
   get K(): number { return this.geometry.userData.K as number }
   /** The packed nodes in instance order. */
   get nodes(): readonly Node[] { return this.sorted }
@@ -74,5 +82,6 @@ export class GlassBatch {
   }
 
   indexOf(node: Node): number { return this.sorted.indexOf(node) }
+  /** Frees the geometry's buffers, the base mesh's and the instances' alike (the geometry dispatches `dispose`). */
   dispose(): void { this.buffer.dispose() }
 }

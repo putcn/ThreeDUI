@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { InstancedBufferGeometry, Matrix3, Vector3 } from 'three'
 import { GlassUIError, Node, IDENTITY, scaleAbout, type GlassInstance, type ResolvedGlass } from '@glassui/core'
 import { GlassBatch, GLASS_ATTRS, MIN_THICKNESS } from '../src/glass/batch'
-import { slabVertex } from '../src/glass/vertex'
+import { meshVertex, slabVertex } from '../src/glass/vertex'
+import { extrudeSlab, fusedOutline, type SlabMesh } from '../src/glass/fused'
 import { createSlabBaseGeometry, evalSlabVertex, type SlabInstanceParams } from '../src/glass/slab9'
 import { instanceMatrix } from '../src/transform'
 import { srgbToLinear } from '../src/color'
@@ -87,6 +88,79 @@ describe('GlassBatch', () => {
     expect(b.buffer.count).toBe(40)
     expect(b.buffer.get(3, 'iTouch')).toEqual(f32([0.1, -0.2, 0.5, 0.2]))
     expect(b.buffer.get(4, 'iTouch')).toEqual(f32([0, 0, 0, 0.2]))
+  })
+})
+
+/** A fused slab of two capsules, scaled from pt to units (1 / 100) as the caller does. */
+function fusedMesh(): SlabMesh {
+  const shapes = [{ x: 0, y: 0, width: 80, height: 40, radius: 20 }, { x: 88, y: 0, width: 80, height: 40, radius: 20 }]
+  const m = extrudeSlab(fusedOutline(shapes, 16), shapes, 16, { thickness: 8, fillet: 2.4, filletBottom: 1.6, minSide: 40 }, 4)
+  return { ...m, positions: m.positions.map(v => v / 100) }
+}
+
+describe('GlassBatch({ mesh })', () => {
+  it('draws a fused mesh as its base: position, slabNormal and an index in place of slab, the same instance attributes', () => {
+    const mesh = fusedMesh(), b = new GlassBatch({ mesh })
+    const g = b.geometry
+    expect(g.userData).toEqual({ vertex: 'mesh', K: 0 }); expect(b.K).toBe(0)
+    expect(g.hasAttribute('slab')).toBe(false)
+    expect(g.getAttribute('position').array).toBe(mesh.positions); expect(g.getAttribute('position').itemSize).toBe(3)
+    expect(g.getAttribute('slabNormal').array).toBe(mesh.normals); expect(g.getAttribute('slabNormal').itemSize).toBe(3)
+    expect(g.hasAttribute('normal')).toBe(false)              // three would light it unlike the 9-slice (createFusedGeometry)
+    expect(g.getIndex()!.array).toBe(mesh.index)
+    for (const name of GLASS_ATTRS) expect(g.hasAttribute(name)).toBe(true)
+    // update packs exactly as the 9-slice batch does
+    const slab = new GlassBatch()
+    for (const batch of [b, slab]) batch.update([inst('b', 2), inst('a', 1)], s)
+    expect(b.nodes.map(n => n.id)).toEqual(['a', 'b']); expect(g.instanceCount).toBe(2)
+    for (const name of GLASS_ATTRS) for (const i of [0, 1]) expect(b.buffer.get(i, name)).toEqual(slab.buffer.get(i, name))
+    // never frustum-culled by its own (slab-local) positions: the instances place it
+    expect(g.boundingSphere!.radius).toBeGreaterThan(1e5)
+  })
+  it('dispose frees the mesh with the instances: the geometry dispatches dispose once', () => {
+    const b = new GlassBatch({ mesh: fusedMesh() })
+    let disposed = 0
+    b.geometry.addEventListener('dispose', () => { disposed++ })
+    b.update([inst('a', 1)], s); b.dispose()
+    expect(disposed).toBe(1)
+  })
+  it('the 9-slice constructor is unchanged', () => {
+    const b = new GlassBatch(6, 5)
+    expect(b.K).toBe(6); expect(b.geometry.userData).toMatchObject({ K: 6, S: 5 }); expect(b.geometry.hasAttribute('slab')).toBe(true)
+    expect(new GlassBatch().K).toBe(8)
+  })
+})
+
+describe('meshVertex', () => {
+  it('places and orients the mesh with the packed matrix rows; its position is the slab-local position', () => {
+    const mesh = fusedMesh(), b = new GlassBatch({ mesh })
+    const g = inst('a', 1, { rect: { x: 40, y: 60, width: 168, height: 40 }, elevation: 12, scale: 0.8, transform: scaleAbout(120, 92, 0.8), tilt: { x: 0.3, y: -0.2 } })
+    b.update([g], s)
+    const v = meshVertex(b.geometry)
+    const m = instanceMatrix(g, s), m3 = new Matrix3().setFromMatrix4(m)
+    const packed = Object.fromEntries(GLASS_ATTRS.map(name => [name, b.buffer.get(0, name)]))
+    let worst = 0
+    for (let i = 0; i < mesh.positions.length / 3; i++) {
+      const position = [...mesh.positions.subarray(3 * i, 3 * i + 3)], normal = [...mesh.normals.subarray(3 * i, 3 * i + 3)]
+      const wantPos = new Vector3(...position).applyMatrix4(m), wantN = new Vector3(...normal).applyMatrix3(m3).normalize()
+      const attrs = { ...packed, position, slabNormal: normal }
+      const local = evalNode(v.slabLocal, attrs), pos = evalNode(v.position, attrs), nrm = evalNode(v.normal, attrs)
+      for (let k = 0; k < 3; k++) worst = Math.max(worst, Math.abs(local[k]! - position[k]!), Math.abs(pos[k]! - wantPos.getComponent(k)), Math.abs(nrm[k]! - wantN.getComponent(k)))
+    }
+    expect(worst).toBeLessThan(1e-5)   // float32 packing
+    expect(v.local).toBe(v.position)
+  })
+  it('rejects a geometry without the mesh attributes or the matrix rows (never needs slab, iShape or iCorner)', () => {
+    expect(() => meshVertex(new GlassBatch().geometry)).toThrow(/position/)       // the 9-slice slab has none
+    expect(() => meshVertex(new GlassBatch().geometry)).toThrow(GlassUIError)
+    const g = new GlassBatch({ mesh: fusedMesh() }).geometry
+    g.deleteAttribute('iShape'); g.deleteAttribute('iCorner')
+    expect(() => meshVertex(g)).not.toThrow()
+    for (const name of ['slabNormal', 'iMat1']) {
+      const h = new GlassBatch({ mesh: fusedMesh() }).geometry
+      h.deleteAttribute(name)
+      expect(() => meshVertex(h)).toThrow(new RegExp(name))
+    }
   })
 })
 

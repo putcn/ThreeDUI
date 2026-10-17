@@ -114,3 +114,24 @@ export function slabVertex(geometry: InstancedBufferGeometry, K: number) {
   const normal = varying(mn.div(orOne(length(mn))))
   return { position: local, normal, local, slabLocal }
 }
+
+/** What `meshVertex` reads: the fused mesh's own attributes and the instance matrix rows. */
+const MESH_ATTRS = ['position', 'slabNormal', 'iMat0', 'iMat1', 'iMat2'] as const
+
+/**
+ * The vertex provider of a fused slab (`GlassBatch({ mesh })`, `userData.vertex === 'mesh'`): its `position` is the
+ * slab-local position already (centred on the instance's rect, y up, back face at z = 0, in units), placed by the
+ * instance's matrix rows as `slabVertex` places its own; its `slabNormal` (not three's `normal`: see
+ * `createFusedGeometry`) turned by their 3×3 the same way. Returns what `slabVertex` does, so the material reads either
+ * alike.
+ */
+export function meshVertex(geometry: InstancedBufferGeometry) {
+  for (const name of MESH_ATTRS) if (!geometry.hasAttribute(name)) throw new GlassUIError('meshVertex', `几何体缺少属性 "${name}"（应为 GlassBatch({ mesh }).geometry）`)
+  const slabLocal = attribute('position', 'vec3'), n = attribute('slabNormal', 'vec3')
+  const iMat0 = attribute('iMat0', 'vec4'), iMat1 = attribute('iMat1', 'vec4'), iMat2 = attribute('iMat2', 'vec4')
+  const p4 = vec4(slabLocal, 1)
+  const local = vec3(dot(iMat0, p4), dot(iMat1, p4), dot(iMat2, p4))
+  const mn = vec3(dot(iMat0.xyz, n), dot(iMat1.xyz, n), dot(iMat2.xyz, n))
+  const normal = varying(mn.div(orOne(length(mn))))
+  return { position: local, normal, local, slabLocal }
+}
