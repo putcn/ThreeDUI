@@ -2,7 +2,7 @@ import {
   callWithAsyncErrorHandling, createRenderer, ErrorCodes, markRaw, normalizeClass, queuePostFlushCb, toRaw,
   type CreateAppFunction, type RendererOptions, type RootRenderFunction,
 } from '@vue/runtime-core'
-import { absoluteRect, GlassUIError, Node, parseTw, scrollOffset, UI_EVENT_TYPES, validateStyle, type NodeType, type Rect, type Style, type UIEventType } from '@glassui/core'
+import { absoluteRect, GlassUIError, Node, parseTw, UI_EVENT_TYPES, validateStyle, type NodeType, type Rect, type Style, type UIEventType } from '@glassui/core'
 import { liveSurface } from './motion'
 import type { GlassRoot } from './root'
 
@@ -130,12 +130,6 @@ function drawnRect(n: Node): Rect {
   if (!v) return a
   return { x: a.x - l.x + (v.x ?? l.x), y: a.y - l.y + (v.y ?? l.y), width: v.width ?? l.width, height: v.height ?? l.height }
 }
-/** The origin of `parent`'s children's layout frame in its tree root's pt (`absoluteRect(child) − child.layout`). */
-function frameOf(parent: Node): { x: number; y: number } {
-  const a = absoluteRect(parent), o = scrollOffset(parent)
-  return { x: a.x - o.x, y: a.y - o.y }
-}
-
 /**
  * A Vue renderer over core `Node`s (spec §8.1). `querySelector` (Teleport's `to`) looks through the containers its
  * apps are mounted in and every Surface of `root`: `#id` finds a node by id, a bare name a `portal` with that `name`;
@@ -145,17 +139,28 @@ function frameOf(parent: Node): { x: number; y: number } {
  *
  * glassId morphs (Apple's `glassEffectID`): a node with a string `props.glassId` that leaves the tree (`remove`, itself
  * or in a removed subtree; held content stays and does not count) leaves its drawn rect (`drawnRect`) under that id
- * for `MORPH_WINDOW_MS`. A node with that glassId inserted fresh (not moved) within the window grows out of it: once
- * the update's inserts and removes are all done (a post-flush callback, so the order Vue patches the two places in does
- * not matter, nor a new place mounted inside a subtree not attached yet), `root.anim.seed` gets the old rect in the
- * new parent's layout frame (`old − frameOf(parent)`), and a `morph` style layer adds `smooth` springs for the keys
- * of `MORPH_KEYS` the node's style has none for; the layer comes off when the node settles (`whenSettled`). A matched
- * entry is used up. Matching is per renderer (`createGlassApp` makes one per app: no match across apps) and within one
- * tree: the new node must be in the same tree root as the old one was, and that a live Surface's (one a tick will
- * see), else nothing is seeded (a seed in a tree nobody ticks would keep its state and its `whenSettled` waiter
- * forever). Motion `'frozen'` and `root.anim.reducedMotion` skip the morph. A morphing node that leaves before any tick
- * saw it leaves the rect it was seeded from (it was never drawn elsewhere); its state goes with the next tick of its
- * Surface, which no longer finds it (`AnimationRuntime.tick`), and that tick settles its waiter.
+ * for `MORPH_WINDOW_MS`, with whether it held the focus and showed the ring. A node with that glassId inserted fresh (not
+ * moved) within the window takes over from it, once the update's inserts and removes are all done (a post-flush
+ * callback, so the order Vue patches the two places in does not matter, nor a new place mounted inside a subtree not
+ * attached yet):
+ * - it grows out of the old rect: `root.anim.seed` gets it in the Surface frame (`{ frame: 'surface' }`: the runtime
+ *   converts it into the new parent's frame at the first tick, after that tick's layout, so a parent that is new or
+ *   moves in the same update is no matter), and a `morph` style layer adds `smooth` springs for the keys of
+ *   `MORPH_KEYS` the node's style has none for, until the node settles (`whenSettled`); not with motion `'frozen'` or
+ *   `root.anim.reducedMotion`;
+ * - it takes the focus over, with the ring as it was, when the old node had it, or when the focused node (any) left the
+ *   tree in the same update (the dock's pressed item comes back keyed as the successor, a node of its own), unless a
+ *   node still in the tree holds it.
+ *
+ * A matched entry is used up. Matching is per renderer (`createGlassApp` makes one per app: no match across apps) and
+ * within one tree: the new node must be in the same tree root as the old one was, and that a live Surface's (one a tick
+ * will see), else nothing happens (a seed in a tree nobody ticks would keep its state and its `whenSettled` waiter
+ * forever). A glassId node that leaves before any tick laid it out leaves nothing (it was never drawn: its successor
+ * just appears), unless it was itself morphing in: then it leaves the rect it was seeded from. A morphing node that
+ * leaves loses its state at the next tick of its Surface, which no longer finds it (`AnimationRuntime.tick`), and that
+ * tick settles its waiter. Not seen: a node a `<Transition>` / `GlassTransition` leave keeps in the tree (Vue removes it
+ * only when the leave ends, long after its successor came in, so there is no morph), one a `<KeepAlive>` deactivates
+ * (moved out, not removed), and the children `setElementText` replaces.
  */
 export function createGlassRenderer(opts: GlassRendererOptions): { render: RootRenderFunction<Node>; createApp: CreateAppFunction<Node> } {
   const { root } = opts
@@ -164,12 +169,24 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
 
   /**
    * glassId → where its node was drawn when it left, the tree it left (weakly: a Surface disposed meanwhile is not kept
-   * alive by it), and when (`performance.now()`). Entries past the window go at the next record or match.
+   * alive by it), when (`performance.now()`), and whether it had the focus and the ring. Entries past the window go at
+   * the next record or match.
    */
-  const left = new Map<string, { rect: Rect; tree: WeakRef<Node>; at: number }>()
+  const left = new Map<string, { rect: Rect; tree: WeakRef<Node>; at: number; focused: boolean; focusVisible: boolean }>()
   const prune = (now: number): void => { for (const [id, l] of left) if (now - l.at > MORPH_WINDOW_MS) left.delete(id) }
+  /**
+   * Tree roots whose focused node left in this update, with its ring: the dock's pressed item re-mounts (keyed) as the
+   * glassId successor, a node of its own. Cleared when the update is done (`matchMorphs`).
+   */
+  const lostFocus = new Map<Node, { visible: boolean }>()
   /** Fresh glassId nodes inserted in this update, matched once it is done (`matchMorphs`). */
   const entering = new Set<Node>()
+  /**
+   * Fresh glassId nodes no tick has laid out yet: they have no rect to leave. Cleared after the next tick; until then
+   * (an update Vue flushes before that microtask) their layout tells (`unplaced`: still the (0, 0, 0, 0) a node starts with).
+   */
+  const undrawn = new WeakSet<Node>()
+  const unplaced = (x: Node): boolean => { const l = x.layout; return l.x === 0 && l.y === 0 && l.width === 0 && l.height === 0 }
   /** Morphing nodes no tick has seen yet → the rect they were seeded from (where they still are, to the eye). */
   const unseen = new WeakMap<Node, Rect>()
   /** Each morphing node's current morph: a settle of an earlier one leaves a later one's layer on. */
@@ -177,16 +194,20 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
   const leaving = (n: Node): void => {
     let tree: WeakRef<Node> | null = null, now = 0
     n.walk(x => {
+      // the focus leaving with it: a glassId successor in this update takes it (`matchMorphs`), whichever node it was
+      if (x.state.focused) { lostFocus.set(n.root, { visible: x.state.focusVisible }); queuePostFlushCb(matchMorphs) }
       const id = glassIdOf(x)
       if (id === null) return
+      // moving: where it is drawn; else, seeded but not laid out yet, where it was seeded from (it was never drawn
+      // elsewhere); never laid out and not morphing in: nothing to grow from (its (0, 0, 0, 0) layout is no place)
+      const rect = x.visual ? drawnRect(x) : unseen.get(x) ?? (undrawn.has(x) && unplaced(x) ? null : drawnRect(x))
+      if (!rect) return
       if (!tree) { tree = new WeakRef(n.root); prune(now = performance.now()) }
-      // moving: where it is drawn; else, seeded but not laid out yet, where it was seeded from (it was never drawn elsewhere)
-      left.set(id, { rect: x.visual ? drawnRect(x) : unseen.get(x) ?? drawnRect(x), tree, at: now })
+      left.set(id, { rect, tree, at: now, focused: x.state.focused, focusVisible: x.state.focusVisible })
     })
   }
-  const morph = (n: Node, parent: Node, from: Rect): void => {
-    const o = frameOf(parent)
-    root.anim.seed(n, { x: from.x - o.x, y: from.y - o.y, width: from.width, height: from.height })
+  const morph = (n: Node, from: Rect): void => {
+    root.anim.seed(n, { x: from.x, y: from.y, width: from.width, height: from.height }, { frame: 'surface' })
     const own = n.style.transition ?? {}
     const springs = Object.fromEntries(MORPH_KEYS.filter(k => own[k] === undefined).map(k => [k, 'smooth']))
     if (Object.keys(springs).length) setStyleLayer(n, 'morph', { transition: springs })
@@ -201,14 +222,18 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
   }
   const matchMorphs = (): void => {
     prune(performance.now())
-    const fresh = [...entering]
-    entering.clear()
-    if (motion !== 'live' || root.anim.reducedMotion) return
+    const fresh = [...entering], lost = new Map(lostFocus)
+    entering.clear(); lostFocus.clear()
+    const moves = motion === 'live' && !root.anim.reducedMotion
     for (const n of fresh) {
-      const id = glassIdOf(n), l = id === null ? undefined : left.get(id), parent = n.parent
-      if (id === null || !l || !parent || n.root !== l.tree.deref() || !liveSurface(root, n)) continue
+      const id = glassIdOf(n), l = id === null ? undefined : left.get(id), surface = liveSurface(root, n)
+      if (id === null || !l || !n.parent || n.root !== l.tree.deref() || !surface) continue
       left.delete(id)
-      morph(n, parent, l.rect)
+      // the focus, when the old node had it or the focused node left in this update, unless something else in the tree
+      // holds it now (a node that left, detached, may still be the manager's current)
+      const cur = surface.focus.current, had = l.focused ? { visible: l.focusVisible } : lost.get(surface.root)
+      if (had && (!cur || cur.root !== surface.root)) surface.focus.focus(n, { visible: had.visible })
+      if (moves) morph(n, l.rect)
     }
   }
   const containers = new Set<Node>()
@@ -254,7 +279,11 @@ export function createGlassRenderer(opts: GlassRendererOptions): { render: RootR
       const n = toRaw(c), fresh = n.parent === null
       toRaw(p).insertBefore(n, a ? toRaw(a) : null)
       // a fresh glassId node (not a move): matched against the ones that left once this update is done
-      if (fresh && glassIdOf(n) !== null) { entering.add(n); queuePostFlushCb(matchMorphs) }
+      if (fresh && glassIdOf(n) !== null) {
+        entering.add(n); undrawn.add(n)
+        void root.afterTick().then(() => { undrawn.delete(n) })   // laid out by that tick (when a live Surface has it)
+        queuePostFlushCb(matchMorphs)
+      }
     },
     remove(c) {
       const n = toRaw(c)

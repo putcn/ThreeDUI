@@ -1,5 +1,5 @@
 import { it, expect, vi, afterEach } from 'vitest'
-import { defineComponent, h, nextTick, ref, type VNodeChild } from '@vue/runtime-core'
+import { defineComponent, h, nextTick, onMounted, ref, type VNodeChild } from '@vue/runtime-core'
 import { absoluteRect, defaultTheme, Node, Spring } from '@glassui/core'
 import { createGlassApp } from '../src/app'
 import { glassComponents } from '../src/define'
@@ -12,6 +12,8 @@ import { Stack } from '../src/components/Stack'
 import { Surface } from '../src/components/Surface'
 import { createFakeRoot, flush, type FakeRoot } from './fixtures/fake-root'
 import { all, first, mountGlass } from './fixtures/mount'
+import { fire } from './fixtures/events'
+import { byId } from './fixtures/tree'
 
 afterEach(() => { vi.restoreAllMocks() })
 
@@ -92,7 +94,8 @@ it('the morph seeds the width and height too, and keeps the springs the node has
   where.value = 'b'; await nextTick()
   const moved = first(s.root, 'glass')
   expect(seed).toHaveBeenCalledTimes(1)
-  expect(seed.mock.calls[0]![1]).toEqual({ x: old.x - absoluteRect(moved.parent!).x, y: old.y - absoluteRect(moved.parent!).y, width: old.width, height: old.height })
+  // the old rect as drawn, in the Surface frame: the runtime takes it into the parent's frame after the next layout
+  expect(seed.mock.calls[0]!.slice(1)).toEqual([{ x: old.x, y: old.y, width: old.width, height: old.height }, { frame: 'surface' }])
   expect(moved.style.transition).toMatchObject({ x: 'snappy', y: 'smooth', width: 'smooth', height: 'smooth' })   // its own x spring stays
   root.tick()
   expect(moved.visual?.width).toBeLessThan(moved.layout.width); expect(moved.visual?.height).toBeLessThan(moved.layout.height)   // grows from the small one
@@ -109,6 +112,66 @@ it('a glassId node in a removed subtree is matched by one in an inserted subtree
   const moved = first(s.root, 'glass'), origin = absoluteRect(moved.parent!)
   expect(moved.visual).toMatchObject({ y: old.y - origin.y })
   expect(old.y).toBeGreaterThan(absoluteRect(moved).y)
+})
+it('a glassId node moving into a new wrapper, which a sibling also shifts in the same update, starts its first frame at the old place', async () => {
+  const where = ref<'top' | 'wrapped'>('top')
+  const { root, s } = mountSwap(() => h(Stack, { gap: 0 }, () => [
+    where.value === 'top' ? h(Button, { key: 'top', glassId: 'go', label: 'Go' }) : null,
+    h(Box, { key: 'spacer', style: { height: where.value === 'top' ? 10 : 70 } }),     // moves the wrapper down too
+    where.value === 'wrapped' ? h(Box, { key: 'wrap', style: { paddingLeft: 120, paddingTop: 30 } }, () => [h(Button, { glassId: 'go', label: 'Go' })]) : null,
+  ]))
+  const old = absoluteRect(first(s.root, 'glass'))
+  where.value = 'wrapped'; await nextTick(); root.tick(0)                               // dt 0: the first frame, not moved yet
+  const moved = first(s.root, 'glass'), origin = absoluteRect(moved.parent!)
+  expect(origin.y).toBe(70)                                                           // laid out only by that tick
+  expect(origin.x + moved.visual!.x!).toBeCloseTo(old.x, 6); expect(origin.y + moved.visual!.y!).toBeCloseTo(old.y, 6)
+  expect(absoluteRect(moved)).toMatchObject({ x: 120, y: 100 })                          // and it is going there
+})
+/** The Task 19C dock: circle Buttons in a GlassContainer, the selected one glowing, keyed to re-mount, with the glassId. */
+const dock = (tab: { value: string }) => h(GlassContainer, () => ['a', 'b', 'c', 'd'].map(t => h(Button, {
+  key: t === tab.value ? `${t}-on` : t, id: t === tab.value ? `${t}-on` : t, shape: 'circle', variant: t === tab.value ? 'glassProminent' : 'glass',
+  ...(t === tab.value ? { glassId: 'dock-active' } : {}), onPress: () => { tab.value = t },
+}, () => t)))
+it('a glassId node no tick has laid out leaves nothing to grow from: its successor just appears (the dock\'s selection set in onMounted)', async () => {
+  const root = createFakeRoot(), s = root.createSurface({ width: 400, height: 200 }), tab = ref('a')
+  const seed = vi.spyOn(root.anim, 'seed')
+  createGlassApp(defineComponent(() => { onMounted(() => { tab.value = 'c' }); return () => dock(tab) }), { root }).mount(s as never)
+  await nextTick()                                                                    // the onMounted change, before the first frame
+  expect(byId(s.root, 'c-on')).not.toBeNull(); expect(seed).not.toHaveBeenCalled()
+  root.tick()
+  expect(byId(s.root, 'c-on')!.visual).toBeNull(); expect(byId(s.root, 'c-on')!.style.transition).toEqual(controlStyle().transition)
+  // the same in three steps: mounted unmatched, gone before a tick, back again
+  const show = ref(true), r2 = createFakeRoot(), s2 = r2.createSurface({ width: 400, height: 200 }), seed2 = vi.spyOn(r2.anim, 'seed')
+  createGlassApp(defineComponent(() => () => h(Box, () => [show.value ? h(Button, { key: 'one', glassId: 'go', label: 'Go' }) : null])), { root: r2 }).mount(s2 as never)
+  show.value = false; await nextTick(); show.value = true; await nextTick()
+  expect(all(s2.root, 'glass')).toHaveLength(1); expect(seed2).not.toHaveBeenCalled()
+  // once a tick has laid the dock out, a change morphs (from the selected item's place)
+  const c = absoluteRect(byId(s.root, 'c-on')!)
+  tab.value = 'b'; await nextTick()
+  expect(seed).toHaveBeenCalledTimes(1)
+  expect(seed.mock.calls[0]![1]).toEqual({ x: c.x, y: c.y, width: c.width, height: c.height }); expect(c.width).toBe(52)
+})
+it('the keyboard focus moves to the successor with its ring (the dock: Enter on a focused item selects it)', async () => {
+  const tab = ref('a')
+  const { root, s } = mountSwap(() => dock(tab))
+  const c = byId(s.root, 'c')!
+  while (s.focus.current !== c) s.focus.next()                                        // Tab, Tab, Tab: the ring shows
+  expect(c.state.focusVisible).toBe(true)
+  fire(c, 'keydown', { key: 'Enter' }); await nextTick()
+  const on = byId(s.root, 'c-on')!
+  expect(tab.value).toBe('c'); expect(c.parent).toBeNull()
+  expect(s.focus.current).toBe(on); expect(on.state.focused).toBe(true); expect(on.state.focusVisible).toBe(true)
+  root.tick()
+  expect(s.focus.current).toBe(on)
+  // not taken from where it is: the focus on another item stays there when the selection moves under it
+  const d = byId(s.root, 'd')!
+  s.focus.focus(d, { visible: true })
+  tab.value = 'a'; await nextTick()
+  expect(s.focus.current).toBe(d)
+  // a pointer focus (no ring) moves without one
+  const b = byId(s.root, 'b')!
+  s.focus.focusFromPointer(byId(s.root, 'a-on')); tab.value = 'b'; await nextTick()
+  expect(s.focus.current).toBe(byId(s.root, 'b-on')); expect(byId(s.root, 'b-on')!.state.focusVisible).toBe(false); expect(b.parent).toBeNull()
 })
 it('a glassId comes back within 500 ms only: a later one does not morph', async () => {
   let now = 1000
