@@ -5058,6 +5058,75 @@ git commit -m "feat(vue): <GlassContainer> and glassId morph transitions"
 ```
 
 ---
+### Task 17A: Flatter necks — smoothing that adapts to the cluster's gaps (render)
+
+User decision (2026-10-17, after checkpoint 6): the necks between fused members should be flatter. At gap 8 / spacing 16 the waist is ≈ 62 % of the members' height (a bead chain); wanted: close members read as one capsule. With a fixed k = 2·spacing the neck depth is set by the gap alone, so k must adapt. It must still go to 2·spacing as the cluster's gaps reach `spacing`, so the split stays continuous (the neck thins to zero exactly when core's clustering lets go).
+
+**Files:**
+- Modify: `packages/render/src/glass/fused.ts` (`fusedSmoothing`; `k` threaded through `fusedField`, `fusedNormal`, `fusedOutline`, `extrudeSlab`, default `2 · spacing` as today)
+- Modify: `packages/render/src/surface/fused.ts` (pass `fusedSmoothing(shapes, spacing)` to the outline and the extrusion)
+- Modify: `packages/core/src/renderlist.ts` only to export the radius-aware gap it clusters by (`glassGap(a, b)`), so render measures gaps the same way
+- Test: `packages/render/test/fused.test.ts`, `packages/render/test/surface.test.ts`
+
+**Interfaces:**
+- Produces:
+  - `fusedSmoothing(shapes: readonly FusedShape[], spacing: number): number`:
+    - `g` = the largest edge of the minimum spanning tree over the members' radius-aware gaps (`glassGap`): the gap that holds the cluster together.
+    - `r` = half the smallest member's short side.
+    - `flat(g) = 4 · (√((r + g/2)² + r²) − r)`: the k at which two such circles a gap g apart are joined at their full height at the midpoint (flat, no bulge). `flat(g) ≥ 2g` always, so the cluster stays joined.
+    - `t = smoothstep(0.5 · spacing, spacing, g)`, `k = mix(flat(g), 2 · spacing, t)`.
+    - One member: `2 · spacing`.
+  - `fusedField(shapes, spacing, x, y, k = 2 * spacing)`, `fusedNormal(…, k)`, `fusedOutline(shapes, spacing, { step?, k? })`, `extrudeSlab(contours, shapes, spacing, profile, K, { k? })`: the same k everywhere (field, normals, the thin-neck squeeze). The outline grid's margin becomes `max(spacing, k / 4) + 2 · step`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+const circles = (n: number, gap: number, d = 52) => Array.from({ length: n }, (_, i) => rect(i * (d + gap), 0, d, d, d / 2))
+/** The outline's vertical extent at x (y up, centred frame): top − bottom of the contour crossing a vertical line. */
+const heightAt = (c: Contour, x: number): number => { /* intersect each edge with the vertical line x, return max y − min y */ }
+it('close members fuse flat: at gap 8 / spacing 16 the neck is the full height, with no bulge', () => {
+  const shapes = circles(2, 8), k = fusedSmoothing(shapes, 16)
+  const [c] = fusedOutline(shapes, 16, { k }); const mid = 0                                        // the bounds' centre is the neck
+  expect(heightAt(c!, mid)).toBeGreaterThan(52 * 0.97); expect(heightAt(c!, mid)).toBeLessThan(52 + 0.5)
+})
+it('a five-button toolbar at gap 8 has a flat top (within 1 pt between the end centres)', () => { /* top y sampled every 2 pt from the first to the last centre: max − min ≤ 1 */ })
+it('widening the gap thins the neck continuously and splits exactly at spacing', () => {
+  let last = Infinity
+  for (let g = 8; g < 16; g += 0.25) {
+    const shapes = circles(2, g), cs = fusedOutline(shapes, 16, { k: fusedSmoothing(shapes, 16) })
+    expect(cs).toHaveLength(1); const h = heightAt(cs[0]!, 0)
+    expect(h).toBeLessThanOrEqual(last + 0.5); last = h
+  }
+  expect(last).toBeLessThan(52 * 0.25)
+  const apart = circles(2, 16); expect(fusedOutline(apart, 16, { k: fusedSmoothing(apart, 16) })).toHaveLength(2)
+})
+it('k follows the gap that holds the cluster together (the spanning tree’s largest edge)', () => {
+  const tight = [rect(0, 0, 52, 52, 26), rect(60, 0, 52, 52, 26), rect(127, 0, 52, 52, 26)]   // gaps 8 and 15
+  expect(fusedSmoothing(tight, 16)).toBeCloseTo(fusedSmoothing(circles(2, 15), 16), 6)
+  expect(fusedSmoothing([rect(0, 0, 52, 52, 26)], 16)).toBe(32)
+})
+it('the thin-neck sweep still builds closed, single-covered slabs with the adaptive k', () => { /* rerun the Task 15 sweep helper with k = fusedSmoothing(shapes, spacing) */ })
+```
+
+Write `heightAt` and the toolbar test in full. In `surface.test.ts`: the fused draw's mesh at gap 8 has a top extent (max position y) equal to the members' (within 0.5 pt), where with k = 2·spacing the neck would dip.
+
+- [ ] **Step 2: Run to verify failure, implement, run again**
+
+Run: `pnpm vitest run packages/render/test/fused.test.ts packages/render/test/surface.test.ts` (FAIL: `fusedSmoothing` is not exported), implement, run again (PASS), then `pnpm test && pnpm typecheck`.
+
+- [ ] **Step 3: Visual re-check (controller)**
+
+Repeat checkpoint 6's gallery shots: the toolbar and the selected-item bar read as capsules at gap 8; "拉开到 gap 24" thins the necks smoothly to a split (frames at 0, 80, 160, 320 ms); WebGPU and WebGL2.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add packages/render packages/core
+git commit -m "feat(render): fused necks flatten when members sit close — the smoothing adapts to the cluster's gaps and returns to 2·spacing at the split"
+```
+
+---
+
 ### Task 18: `manifest.json` — what an agent reads
 
 **Files:**
