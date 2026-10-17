@@ -256,6 +256,26 @@ describe('AnimationRuntime hooks', () => {
     rt.tick(root, 0.1)
     expect(n.visual?.x).toBeCloseTo(100); expect(n.visual?.width).toBeCloseTo(75)
   })
+  it('a seed in the Surface frame becomes parent-relative at the first tick after layout (a new or moving parent)', () => {
+    const rt = new AnimationRuntime(theme, 'light'), root = tree()
+    // the old glass was drawn at (30, 20) 80 × 40 of the root; the new one sits in a scroll wrapper not laid out yet
+    const outer = box({}), wrap = new Node('scroll'), n = box({ transition: { x: linear, y: linear, width: linear } })
+    wrap.appendChild(n); outer.appendChild(wrap); root.appendChild(outer)
+    rt.seed(n, { x: 30, y: 20, width: 80 }, { frame: 'surface' })
+    // layout lands only now (before the tick): the wrapper at (150, 60) inside outer at (10, 5), scrolled 40 down
+    outer.layout = { x: 10, y: 5, width: 300, height: 300 }; wrap.layout = { x: 150, y: 60, width: 200, height: 200 }
+    wrap.setProp('scrollY', 40); n.layout = { x: 20, y: 100, width: 120, height: 40 }
+    rt.tick(root, 0)
+    // its first frame stands where the old one was: origin (160, 25) + visual = (30, 20)
+    expect(n.visual).toMatchObject({ x: 30 - 160, y: 20 - 25, width: 80 })
+    rt.tick(root, 0.1)
+    expect(n.visual?.x).toBeCloseTo((30 - 160 + 20) / 2); expect(n.visual?.y).toBeCloseTo((-5 + 100) / 2)
+    // the default frame is the parent's, as before
+    const m = box({ transition: { x: linear } }); m.layout = { x: 200, y: 0, width: 100, height: 40 }
+    const holder = box({}); holder.layout = { x: 50, y: 0, width: 300, height: 40 }; holder.appendChild(m); root.appendChild(holder)
+    rt.seed(m, { x: 0 }, { frame: 'parent' }); rt.tick(root, 0)
+    expect(m.visual?.x).toBe(0)
+  })
   it('glowSplit animates like the other glass numbers', () => {
     const rt = new AnimationRuntime(theme, 'light'), root = new Node('box'); root.layout = { x: 0, y: 0, width: 400, height: 400 }
     const g = new Node('glass'); g.layout = { x: 0, y: 0, width: 136, height: 62 }

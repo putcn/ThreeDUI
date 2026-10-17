@@ -61,7 +61,8 @@ export interface GlassShape { x: number; y: number; width: number; height: numbe
  * container's. `elevation` is the tallest member's (a hovered member lifts the whole slab), and `params` that member's
  * (its hover glint shows on the slab it lifts; on a tie, a pressed member's, then a hovered one's, then the first's),
  * but for the slab's geometry — `thickness`, `fillet`, `filletBottom` and `profile` stay the first member's, so the
- * slab neither changes height nor rebuilds when the hover moves along it. `opacity` is the members' largest (one
+ * slab neither changes height nor rebuilds when the hover moves along it — and with no `glow` and no `tint` (no
+ * member's target has either: an animated leftover on one must not light the whole slab). `opacity` is the members' largest (one
  * fading in or out does not dim the others); `scale`, `z` and `clip` are the first member's; `rect` the shapes'
  * bounds; `transform` is `IDENTITY` (the shapes are already transformed) and `tilt` 0 (tilts do not compose: a
  * member's hover tilt has no slab of its own to bend).
@@ -247,7 +248,9 @@ function cluster(c: Container, out: FusedGlassInstance[], drop: Set<GlassInstanc
       opacity = Math.max(opacity, m.opacity)
     }
     const f = first.params
-    const params = lead === first ? f : { ...lead.params, thickness: f.thickness, fillet: f.fillet, filletBottom: f.filletBottom, profile: f.profile }
+    // no glow and no tint: every member's target has neither (`fusible`), so a glow or tint still springing away on one
+    // of them (its animated values) never smears across the whole slab
+    const params: ResolvedGlass = { ...lead.params, thickness: f.thickness, fillet: f.fillet, filletBottom: f.filletBottom, profile: f.profile, glow: null, tint: null }
     out.push({
       node: c.node, members, shapes: sh, spacing: c.spacing, params, rect: { x: x0, y: y0, width: x1 - x0, height: y1 - y0 }, z: first.z,
       elevation: lead.elevation, scale: first.scale, transform: IDENTITY, tilt: { x: 0, y: 0 }, opacity, ...defined({ clip: first.clip }),

@@ -600,6 +600,22 @@ describe('glass containers (GlassContainer, spec §5.2)', () => {
     b.setVisual({ glass: { tint: [1, 1, 1, 0.3] } }); expect(fused()).toEqual([['a', 'b']])
     b.setStyle({ glass: { tint: 'accent' } }); b.setVisual({ glass: { tint: null } }); expect(fused()).toEqual([])
   })
+  it('the slab carries no glow and no tint, even while a member\'s leftover glow or tint springs away (as the first member or the lead)', () => {
+    const s = createSurface({ width: 400, height: 100 })
+    const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 100 })
+    const a = glass(0, 0, 80, 40, 'a'), b = glass(90, 0, 80, 40, 'b')
+    box.appendChild(a); box.appendChild(b); s.root.appendChild(box); layoutOf(s)
+    const slab = () => buildRenderList(s, theme, 'light').fused[0]!
+    // a, the first member, turning off: its target glow 0, its spring still at 0.6 with a tint fading out
+    a.setStyle({ glass: { glow: { color: 'accent', strength: 0 } } }); a.setVisual({ glass: { glowStrength: 0.6, tint: [0.4, 0.4, 1, 0.5] } })
+    let f = slab()
+    expect(f.members[0]!.params.glow).toMatchObject({ strength: 0.6 }); expect(f.members[0]!.params.tint).not.toBeNull()   // the member's own
+    expect(f.params.glow).toBeNull(); expect(f.params.tint).toBeNull()
+    // b leading (raised) with the same leftovers
+    a.setVisual(null); b.setStyle({ glass: { glow: { color: 'accent', strength: 0 } } }); b.setVisual({ glass: { glowStrength: 0.6, tint: [0.4, 0.4, 1, 0.5] } }); b.elevation = 6
+    f = slab()
+    expect(f.elevation).toBe(6); expect(f.params.glow).toBeNull(); expect(f.params.tint).toBeNull()
+  })
   it('the member that lifts the slab leads its look (a hover glint on any member shows on the slab); a pressed or hovered one leads a tie; opacity is the largest', () => {
     const s = createSurface({ width: 400, height: 100 })
     const box = new Node('box'); box.setProp('glassContainer', { spacing: 16 }); box.setStyle({ width: 400, height: 100 })
@@ -618,7 +634,7 @@ describe('glass containers (GlassContainer, spec §5.2)', () => {
     expect(slab().params.edgeGlow).toBe(0.5)                                           // the pressed one
     c.setState({ pressed: false }); a.setStyle({ opacity: 0.4 }); b.setStyle({ opacity: 0.7 })
     f = slab()
-    expect(f.params).toBe(f.members[0]!.params); expect(f.opacity).toBe(1)              // c's (the largest)
+    expect(f.params).toEqual(f.members[0]!.params); expect(f.opacity).toBe(1)           // c's (the largest)
   })
   it('glass inside a member rides on it (not a member); a nested container takes its own glass', () => {
     const s = createSurface({ width: 400, height: 200 })

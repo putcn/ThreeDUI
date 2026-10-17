@@ -3,6 +3,7 @@ import { effectiveStyle } from '../style/effective'
 import { resolveColor, resolveRadius, type ColorScheme, type RGBA, type Theme } from '../style/theme'
 import { resolveTextStyle } from '../style/text'
 import { resolveGlass } from '../renderlist'
+import { absoluteRect } from '../events/hit'
 import { Spring, resolveSpring } from './spring'
 import { ease, type Easing } from './easing'
 import type { Style } from '../style/schema'
@@ -18,10 +19,18 @@ interface NodeAnim {
   targets: Map<string, number>          // channel id ("scale", "bg.0", "glass.thickness", …) → last seen target
   channels: Map<string, Channel>
   seeded: boolean                       // `seed` wrote it and no tick has seen the node since: `root` is only its root then
+  framed?: { x?: number; y?: number }   // seeded x / y in the Surface frame, made parent-relative at the next tick that sees it
 }
 
 /** The keys `AnimationRuntime.seed` takes: where a node's rect, opacity and scale start from. */
 type SeedKey = 'x' | 'y' | 'width' | 'height' | 'opacity' | 'scale'
+/**
+ * What a seed's `x` / `y` are measured from: `'parent'` (default), the parent's layout frame, as the node's own layout
+ * (`targets`); `'surface'`, its tree root's (Surface pt, as `absoluteRect` gives them), converted into the parent's frame
+ * at the first tick that sees the node, after that tick's layout: right even when the parent is new or moves in the
+ * same update.
+ */
+export type SeedFrame = 'parent' | 'surface'
 
 /** How far `layout` sits inside a `w × h` parent at its nearest edge (as `buildRenderList` computes it). */
 function inset(layout: Rect, w: number, h: number): number {
@@ -50,8 +59,9 @@ function transitionKeys(style: Style): Set<TransitionKey> {
  * in `pressed` animates the press, and the release (branch off) jumps.
  * Nodes are keyed by identity. One runtime can serve several surfaces (tick each root); a node that leaves its tree
  * loses its state on the next tick of the root it was last seen under.
- * Hooks for transitions: `whenSettled(node)` resolves once the node stops moving; `seed(node, from)` makes its next
- * sighting animate from `from` (an enter transition, a shape morph).
+ * Hooks for transitions: `whenSettled(node)` resolves once the node stops moving; `seed(node, from, opts)` makes its
+ * next sighting animate from `from` (an enter transition, a shape morph; `opts.frame: 'surface'` takes `from`'s x / y
+ * in the Surface frame).
  */
 export class AnimationRuntime {
   /** `prefers-reduced-motion`: every change jumps, and channels in flight settle at once. */
@@ -82,13 +92,21 @@ export class AnimationRuntime {
    * Keys not in `from` are recorded on first sight as usual. On a node already tracked, only the seeded keys restart:
    * its other targets and channels carry on. `node` may sit in a subtree not yet attached (Vue inserts children
    * first); attach it before the next tick. A root that ticks with the node in its tree but does not visit it (a
-   * `display: 'none'` ancestor, no transition keys) drops the seed.
+   * `display: 'none'` ancestor, no transition keys) drops the seed. `opts.frame` (`SeedFrame`): what `x` and `y` are
+   * measured from.
    */
-  seed(node: Node, from: Partial<Record<SeedKey, number>>): void {
+  seed(node: Node, from: Partial<Record<SeedKey, number>>, opts: { frame?: SeedFrame } = {}): void {
     let a = this.state.get(node)
     if (!a) this.state.set(node, a = { root: node.root, targets: new Map(), channels: new Map(), seeded: true })
     else { a.root = node.root; a.seeded = true }
-    for (const [k, v] of Object.entries(from)) if (v !== undefined && Number.isFinite(v)) { a.targets.set(k, v); a.channels.delete(k) }
+    const surface = opts.frame === 'surface'
+    if (surface) delete a.framed
+    for (const [k, v] of Object.entries(from)) {
+      if (v === undefined || !Number.isFinite(v)) continue
+      a.channels.delete(k)
+      if (surface && (k === 'x' || k === 'y')) { (a.framed ??= {})[k] = v; a.targets.delete(k) }
+      else a.targets.set(k, v)
+    }
   }
 
   /**
@@ -186,6 +204,14 @@ export class AnimationRuntime {
     let anim = this.state.get(n)
     if (!anim) { this.state.set(n, { root, targets, channels: new Map(), seeded: false }); return false }   // first sight: record, no animation
     anim.root = root; anim.seeded = false
+    if (anim.framed) {
+      // a Surface-frame seed, into the parent's frame now that this tick has laid the node out (`absoluteRect(n)` less
+      // its own layout: the parent's origin, its scroll included)
+      const a = absoluteRect(n), f = anim.framed
+      if (f.x !== undefined) anim.targets.set('x', f.x - (a.x - n.layout.x))
+      if (f.y !== undefined) anim.targets.set('y', f.y - (a.y - n.layout.y))
+      delete anim.framed
+    }
     for (const [id, to] of targets) {
       const prev = anim.targets.get(id)
       anim.targets.set(id, to)
