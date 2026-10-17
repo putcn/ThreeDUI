@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { uniform } from 'three/tsl'
 import { Texture, Vector2 } from 'three'
 import { GlassUIError } from '@glassui/core'
-import { fusedOutline, fusedField, fusedNormal, fusedBounds, extrudeSlab, type Contour, type FusedShape, type SlabMesh } from '../src/glass/fused'
+import { fusedOutline, fusedField, fusedNormal, fusedBounds, fusedGrid, extrudeSlab, FUSED_MAX_CELLS, type Contour, type FusedShape, type SlabMesh } from '../src/glass/fused'
 import { profileAt } from '../src/glass/slab9'
 import { GlassBatch } from '../src/glass/batch'
 import { createGlassMaterial } from '../src/glass/material'
@@ -43,6 +43,42 @@ function volume(m: SlabMesh): number {
     v += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)
   }
   return v / 6
+}
+
+/** Ring k of each contour (vertex block base + k·n + i per contour, in contour order), as xy polygons. */
+function ringOf(m: SlabMesh, cs: Contour[], K: number, k: number): Contour[] {
+  let base = 0
+  return cs.map(c => {
+    const n = c.length, ring: Contour = []
+    for (let i = 0; i < n; i++) { const v = 3 * (base + k * n + i); ring.push([m.positions[v]!, m.positions[v + 1]!]) }
+    base += (2 * K + 2) * n
+    return ring
+  })
+}
+/** Proper crossings between non-adjacent segments of the polygons (zero-length segments, a collapsed fold's, skipped). */
+function crossings(polys: Contour[]): number {
+  const segs = polys.flatMap(p => p.map((a, i) => [a, p[(i + 1) % p.length]!, p, i] as const))
+  let count = 0
+  segs.forEach(([a, b, pa, ia], s1) => segs.forEach(([c, d, pc, ic], s2) => {
+    if (s2 <= s1 || (pa === pc && (Math.abs(ia - ic) <= 1 || Math.abs(ia - ic) === pa.length - 1))) return
+    const dx = b[0] - a[0], dy = b[1] - a[1], ex = d[0] - c[0], ey = d[1] - c[1], den = dx * ey - dy * ex
+    if (den === 0) return
+    const t = ((c[0] - a[0]) * ey - (c[1] - a[1]) * ex) / den, u = ((c[0] - a[0]) * dy - (c[1] - a[1]) * dx) / den
+    if (t > 1e-9 && t < 1 - 1e-9 && u > 1e-9 && u < 1 - 1e-9) count++
+  }))
+  return count
+}
+/** Total area of the triangles at height z (each counted positive: a double-covered cap sums to more than its ring). */
+function capArea(m: SlabMesh, z: number): number {
+  let sum = 0
+  for (let t = 0; t < m.index.length; t += 3) {
+    const [a, b, c] = [m.index[t]!, m.index[t + 1]!, m.index[t + 2]!]
+    if (![a, b, c].every(i => Math.abs(m.positions[3 * i + 2]! - z) < 1e-5)) continue
+    const P = (i: number) => [m.positions[3 * i]!, m.positions[3 * i + 1]!] as const
+    const [ax, ay] = P(a), [bx, by] = P(b), [cx, cy] = P(c)
+    sum += Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) / 2
+  }
+  return sum
 }
 
 describe('fusedOutline', () => {
@@ -93,6 +129,23 @@ describe('fusedOutline', () => {
     expect(c!.length).toBeLessThan(80)
     const [fine] = fusedOutline([rect(0, 0, 200, 60, 30)], 16, { step: 0.5 })
     expect(fine!.length).toBeGreaterThan(c!.length)
+  })
+  it('the default step follows the smallest shape, coarsened so the grid stays under FUSED_MAX_CELLS; a given step is kept', () => {
+    const cells = (g: { nx: number; ny: number }) => g.nx * g.ny
+    // a toolbar: 2 pt (72 × 60 capsules: 60/24 clamped), some 11 k cells, untouched by the cap
+    const bar = [0, 1, 2, 3, 4].map(i => rect(i * 82, 0, 72, 60, 30))
+    expect(fusedGrid(bar, 16).step).toBe(2); expect(cells(fusedGrid(bar, 16))).toBeLessThan(FUSED_MAX_CELLS)
+    // a 12 pt dot on an 800 × 600 panel would sample at 0.5 pt: ~2 M cells; coarsened to the cap
+    const panel = [rect(0, 0, 800, 600, 24), rect(840, 0, 12, 12, 6)]
+    const g = fusedGrid(panel, 16)
+    expect(cells(g)).toBeLessThanOrEqual(FUSED_MAX_CELLS); expect(cells(g)).toBeGreaterThan(FUSED_MAX_CELLS / 2)
+    expect(g.step).toBeGreaterThan(0.5)
+    expect(fusedGrid(panel, 16, 0.5).step).toBe(0.5)                     // an explicit step is the caller's
+    // the coarser grid still traces the panel (area within 1 %) and keeps the dot its own contour
+    const cs = fusedOutline(panel, 16)
+    expect(cs).toHaveLength(2)
+    const big = Math.max(...cs.map(c => Math.abs(area(c)))), exact = 800 * 600 - (4 - Math.PI) * 24 * 24
+    expect(Math.abs(big - exact) / exact).toBeLessThan(0.01)
   })
   it('rejects a spacing, step or shape that is not a finite number (and outlines nothing for no shapes)', () => {
     expect(fusedOutline([], 16)).toEqual([])
@@ -156,6 +209,52 @@ describe('extrudeSlab', () => {
       worst = Math.max(worst, Math.abs(m.positions[3 * i]!) - (50 - inset), Math.abs(m.positions[3 * i + 1]!) - (30 - inset))
     }
     expect(worst).toBeLessThan(0.2)
+  })
+  it('a bridge thinner than its fillets (a gap just under the spacing) keeps its rings uncrossed and its caps single', () => {
+    const pairs: [string, (x: number) => FusedShape][] = [
+      ['circles', x => rect(x, 0, 40, 40, 20)], ['capsules', x => rect(x, 0, 80, 40, 20)], ['r30', x => rect(x, 0, 120, 60, 30)],
+    ]
+    for (const [name, shape] of pairs) for (const gap of [15.8, 15.85, 15.9, 15.95, 15.99]) for (const K of [4, 8]) {
+      const first = shape(0), shapes = [first, shape(first.width + gap)], label = `${name} gap ${gap} K ${K}`
+      const minSide = Math.min(first.width, first.height)
+      const cs = fusedOutline(shapes, 16), m = extrudeSlab(cs, shapes, 16, { ...profile, minSide }, K)
+      expect(openEdges(m), label).toBe(0)
+      for (const k of [0, 2 * K + 1]) expect(crossings(ringOf(m, cs, K, k)), `${label} ring ${k}`).toBe(0)
+      // the squeezed profile's normals stay unit, and the caps' rings keep facing ±z
+      let worst = 0, n = 0
+      for (let v = 0; v < m.normals.length; v += 3) worst = Math.max(worst, Math.abs(Math.hypot(m.normals[v]!, m.normals[v + 1]!, m.normals[v + 2]!) - 1))
+      for (const c of cs) {
+        for (let i = 0; i < c.length; i++) for (const k of [0, 2 * K + 1]) worst = Math.max(worst, 1 - Math.abs(m.normals[3 * (n + k * c.length + i) + 2]!))
+        n += (2 * K + 2) * c.length
+      }
+      expect(worst, label).toBeLessThan(1e-5)
+      // the caps cover their rings once: their triangles' areas sum to the rings' (net of holes) area
+      for (const [k, z] of [[2 * K + 1, 8], [0, 0]] as const) {
+        const ring = ringOf(m, cs, K, k).reduce((s, c) => s + area(c), 0)
+        expect(Math.abs(capArea(m, z) - ring) / ring, `${label} cap ${k}`).toBeLessThan(1e-4)
+      }
+    }
+  })
+  it('a separate blob facing another, even nearly touching, keeps its full fillets (only glass between squeezes them)', () => {
+    for (const gap of [16.02, 16.1, 17]) {
+      const shapes = [rect(0, 0, 40, 40, 20), rect(40 + gap, 0, 40, 40, 20)]
+      const cs = fusedOutline(shapes, 16)
+      expect(cs).toHaveLength(2)
+      const both = extrudeSlab(cs, shapes, 16, profile, 4), alone = extrudeSlab([cs[0]!], shapes, 16, profile, 4)
+      expect(both.positions.subarray(0, alone.positions.length)).toEqual(alone.positions)
+    }
+  })
+  it('rejects a K that is not a whole number ≥ 1, and a profile or spacing that is not finite and in range', () => {
+    const shapes = [rect(0, 0, 80, 40, 20)], cs = fusedOutline(shapes, 16)
+    for (const K of [0, -1, 2.5, NaN]) expect(() => extrudeSlab(cs, shapes, 16, profile, K), `K ${K}`).toThrow(/K 必须是不小于 1 的整数/)
+    expect(() => extrudeSlab(cs, shapes, 16, profile, 0)).toThrow(GlassUIError)
+    const bad: [Partial<typeof profile>, RegExp][] = [
+      [{ thickness: 0 }, /thickness/], [{ thickness: Infinity }, /thickness/], [{ minSide: -4 }, /minSide/],
+      [{ fillet: -1 }, /fillet/], [{ filletBottom: NaN }, /filletBottom/],
+    ]
+    for (const [p, re] of bad) expect(() => extrudeSlab(cs, shapes, 16, { ...profile, ...p }, 4), JSON.stringify(p)).toThrow(re)
+    expect(() => extrudeSlab(cs, shapes, NaN, profile, 4)).toThrow(/spacing/)
+    expect(() => extrudeSlab(cs, shapes, 16, { ...profile, fillet: 0, filletBottom: 0 }, 1)).not.toThrow()
   })
   it('places ring k at the contour point inset by the slab profile, with its profile normal turned outward', () => {
     const shapes = [rect(0, 0, 200, 60, 30)], K = 4
