@@ -300,7 +300,7 @@ describe('extrudeSlab', () => {
       if (why) bad.push(`step 3.9 D ${D} ${deg}° gap ${gap.toFixed(2)}: ${why}`)
     }
     expect(bad).toEqual([])
-  })
+  }, 30_000)   // ≈ 2 s alone, over the 5 s default beside the rest of the suite
   it('a separate blob facing another, even nearly touching, keeps its full fillets (only glass between squeezes them)', () => {
     for (const gap of [16.02, 16.1, 17]) {
       const shapes = [rect(0, 0, 40, 40, 20), rect(40 + gap, 0, 40, 40, 20)]
