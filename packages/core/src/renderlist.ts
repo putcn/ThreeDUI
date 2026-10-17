@@ -191,8 +191,9 @@ function shapeOf(g: GlassInstance): GlassShape {
  * clamped to half its shorter side as the fused outline clamps it) grown by a disc of that radius, so it is the
  * distance between the cores less both radii. The fused outline joins two shapes exactly when this is under the
  * spacing (`fusedOutline` in the render package): two circles placed diagonally are as far apart as their arcs are.
+ * Containers cluster their members by it, and the render package's `fusedSmoothing` measures a cluster's gaps by it.
  */
-function gapBetween(p: GlassShape, q: GlassShape): number {
+export function glassGap(p: GlassShape, q: GlassShape): number {
   const rp = Math.max(0, Math.min(p.radius, p.width / 2, p.height / 2)), rq = Math.max(0, Math.min(q.radius, q.width / 2, q.height / 2))
   const dx = Math.max(0, (q.x + rq) - (p.x + p.width - rp), (p.x + rp) - (q.x + q.width - rq))
   const dy = Math.max(0, (q.y + rq) - (p.y + p.height - rp), (p.y + rp) - (q.y + q.height - rq))
@@ -216,7 +217,7 @@ const fusible = (s: Style): boolean => {
 const leadRank = (g: GlassInstance): number => g.node.state.pressed ? 2 : g.node.state.hover ? 1 : 0
 
 /**
- * Clusters a container's members (spec §5.2): two join when the gap between their shapes (`shapeOf`, `gapBetween`) is
+ * Clusters a container's members (spec §5.2): two join when the gap between their shapes (`shapeOf`, `glassGap`) is
  * under its spacing (as the fused outline joins them), they share a variant and both can fuse (`fusible`),
  * transitively; a member with an empty or non-finite shape joins none, nor does one that cannot fuse (so a cluster
  * splits around it when that leaves a wider gap). Each cluster of two or more becomes one `FusedGlassInstance` in
@@ -231,7 +232,7 @@ function cluster(c: Container, out: FusedGlassInstance[], drop: Set<GlassInstanc
   const find = (i: number): number => { while (up[i] !== i) { up[i] = up[up[i]!]!; i = up[i]! } return i }
   for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
     if (!ok[i] || !ok[j] || ms[i]!.glass.params.variant !== ms[j]!.glass.params.variant) continue
-    if (gapBetween(shapes[i]!, shapes[j]!) < c.spacing) { const a = find(i), b = find(j); if (a !== b) up[Math.max(a, b)] = Math.min(a, b) }
+    if (glassGap(shapes[i]!, shapes[j]!) < c.spacing) { const a = find(i), b = find(j); if (a !== b) up[Math.max(a, b)] = Math.min(a, b) }
   }
   const groups = new Map<number, number[]>()
   for (let i = 0; i < n; i++) { const r = find(i), g = groups.get(r); if (g) g.push(i); else groups.set(r, [i]) }   // roots are their sets' least index: groups in first-member order

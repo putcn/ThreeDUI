@@ -1,5 +1,5 @@
 import { BufferAttribute, InstancedBufferGeometry, ShapeUtils, Sphere, Vector2, Vector3 } from 'three'
-import { GlassUIError } from '@glassui/core'
+import { GlassUIError, glassGap } from '@glassui/core'
 import { profileAt, type SlabInstanceParams } from './slab9'
 
 /*
@@ -7,6 +7,10 @@ import { profileAt, type SlabInstanceParams } from './slab9'
  * of the smooth union of their rounded-rect SDFs (`fusedField`: the polynomial smin of the nearest two), extruded with
  * the 9-slice slab's fillet profile (`extrudeSlab`) into a plain mesh that `GlassBatch({ mesh })` draws through the
  * glass material (`meshVertex`).
+ *
+ * The smoothing k (pt) is `2 · spacing` unless given; a container passes `fusedSmoothing`, which flattens the necks of
+ * close members and returns to `2 · spacing` as they part. Every step of one slab (field, normals, the grid's margin,
+ * the extrusion) takes the same k.
  *
  * Frames: the shapes, `fusedField` and the point `fusedNormal` takes are in Surface pt (y down). The outline and the
  * extrusion share one frame: pt, y up, origin at the centre of the shapes' bounds (`fusedBounds`), back face at z = 0
@@ -25,12 +29,19 @@ export interface FusedProfile { thickness: number; fillet: number; filletBottom:
 export interface SlabMesh { positions: Float32Array; normals: Float32Array; index: Uint32Array }
 
 /**
- * The smoothing `k` per pt of spacing. The polynomial smin lowers the field by at most k/4 (where the two distances are
- * equal), so two shapes a gap g apart join where g/2 < k/4: with k = 2 · spacing they join exactly when g < spacing —
- * the container's contract, and the gap under which Task 16 clusters its members. (k = spacing would join them only
- * under spacing/2, leaving two separate slabs bulging toward each other for gaps in between.)
+ * The default smoothing `k` per pt of spacing. The polynomial smin lowers the field by at most k/4 (where the two
+ * distances are equal), so two shapes a gap g apart join where g/2 < k/4: with k = 2 · spacing they join exactly when
+ * g < spacing — the container's contract, and the gap under which core clusters its members (`glassGap`). (k = spacing
+ * would join them only under spacing/2, leaving two separate slabs bulging toward each other for gaps in between.)
  */
 const SMOOTHING_PER_SPACING = 2
+
+/** Hermite step: 0 at or below `e0`, 1 at or above `e1` (a plain step where they meet). */
+function smoothstep(e0: number, e1: number, x: number): number {
+  if (!(e1 > e0)) return x < e0 ? 0 : 1
+  const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0)))
+  return t * t * (3 - 2 * t)
+}
 
 /** Signed distance to a rounded rect (pt; negative inside), y down like the shapes. */
 function sdRound(s: FusedShape, x: number, y: number): number {
@@ -47,30 +58,68 @@ function smin(a: number, b: number, k: number): number {
 }
 
 /**
- * The smooth union of the shapes' SDFs at (x, y) (Surface pt, y down; negative inside): `smin` of the nearest two
- * (`Infinity` for no shapes; the one SDF for one shape). It depends on the shapes but not on their order, so a symmetric
- * layout gives a symmetric outline and a reorder changes nothing; two shapes blend as the brief's polynomial smin, and
- * nowhere is the field lowered by more than k/4 (folding smin over every shape would add up where three or four meet:
- * in a grid of rounds, a speck of glass inside each hole). It also bounds the cost: only the nearest two count.
+ * The smooth union of the shapes' SDFs at (x, y) (Surface pt, y down; negative inside) with smoothing `k` (default
+ * `2 · spacing`): `smin` of the nearest two (`Infinity` for no shapes; the one SDF for one shape). It depends on the
+ * shapes but not on their order, so a symmetric layout gives a symmetric outline and a reorder changes nothing; two
+ * shapes blend as the brief's polynomial smin, and nowhere is the field lowered by more than k/4 (folding smin over
+ * every shape would add up where three or four meet: in a grid of rounds, a speck of glass inside each hole). It also
+ * bounds the cost: only the nearest two count.
  */
-export function fusedField(shapes: readonly FusedShape[], spacing: number, x: number, y: number): number {
+export function fusedField(shapes: readonly FusedShape[], spacing: number, x: number, y: number, k = spacing * SMOOTHING_PER_SPACING): number {
   let a = Infinity, b = Infinity                                       // the nearest two SDFs, a ≤ b
   for (const s of shapes) { const e = sdRound(s, x, y); if (e < a) { b = a; a = e } else if (e < b) b = e }
-  return b === Infinity ? a : smin(a, b, spacing * SMOOTHING_PER_SPACING)
+  return b === Infinity ? a : smin(a, b, k)
+}
+
+/**
+ * The smoothing k (pt) for a cluster's shapes: flat necks where its members sit close, `2 · spacing` (the default) as
+ * they part. `g` is the largest edge of the minimum spanning tree over the members' radius-aware gaps (`glassGap`, as
+ * core clusters them): the gap that holds the cluster together. `r` is half the smallest member's short side, and
+ * `flat(g) = 4 · (√((r + g/2)² + r²) − r)` the k at which two such rounds a gap g apart are joined at their full height
+ * at the midpoint (smin(a, a) = 0 there, a = √((r + g/2)² + r²) − r); `flat(g) ≥ 2g`, so the cluster stays joined.
+ * Then `k = mix(flat(g), 2 · spacing, smoothstep(spacing / 2, spacing, g))`: necks at full height up to half the
+ * spacing, thinning to the fixed smoothing's neck as g reaches the spacing, where the neck closes exactly when core's
+ * clustering lets go. One member (or none): `2 · spacing`. The neck itself does not dip, but the smin's blend swells
+ * the tops beside it by about 6–7 % of r (1.5 pt on 44 pt capsules at gap 8, 1.66 on 52 pt rounds): no k keeps the
+ * neck at full height without that.
+ */
+export function fusedSmoothing(shapes: readonly FusedShape[], spacing: number): number {
+  checkSpacing('fusedSmoothing', spacing)
+  const n = shapes.length, wide = spacing * SMOOTHING_PER_SPACING
+  if (n < 2) return wide
+  // Prim's over the complete graph of gaps (n is a container's member count): the largest edge taken
+  const best = new Float64Array(n).fill(Infinity), done = new Uint8Array(n)
+  let g = 0, cur = 0
+  done[0] = 1
+  for (let added = 1; added < n; added++) {
+    let next = -1
+    for (let j = 0; j < n; j++) {
+      if (done[j]) continue
+      best[j] = Math.min(best[j]!, glassGap(shapes[cur]!, shapes[j]!))
+      if (next < 0 || best[j]! < best[next]!) next = j
+    }
+    g = Math.max(g, best[next]!); done[next] = 1; cur = next
+  }
+  let r = Infinity
+  for (const s of shapes) r = Math.min(r, s.width / 2, s.height / 2)
+  r = Math.max(r, 0)
+  const flat = 4 * (Math.sqrt((r + g / 2) ** 2 + r * r) - r), t = smoothstep(0.5 * spacing, spacing, g)
+  return flat * (1 - t) + wide * t                                     // (exactly 2 · spacing at t = 1)
 }
 
 /** Nodes per side of the blocks `fusedSamples` culls the shapes for. */
 const BLOCK = 8
 
 /**
- * `fusedField` at every node of `grid` (`fusedGrid`), row by row: identical values, at a cost nearly independent of the
- * member count. Per block of BLOCK × BLOCK nodes, a shape is dropped when the block lies off its bounding box and the
- * distance between them (a lower bound of its SDF there) exceeds the second least of the shapes' upper bounds over the
- * block (each SDF at the block's centre plus its half-diagonal: an SDF changes by at most the distance moved): two
- * shapes are then nearer than it at every node of the block, so it is never one of the nearest two.
+ * `fusedField` (smoothing `k`) at every node of `grid` (`fusedGrid`), row by row: identical values, at a cost nearly
+ * independent of the member count. Per block of BLOCK × BLOCK nodes, a shape is dropped when the block lies off its
+ * bounding box and the distance between them (a lower bound of its SDF there) exceeds the second least of the shapes'
+ * upper bounds over the block (each SDF at the block's centre plus its half-diagonal: an SDF changes by at most the
+ * distance moved): two shapes are then nearer than it at every node of the block, so it is never one of the nearest
+ * two — whatever the smoothing.
  */
-export function fusedSamples(shapes: readonly FusedShape[], spacing: number, grid: { step: number; x0: number; y0: number; nx: number; ny: number }): Float64Array {
-  const { step, x0, y0, nx, ny } = grid, k = spacing * SMOOTHING_PER_SPACING
+export function fusedSamples(shapes: readonly FusedShape[], spacing: number, grid: { step: number; x0: number; y0: number; nx: number; ny: number }, k = spacing * SMOOTHING_PER_SPACING): Float64Array {
+  const { step, x0, y0, nx, ny } = grid
   const field = new Float64Array(nx * ny), cand = new Int32Array(shapes.length)
   for (let bj = 0; bj < ny; bj += BLOCK) for (let bi = 0; bi < nx; bi += BLOCK) {
     const i1 = Math.min(bi + BLOCK, nx) - 1, j1 = Math.min(bj + BLOCK, ny) - 1
@@ -98,19 +147,19 @@ export function fusedSamples(shapes: readonly FusedShape[], spacing: number, gri
  * The gradient of `fusedField` at (x, y) (Surface pt, y down; per pt) by central differences, as (x, y) y up: about
  * unit length on a plain SDF, shorter where two shapes blend, near 0 at a bridge's saddle.
  */
-function fusedGradient(shapes: readonly FusedShape[], spacing: number, x: number, y: number): [number, number] {
+function fusedGradient(shapes: readonly FusedShape[], spacing: number, x: number, y: number, k: number): [number, number] {
   const e = 0.25
-  const gx = fusedField(shapes, spacing, x + e, y) - fusedField(shapes, spacing, x - e, y)
-  const gy = fusedField(shapes, spacing, x, y + e) - fusedField(shapes, spacing, x, y - e)
+  const gx = fusedField(shapes, spacing, x + e, y, k) - fusedField(shapes, spacing, x - e, y, k)
+  const gy = fusedField(shapes, spacing, x, y + e, k) - fusedField(shapes, spacing, x, y - e, k)
   return [gx / (2 * e), -gy / (2 * e)]                       // y down → y up
 }
 
 /**
- * The unit outward gradient of `fusedField` at (x, y) (Surface pt, y down), by central differences, as (x, y) in the
- * outline's y-up frame; (0, 0) where the field is flat.
+ * The unit outward gradient of `fusedField` (smoothing `k`) at (x, y) (Surface pt, y down), by central differences, as
+ * (x, y) in the outline's y-up frame; (0, 0) where the field is flat.
  */
-export function fusedNormal(shapes: readonly FusedShape[], spacing: number, x: number, y: number): [number, number] {
-  const [gx, gy] = fusedGradient(shapes, spacing, x, y), l = Math.hypot(gx, gy) || 1
+export function fusedNormal(shapes: readonly FusedShape[], spacing: number, x: number, y: number, k = spacing * SMOOTHING_PER_SPACING): [number, number] {
+  const [gx, gy] = fusedGradient(shapes, spacing, x, y, k), l = Math.hypot(gx, gy) || 1
   return [gx / l, gy / l]
 }
 
@@ -195,6 +244,9 @@ const finite = (...v: number[]) => v.every(Number.isFinite)
 function checkSpacing(scope: string, spacing: number): void {
   if (!(spacing >= 0) || !Number.isFinite(spacing)) throw new GlassUIError(scope, 'spacing 必须是不小于 0 的有限数', { got: String(spacing) })
 }
+function checkSmoothing(scope: string, k: number): void {
+  if (!(k >= 0) || !Number.isFinite(k)) throw new GlassUIError(scope, 'k（融合的平滑宽度，pt）必须是不小于 0 的有限数', { got: String(k) })
+}
 
 /**
  * The most grid nodes `fusedOutline` samples under its default step (a few hundred KB of field and links): a small
@@ -206,16 +258,18 @@ export const FUSED_MAX_CELLS = 40_000
 
 /**
  * The sampling grid of `fusedOutline` (Surface pt): `nx × ny` nodes `step` apart from (x0, y0), covering the shapes'
- * bounds plus `spacing + 2·step`. The default step is `clamp(minSide / 24, 0.5, 2)` (`minSide` the shortest side of any
+ * bounds plus `max(spacing, k / 4) + 2·step` (the outline reaches at most k/4 past the shapes; k defaults to
+ * `2 · spacing`). The default step is `clamp(minSide / 24, 0.5, 2)` (`minSide` the shortest side of any
  * shape), coarsened until the grid has at most `FUSED_MAX_CELLS` nodes; a given `step` (positive, finite) is kept as
  * is. A coarsened step traces a member under a few steps across roughly (one under about one step can vanish).
  */
-export function fusedGrid(shapes: readonly FusedShape[], spacing: number, step?: number): { step: number; x0: number; y0: number; nx: number; ny: number } {
+export function fusedGrid(shapes: readonly FusedShape[], spacing: number, step?: number, k = spacing * SMOOTHING_PER_SPACING): { step: number; x0: number; y0: number; nx: number; ny: number } {
   checkSpacing('fusedGrid', spacing)
+  checkSmoothing('fusedGrid', k)
   if (step !== undefined && (!(step > 0) || !Number.isFinite(step))) throw new GlassUIError('fusedGrid', 'step 必须是正的有限数', { got: String(step) })
-  const b = fusedBounds(shapes)
+  const b = fusedBounds(shapes), reach = Math.max(spacing, k / 4)
   const layout = (st: number) => {
-    const margin = spacing + 2 * st
+    const margin = reach + 2 * st
     return { step: st, x0: b.x - margin, y0: b.y - margin, nx: Math.ceil((b.width + 2 * margin) / st) + 1, ny: Math.ceil((b.height + 2 * margin) / st) + 1 }
   }
   if (step !== undefined) return layout(step)
@@ -228,24 +282,27 @@ export function fusedGrid(shapes: readonly FusedShape[], spacing: number, step?:
 }
 
 /**
- * The zero contours of the shapes' smooth union (`fusedField`), in the fused frame (pt, y up, centred on
- * `fusedBounds`): each closed (the last point does not repeat the first), outer boundaries counter-clockwise and holes
- * clockwise. Shapes a gap of less than `spacing` apart join into one contour with a smooth bridge; farther ones keep
- * their own. Marching squares over a grid of `step` pt (default `clamp(minSide / 24, 0.5, 2)`, `minSide` the shortest
- * side of any shape; coarsened to at most `FUSED_MAX_CELLS` nodes: `fusedGrid`) covering the bounds plus
- * `spacing + 2·step`, sampled by `fusedSamples`, edge points interpolated linearly, then simplified
+ * The zero contours of the shapes' smooth union (`fusedField`, smoothing `k`: default `2 · spacing`), in the fused
+ * frame (pt, y up, centred on `fusedBounds`): each closed (the last point does not repeat the first), outer boundaries
+ * counter-clockwise and holes clockwise. Shapes a gap g apart join into one contour with a smooth bridge where
+ * g < k/2 (under `spacing` at the default, and with `fusedSmoothing`); farther ones keep their own. Marching squares
+ * over a grid of `step` pt (default `clamp(minSide / 24, 0.5, 2)`, `minSide` the shortest side of any shape; coarsened
+ * to at most `FUSED_MAX_CELLS` nodes: `fusedGrid`) covering the bounds plus `max(spacing, k / 4) + 2·step`, sampled by
+ * `fusedSamples`, edge points interpolated linearly, then simplified
  * (Douglas–Peucker, ε = 0.1 · step). A few typed arrays per call and none per cell, at the cost `FUSED_MAX_CELLS`
  * notes: it reruns whenever a cluster's shapes change (a press or hover tilt does, every frame for a while).
  */
-export function fusedOutline(shapes: readonly FusedShape[], spacing: number, opts: { step?: number } = {}): Contour[] {
+export function fusedOutline(shapes: readonly FusedShape[], spacing: number, opts: { step?: number; k?: number } = {}): Contour[] {
   checkSpacing('fusedOutline', spacing)
+  const k = opts.k ?? spacing * SMOOTHING_PER_SPACING
+  checkSmoothing('fusedOutline', k)
   for (const s of shapes) if (!finite(s.x, s.y, s.width, s.height, s.radius)) throw new GlassUIError('fusedOutline', '形状的位置、尺寸和圆角必须是有限数', { got: `x ${s.x}, y ${s.y}, ${s.width} × ${s.height}, radius ${s.radius}` })
   if (opts.step !== undefined && (!(opts.step > 0) || !Number.isFinite(opts.step))) throw new GlassUIError('fusedOutline', 'step 必须是正的有限数', { got: String(opts.step) })
   if (!shapes.length) return []
 
-  const { step, x0, y0, nx, ny } = fusedGrid(shapes, spacing, opts.step)
+  const { step, x0, y0, nx, ny } = fusedGrid(shapes, spacing, opts.step, k)
   const b = fusedBounds(shapes), cx = b.x + b.width / 2, cy = b.y + b.height / 2
-  const field = fusedSamples(shapes, spacing, { step, x0, y0, nx, ny })
+  const field = fusedSamples(shapes, spacing, { step, x0, y0, nx, ny }, k)
 
   // link[enter edge] = the exit edge its segment runs to (−1: no crossing, or already chained)
   const link = new Int32Array(2 * nx * ny).fill(-1)
@@ -425,7 +482,8 @@ function unfold(q: Float64Array, n: number): void {
 
 /**
  * The fused slab mesh (pt, in the fused frame: centred on `fusedBounds(shapes)`, y up, back face at z = 0) of
- * `fusedOutline(shapes, spacing)`'s contours. Each contour point P, with outward normal n (`fusedNormal`), gets the
+ * `fusedOutline(shapes, spacing, { k })`'s contours, with the same smoothing `opts.k` (default `2 · spacing`) for the
+ * normals. Each contour point P, with outward normal n (`fusedNormal`), gets the
  * 9-slice slab's rings 0 … 2K+1 (`profileAt` for a slab `minSide` wide and high): ring k at P − n·inset_k, z = z_k,
  * normal normalize(n·nr_k, nz_k); where a ring would fold over (inset past a corner sharper than the fillet) its loop
  * collapses onto the crossing (`unfold`). Where the glass is thinner than twice its insets (a bridge just under — or,
@@ -433,7 +491,8 @@ function unfold(q: Float64Array, n: number): void {
  * nearest outline segment straight across the glass (`insetScales`), and near a bridge's saddle, where the field's
  * gradient is weak or points into the outline, n is the traced polyline's own normal. Two sides across the glass then
  * keep apart; the tests sweep pairs of rounds, capsules and rounded rects, axis-aligned and diagonal, within 0.2 pt
- * either side of the spacing at the default and at coarsened steps, and every mesh is closed with single-cover caps.
+ * either side of the spacing at the default and at coarsened steps (and, with `fusedSmoothing`, at close gaps too), and
+ * every mesh is closed with single-cover caps.
  * Not covered: a member thinner than twice the profile's insets, whose straight sides the simplified outline leaves as
  * single segments that see each other only around its ends — `minSide` must be the smallest member's short side, so
  * that the profile's fillets fit it (as on a 9-slice slab). Walls join consecutive rings (outward: material lies left
@@ -441,9 +500,11 @@ function unfold(q: Float64Array, n: number): void {
  * (normal −z), holes included, on those rings' own vertices — the fillet profile's end rings already carry exactly
  * those normals.
  */
-export function extrudeSlab(contours: readonly Contour[], shapes: readonly FusedShape[], spacing: number, profile: FusedProfile, K: number): SlabMesh {
+export function extrudeSlab(contours: readonly Contour[], shapes: readonly FusedShape[], spacing: number, profile: FusedProfile, K: number, opts: { k?: number } = {}): SlabMesh {
   if (!Number.isInteger(K) || K < 1) throw new GlassUIError('extrudeSlab', 'K 必须是不小于 1 的整数（每段圆角的环数）', { got: String(K) })
   checkSpacing('extrudeSlab', spacing)
+  const smoothing = opts.k ?? spacing * SMOOTHING_PER_SPACING
+  checkSmoothing('extrudeSlab', smoothing)
   for (const name of ['thickness', 'minSide'] as const) {
     if (!(profile[name] > 0) || !Number.isFinite(profile[name])) throw new GlassUIError('extrudeSlab', `profile.${name} 必须是正的有限数`, { got: String(profile[name]) })
   }
@@ -469,7 +530,7 @@ export function extrudeSlab(contours: readonly Contour[], shapes: readonly Fused
   const outward = contours.map(c => {
     const n = c.length, on = new Float64Array(2 * n)
     c.forEach(([x, y], i) => {
-      const [gx, gy] = fusedGradient(shapes, spacing, x + cx, cy - y), g = Math.hypot(gx, gy)
+      const [gx, gy] = fusedGradient(shapes, spacing, x + cx, cy - y, smoothing), g = Math.hypot(gx, gy)
       const [px, py] = c[(i + n - 1) % n]!, [qx, qy] = c[(i + 1) % n]!, l = Math.hypot(qx - px, qy - py) || 1
       const tx = (qy - py) / l, ty = -(qx - px) / l
       const weak = g < 0.25 || gx * tx + gy * ty <= 0

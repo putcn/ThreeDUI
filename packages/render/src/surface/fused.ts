@@ -1,7 +1,7 @@
 import { Mesh, type InstancedBufferGeometry, type Object3D } from 'three'
 import type { FusedGlassInstance, GlassInstance, Mat2D, Node, Rect, RenderList } from '@glassui/core'
 import { clampPt, GlassBatch, MIN_THICKNESS, type TouchState } from '../glass/batch'
-import { extrudeSlab, fusedBounds, fusedOutline, type FusedProfile, type FusedShape, type SlabMesh } from '../glass/fused'
+import { extrudeSlab, fusedBounds, fusedOutline, fusedSmoothing, type FusedProfile, type FusedShape, type SlabMesh } from '../glass/fused'
 import type { GlassMaterial } from '../glass/material'
 import type { SurfaceDims } from '../units'
 
@@ -64,11 +64,11 @@ function toUnits(m: SlabMesh, ptPerUnit: number): SlabMesh {
 
 /**
  * Glass containers' fused slabs on a Surface (spec §5.2): per cluster (`FusedGlassInstance`), a mesh batch
- * (`GlassBatch({ mesh })`: `extrudeSlab` of `fusedOutline` over `fusedShapes` with `fusedProfile`, in units, centred
- * on the rounded shapes' bounds) holding one instance — the cluster's params, elevation, opacity and clip over those
- * bounds, radius 0, untransformed and untilted, as its first member's node (the press glow's key, `pressTarget`) —
- * drawn at the element glass's orders (`FusedBuild.orders.outer`) or, nested in glass, at the inner glass's (`.inner`,
- * no luma index).
+ * (`GlassBatch({ mesh })`: `extrudeSlab` of `fusedOutline` over `fusedShapes` with `fusedProfile`, both smoothed by
+ * `fusedSmoothing` — full-height necks between close members — in units, centred on the rounded shapes' bounds)
+ * holding one instance — the cluster's params, elevation, opacity and clip over those bounds, radius 0, untransformed
+ * and untilted, as its first member's node (the press glow's key, `pressTarget`) — drawn at the element glass's
+ * orders (`FusedBuild.orders.outer`) or, nested in glass, at the inner glass's (`.inner`, no luma index).
  *
  * A cluster keeps the draw of the previous update that holds one of its members (so one dissolving or reshaping
  * leaves the others alone), and that draw keeps its mesh while the cluster's plan (its rounded shapes, spacing,
@@ -193,8 +193,9 @@ export class FusedGlass {
     for (let i = 0; same && i < len; i++) same = prev!.plan[i] === q[i]
     let d = prev
     if (!d || !same) {
-      const shapes = fusedShapes(f)
-      const mesh = toUnits(extrudeSlab(fusedOutline(shapes, f.spacing), shapes, f.spacing, fusedProfile(f, shapes), this.K), s.ptPerUnit)
+      // the smoothing follows the rounded shapes and the spacing, which the plan holds: no key of its own
+      const shapes = fusedShapes(f), k = fusedSmoothing(shapes, f.spacing)
+      const mesh = toUnits(extrudeSlab(fusedOutline(shapes, f.spacing, { k }), shapes, f.spacing, fusedProfile(f, shapes), this.K, { k }), s.ptPerUnit)
       const batch = new GlassBatch({ mesh }), rect = fusedBounds(shapes), plan = q.slice(0, len)
       if (d) {
         // the shared materials read the geometry's attributes by name: the meshes just take the new one

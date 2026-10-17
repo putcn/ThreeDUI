@@ -19,7 +19,7 @@ import { toColor } from '../src/color'
 import { evalNode } from './fixtures/tsl-eval'
 import { SHADOW_DECAL } from '../src/decoration/material'
 import { fusedProfile, fusedShapes } from '../src/surface/fused'
-import { extrudeSlab, fusedOutline } from '../src/glass/fused'
+import { extrudeSlab, fusedOutline, fusedSmoothing } from '../src/glass/fused'
 
 let ctx: SurfaceContext
 beforeAll(async () => {
@@ -1672,6 +1672,25 @@ describe('glass containers: fused slabs (GlassContainer, spec §5.2)', () => {
     expect(meshBatches(s)[0]!.geometry).not.toBe(geometry); expect(disposed).toBe(1)
     expect(meshBatches(s).every(m => m.geometry === meshBatches(s)[0]!.geometry)).toBe(true)
   })
+  it('close members fuse flat: at gap 8 the slab\'s top runs level over the neck (with k = 2 · spacing it would dip)', () => {
+    const { s, b } = fusedSurface()
+    b.setStyle({ left: 88 }); s.tick(0)                                           // gap 8
+    /** The highest y where the mesh's triangle edges cross the vertical plane x = 0 (the neck: the bounds' centre). */
+    const topAtNeck = (pos: ArrayLike<number>, index: ArrayLike<number>) => {
+      let top = -Infinity
+      for (let t = 0; t < index.length; t += 3) for (let e = 0; e < 3; e++) {
+        const i = index[t + e]!, j = index[t + (e + 1) % 3]!, x1 = pos[3 * i]!, x2 = pos[3 * j]!
+        if ((x1 <= 0 && 0 <= x2 && x1 < x2) || (x2 <= 0 && 0 <= x1 && x2 < x1)) top = Math.max(top, pos[3 * i + 1]! + ((pos[3 * j + 1]! - pos[3 * i + 1]!) * (0 - x1)) / (x2 - x1))
+      }
+      return top
+    }
+    const g = s.fused.batches[0]!.geometry                                        // ptPerUnit 1: the mesh in pt
+    // the members' top is 20 pt above the bounds' centre (40 tall, y 30…70)
+    expect(Math.abs(topAtNeck(g.getAttribute('position').array, g.getIndex()!.array) - 20)).toBeLessThan(0.5)
+    const shapes = [{ x: 0, y: 30, width: 80, height: 40, radius: 20 }, { x: 88, y: 30, width: 80, height: 40, radius: 20 }]
+    const fixed = extrudeSlab(fusedOutline(shapes, 16), shapes, 16, { thickness: T, fillet: 1, filletBottom: 1, minSide: 40 }, s.glass.K)
+    expect(topAtNeck(fixed.positions, fixed.index)).toBeLessThan(20 - 3)
+  })
   it("in the 'fill' mode a fused cluster draws its members as single glass with rims", () => {
     const { s, a, b, far } = fusedSurface({ ...ctx, quality: QUALITY.minimal })
     expect(meshBatches(s)).toEqual([])
@@ -1904,7 +1923,8 @@ describe('glass containers: fused slabs (GlassContainer, spec §5.2)', () => {
     box.appendChild(a); box.appendChild(b); s.root.appendChild(box); s.tick(0)
     const f = buildRenderList(s.model, theme, 'light').fused[0]!, shapes = fusedShapes(f), profile = fusedProfile(f, shapes)
     expect(profile).toEqual({ thickness: 20, fillet: 10, filletBottom: 6, minSide: 12 })
-    const mesh = (minSide: number) => extrudeSlab(fusedOutline(shapes, 16), shapes, 16, { ...profile, minSide }, s.glass.K).positions.map(v => v / 2)
+    const k = fusedSmoothing(shapes, 16)                                             // the Surface's smoothing (Task 17A)
+    const mesh = (minSide: number) => extrudeSlab(fusedOutline(shapes, 16, { k }), shapes, 16, { ...profile, minSide }, s.glass.K, { k }).positions.map(v => v / 2)
     const drawn = s.fused.batches[0]!.geometry.getAttribute('position').array
     expect(Array.from(drawn)).toEqual(Array.from(mesh(12)))
     expect(Array.from(drawn)).not.toEqual(Array.from(mesh(40)))                     // a's own short side would not fit b
