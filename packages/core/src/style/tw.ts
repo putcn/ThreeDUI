@@ -36,7 +36,8 @@ const SPACING: Record<string, keyof Base> = {
 const SPACING_PERCENT: ReadonlySet<keyof Base> = new Set<keyof Base>(['inset', 'top', 'right', 'bottom', 'left'])
 const LENGTH: Record<string, keyof Base> = { w: 'width', h: 'height', 'min-w': 'minWidth', 'max-w': 'maxWidth', 'min-h': 'minHeight', 'max-h': 'maxHeight' }
 
-function known(theme: Theme): string[] {
+/** Supported utility classes and parameterized grammar for a theme. */
+export function twClasses(theme: Theme): string[] {
   const colours = Object.keys(theme.colors.light)
   return [
     ...Object.keys(ENUMS), ...Object.keys(SPACING).map(k => `${k}-N`), ...Object.keys(LENGTH).map(k => `${k}-N`), 'font-{weight}', 'opacity-N', 'scale-N', 'scale-[N]',
@@ -110,7 +111,7 @@ function one(cls: string, theme: Theme, scope: string): Partial<Base> {
     if (lit !== undefined) return { bg: lit }
     if (Object.hasOwn(theme.colors.light, v)) return { bg: v }
   }
-  throw new GlassUIError(scope, `未知 class "${cls}"`, { allowed: known(theme), got: cls })
+  throw new GlassUIError(scope, `未知 class "${cls}"`, { allowed: twClasses(theme), got: cls })
 }
 
 export function parseTw(tw: string, theme: Theme, scope = 'tw'): Style {

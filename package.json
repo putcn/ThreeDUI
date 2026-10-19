@@ -12,7 +12,8 @@
     "playground:build": "vite build examples/playground",
     "spike:glass": "vite spikes/glass",
     "spike:glass3d": "vite spikes/glass3d --port 5174",
-    "spike:glyph": "vite spikes/glyph-cjk --port 5175"
+    "spike:glyph": "vite spikes/glyph-cjk --port 5175",
+    "manifest": "GLASSUI_WRITE_MANIFEST=1 vitest run packages/vue/test/manifest.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

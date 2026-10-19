@@ -79,7 +79,7 @@ export const Button = defineGlassComponent({
     loading: z.boolean().default(false).describe('加载中：内容换成三个轮流变亮的点，宽度不变，按钮不响应'),
     disabled: z.boolean().default(false).describe('禁用：变淡（不透明度 0.4），不响应指针和键盘，不在 Tab 顺序里'),
     fullWidth: z.boolean().default(false).describe('在父容器的交叉轴上拉满（纵向容器里即占满整行宽度）'),
-    glassId: z.string().optional().describe('玻璃形变标识（对应 Apple 的 glassEffectID）：同一 glassId 的按钮被移除、500 ms 内在别处出现时，新按钮从旧按钮的位置和大小形变到自己的位置（同一应用、同一 Surface 里才匹配），键盘焦点也跟过去；在 GlassContainer 里与相遇的素玻璃融合。换位置要让按钮重新挂载：v-if 两处各放一个，或换 key。旧按钮外面套着 GlassTransition（或 Transition）离场动画时不形变：离场结束才移除它，那时新按钮早已出现；KeepAlive 停用的按钮不算移除'),
+    glassId: z.string().optional().describe('玻璃形变标识（对应 Apple 的 glassEffectID）：同一 glassId 的按钮被移除、500 ms 内在别处出现时，新按钮从旧按钮的位置和大小形变到自己的位置（同一应用、同一个仍存活的 Surface 里才匹配，不能跨 Surface，同一时刻不能有重复标识），键盘焦点也跟过去；在 GlassContainer 里与相遇的素玻璃融合。换位置要让按钮重新挂载：v-if 两处各放一个，或换 key。旧按钮外面套着 GlassTransition（或 Transition）离场动画时不形变：离场结束才移除它，那时新按钮早已出现；当前不支持 KeepAlive；只有实际卸载再挂载才匹配'),
   }),
   events: { press: { payload: "{ pointerType: 'mouse' | 'touch' | 'pen' | 'xr' | 'keyboard' }", description: '按钮被触发：点击（带指针类型）、Enter 键，或空格键松开（keyboard）；禁用或加载中时不发' } },
   slots: { default: '代替 label 的内容', leading: '代替 leadingIcon 的前置内容', trailing: '代替 trailingIcon 的后置内容' },

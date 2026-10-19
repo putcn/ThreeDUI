@@ -1,0 +1,6119 @@
+{
+  "name": "@glassui/vue",
+  "version": "0.0.0",
+  "setup": "// Vite + @vitejs/plugin-vue; pin vue to 3.5.44 (the @glassui/vue runtime version).\n// main.ts — the host owns three.js, the canvas, camera and frame loop.\nimport { Color, PerspectiveCamera, Scene } from 'three'\nimport { WebGPURenderer } from 'three/webgpu'\nimport { createUIRoot } from '@glassui/render'\nimport { createGlassApp } from '@glassui/vue'\nimport App from './App.vue'\nconst renderer = new WebGPURenderer({ antialias: true })\nrenderer.setPixelRatio(Math.min(devicePixelRatio, 2))\nrenderer.setSize(innerWidth, innerHeight)\ndocument.body.style.margin = '0'\ndocument.body.appendChild(renderer.domElement)\nconst scene = new Scene()\nscene.background = new Color('#d9d4d2')\nconst camera = new PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 100)\ncamera.position.set(0, 0, 7)\nconst root = await createUIRoot({ renderer, scene, camera })\nconst app = createGlassApp(App, { root })\napp.mount() // detached: App owns its Surfaces (or mount an existing root.createSurface(...)).\nrenderer.setAnimationLoop(t => root.frame(t))\naddEventListener('resize', () => {\n  camera.aspect = innerWidth / innerHeight\n  camera.updateProjectionMatrix()\n  renderer.setSize(innerWidth, innerHeight)\n})\n// On teardown: app.unmount(); renderer.setAnimationLoop(null); root.dispose(); renderer.dispose().\n\n// App.vue — a spatial login and dashboard; Space drives the camera (no OrbitControls).\n<script setup lang=\"ts\">\nimport { ref } from 'vue'\nimport { Space, Block, Card, Text, Input, Button, BarChart3D } from '@glassui/vue'\nconst focus = ref('login'), email = ref('')\nconst visits = [{ label: 'Mon', value: 120 }, { label: 'Tue', value: 160 }]\n</script>\n<template>\n  <Space v-model:focus=\"focus\">\n    <Block name=\"login\" :width=\"488\" :height=\"560\">\n      <Text value=\"Welcome back\" size=\"2xl\" />\n      <Input v-model=\"email\" placeholder=\"Email\" />\n      <Button label=\"Log in\" variant=\"glassProminent\" @press=\"focus = 'dashboard'\" />\n    </Block>\n    <Block name=\"dashboard\" :width=\"880\" :height=\"620\">\n      <Card title=\"Visits\"><BarChart3D :data=\"visits\" /></Card>\n    </Block>\n  </Space>\n</template>",
+  "components": [
+    {
+      "name": "BarChart3D",
+      "description": "内置 3D 柱状图：柱子是圆角立方体，从所贴的玻璃面里长出来（进场时依次长出，数据变化时弹到新高度），受界面灯光照明并投下阴影。图表区高 200 pt、宽度撑满，n 根柱子 n 等分；下面是一行标签（13 pt、secondaryLabel），与柱子一一对齐。悬停一根柱子时它变亮变厚，柱顶上方 8 pt 处显示一个填充色小标签，写着 format(value)；点击发出 select。颜色是主题的颜色 token，随明暗切换。通常放在 <Card> 里（柱子从 Card 的玻璃里长出），只能用在 <Block>（世界层）里，不能放进 scroll。",
+      "props": [
+        {
+          "name": "data",
+          "type": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "柱下的标签"
+                },
+                "value": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "数值：不小于 0 的有限数"
+                },
+                "color": {
+                  "description": "柱子的颜色：颜色 token 或 #hex（默认 accent）",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "label",
+                "value"
+              ]
+            },
+            "description": "数据，每项 { label, value, color? }，一项一根柱子，从左到右排列；value 是不小于 0 的有限数。空数组时只显示\"暂无数据\""
+          },
+          "required": true,
+          "description": "数据，每项 { label, value, color? }，一项一根柱子，从左到右排列；value 是不小于 0 的有限数。空数组时只显示\"暂无数据\""
+        },
+        {
+          "name": "max",
+          "type": {
+            "description": "纵轴最大值：value 等于它的柱子满高（200 pt）；默认把最大的 value 向上取到好看的刻度顶（236 → 250、17 → 20、101 → 150；全为 0 时取 1）",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "description": "纵轴最大值：value 等于它的柱子满高（200 pt）；默认把最大的 value 向上取到好看的刻度顶（236 → 250、17 → 20、101 → 150；全为 0 时取 1）"
+        },
+        {
+          "name": "format",
+          "type": {
+            "description": "悬停标签里数值的写法 (v: number) => string，如 v => `${v} 次`；默认最多两位小数（1.5、2、0.33）"
+          },
+          "required": false,
+          "description": "悬停标签里数值的写法 (v: number) => string，如 v => `${v} 次`；默认最多两位小数（1.5、2、0.33）"
+        }
+      ],
+      "events": [
+        {
+          "name": "select",
+          "payload": "{ index: number; label: string; value: number }",
+          "description": "点击了某根柱子：它的序号（从 0 起）、标签与数值"
+        }
+      ],
+      "slots": [],
+      "vModel": [],
+      "examples": [
+        "<Space><Block name=\"home\" :width=\"880\" :height=\"700\"><Card title=\"一周活跃\"><BarChart3D :data=\"[{ label: '一', value: 120 }, { label: '二', value: 160 }, { label: '三', value: 90 }, { label: '四', value: 210 }, { label: '五', value: 180 }, { label: '六', value: 60 }, { label: '日', value: 40 }]\" /></Card></Block></Space>",
+        "<Space><Block name=\"sales\" :width=\"640\" :height=\"480\"><Card title=\"季度销售\"><BarChart3D :data=\"quarters\" :max=\"100\" :format=\"v => `${v} 万`\" @select=\"e => picked = e.label\" /></Card></Block></Space>",
+        "<Space><Block name=\"budget\" :width=\"488\" :height=\"420\"><Card title=\"本月收支\"><BarChart3D :data=\"[{ label: '收入', value: 82, color: 'success' }, { label: '支出', value: 64, color: 'danger' }]\" /></Card></Block></Space>"
+      ],
+      "mistakes": [
+        {
+          "mistake": ":data=\"[{ label: '一', value: '120' }]\"（value 写成字符串）",
+          "fix": "value 是数字：:data=\"[{ label: '一', value: 120 }]\"；负数、NaN、Infinity 也会报错"
+        },
+        {
+          "mistake": "<ScreenLayer><Surface …><BarChart3D :data=\"rows\" /></Surface></ScreenLayer>（放在屏幕层）",
+          "fix": "3D 图表只在世界层：放进 <Space> 里的 <Block>，最好包一张 <Card title=\"…\">"
+        },
+        {
+          "mistake": "把 BarChart3D 放进可滚动的 scroll 里",
+          "fix": "本期不支持裁剪 3D 物体：放在 scroll 外，Block 的高度给够（图表区 200 pt 加标签行）"
+        }
+      ]
+    },
+    {
+      "name": "BarMatrix3D",
+      "description": "3D 柱状矩阵：行（rows，如库区 A–F）× 列（cols，如品类）的方阵，每格立一根圆角柱，高度是数值（如库存件数），颜色是第四维 colorValues（如周转天数，默认绿 → 琥珀 → 红的色带；省略时按高度取色）。柱子立在一块半透明底板上，列标签沿底板前缘、行标签沿左缘平躺在底板上，随图表一起透视；图表像桌面一样向后倾，与 <SurfaceChart3D> 同一套倾角、底板与标签样式。进场时柱子沿对角线依次长出，数据变化时弹到新高度（减少动态效果时直接到位）。指针指到柱子上时它变亮并升高一点，下方读数行显示\"行 · 列 · 数值 · 颜色值\"并发出 hover；点击发出 select。有 colorValues 时读数行下有一条色带图例，标着最小值、最大值与 colorLabel。图表区高 height（默认 280）pt、宽度撑满。通常放在 <Card> 里，只能用在 <Block>（世界层）里，不能放进 scroll。",
+      "props": [
+        {
+          "name": "rows",
+          "type": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "行标签（纵深，从后往前），一行一个，如库区 \"A 区\"…\"F 区\"；第一行在最后面，最后一行离观者最近，平躺在底板左缘"
+          },
+          "required": true,
+          "description": "行标签（纵深，从后往前），一行一个，如库区 \"A 区\"…\"F 区\"；第一行在最后面，最后一行离观者最近，平躺在底板左缘"
+        },
+        {
+          "name": "cols",
+          "type": {
+            "minItems": 1,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "列标签（横向，从左到右），一列一个，如品类 \"日化\"、\"食品\"、\"家电\"；平躺在底板前缘，放不下时均匀隔几个显示一个"
+          },
+          "required": true,
+          "description": "列标签（横向，从左到右），一列一个，如品类 \"日化\"、\"食品\"、\"家电\"；平躺在底板前缘，放不下时均匀隔几个显示一个"
+        },
+        {
+          "name": "values",
+          "type": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "description": "数值，行 × 列：values[行][列]，共 rows.length 行、每行 cols.length 个，都是不小于 0 的有限数；数值就是柱子的高度（如库存件数）。空数组时只显示\"暂无数据\""
+          },
+          "required": true,
+          "description": "数值，行 × 列：values[行][列]，共 rows.length 行、每行 cols.length 个，都是不小于 0 的有限数；数值就是柱子的高度（如库存件数）。空数组时只显示\"暂无数据\""
+        },
+        {
+          "name": "colorValues",
+          "type": {
+            "description": "第四维：每格一个有限数（如周转天数），与 values 同形（行 × 列）；柱子的颜色按它在自身最小值到最大值之间的位置在色带上取（最小取色带第一色、最大取最后一色，全相等取中间色），并在读数行下显示色带图例。省略时颜色按 数值 / max 取",
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            }
+          },
+          "required": false,
+          "description": "第四维：每格一个有限数（如周转天数），与 values 同形（行 × 列）；柱子的颜色按它在自身最小值到最大值之间的位置在色带上取（最小取色带第一色、最大取最后一色，全相等取中间色），并在读数行下显示色带图例。省略时颜色按 数值 / max 取"
+        },
+        {
+          "name": "colorRamp",
+          "type": {
+            "description": "色带：2–6 个颜色 token 或 #hex，从低到高。默认 [\"#34c759\", \"#ffb86b\", \"#ff6b6b\"]（绿 → 琥珀 → 红：周转天数少为好，所以低值为绿）",
+            "minItems": 2,
+            "maxItems": 6,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required": false,
+          "description": "色带：2–6 个颜色 token 或 #hex，从低到高。默认 [\"#34c759\", \"#ffb86b\", \"#ff6b6b\"]（绿 → 琥珀 → 红：周转天数少为好，所以低值为绿）"
+        },
+        {
+          "name": "colorLabel",
+          "type": {
+            "description": "colorValues 的名称，如 \"周转\"：写在图例色带下方，也原样放在读数里颜色值的前面（\"周转 12 天\"）",
+            "type": "string"
+          },
+          "required": false,
+          "description": "colorValues 的名称，如 \"周转\"：写在图例色带下方，也原样放在读数里颜色值的前面（\"周转 12 天\"）"
+        },
+        {
+          "name": "max",
+          "type": {
+            "description": "满高对应的数值；默认把最大值向上取到好看的刻度顶（4580 → 5000、17 → 20；全为 0 时取 1）。比它大的数值按它封顶（柱子不会更高，读数仍显示原值）",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "description": "满高对应的数值；默认把最大值向上取到好看的刻度顶（4580 → 5000、17 → 20；全为 0 时取 1）。比它大的数值按它封顶（柱子不会更高，读数仍显示原值）"
+        },
+        {
+          "name": "format",
+          "type": {
+            "description": "读数里数值的写法 (v: number) => string，如 v => `${v.toLocaleString()} 件`；默认最多两位小数（1.5、2、0.33）"
+          },
+          "required": false,
+          "description": "读数里数值的写法 (v: number) => string，如 v => `${v.toLocaleString()} 件`；默认最多两位小数（1.5、2、0.33）"
+        },
+        {
+          "name": "colorFormat",
+          "type": {
+            "description": "读数与图例里 colorValues 的写法 (v: number) => string，如 v => `${v} 天`；默认最多两位小数"
+          },
+          "required": false,
+          "description": "读数与图例里 colorValues 的写法 (v: number) => string，如 v => `${v} 天`；默认最多两位小数"
+        },
+        {
+          "name": "height",
+          "type": {
+            "default": 280,
+            "description": "图表区高度，pt（不含下方 20 pt 的读数行与有 colorValues 时 28 pt 的图例）；宽度撑满",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "default": 280,
+          "description": "图表区高度，pt（不含下方 20 pt 的读数行与有 colorValues 时 28 pt 的图例）；宽度撑满"
+        }
+      ],
+      "events": [
+        {
+          "name": "hover",
+          "payload": "{ row: number; col: number; value: number; colorValue?: number; rowLabel: string; colLabel: string } | null",
+          "description": "指向的柱子变了：行号、列号（从 0 起）、数值、颜色值（有 colorValues 时）与它的行标签、列标签；离开柱子时为 null。触屏不发（没有悬停）"
+        },
+        {
+          "name": "select",
+          "payload": "{ row: number; col: number; value: number; colorValue?: number; rowLabel: string; colLabel: string }",
+          "description": "点击了某根柱子：同 hover 的内容"
+        }
+      ],
+      "slots": [],
+      "vModel": [],
+      "examples": [
+        "<Space><Block name=\"overview\" :width=\"1100\" :height=\"760\"><Card title=\"库存分布 · 库区 × 品类\"><BarMatrix3D :rows=\"['A 区', 'B 区', 'C 区', 'D 区', 'E 区', 'F 区']\" :cols=\"categories\" :values=\"stock\" :color-values=\"coverDays\" color-label=\"周转\" :format=\"v => `${v.toLocaleString()} 件`\" :color-format=\"v => `${v} 天`\" @select=\"e => openZone(e.rowLabel, e.colLabel)\" /></Card></Block></Space>",
+        "<Space><Block name=\"slots\" :width=\"880\" :height=\"640\"><Card title=\"库位占用（个）\"><BarMatrix3D :rows=\"['1 层', '2 层', '3 层']\" :cols=\"['A 排', 'B 排', 'C 排', 'D 排']\" :values=\"[[42, 38, 50, 12], [30, 44, 47, 20], [18, 25, 33, 9]]\" :max=\"60\" :height=\"240\" /></Card></Block></Space>",
+        "<Space><Block name=\"quality\" :width=\"980\" :height=\"700\"><Card title=\"退货量 × 退货率\"><BarMatrix3D :rows=\"channels\" :cols=\"months\" :values=\"returns\" :color-values=\"returnRates\" :color-ramp=\"['#e8f5e9', 'success', '#ff9f0a', 'danger']\" color-label=\"退货率\" :color-format=\"v => `${v}%`\" @hover=\"e => focused = e\" /></Card></Block></Space>"
+      ],
+      "mistakes": [
+        {
+          "mistake": ":values=\"byCategory\"（6 列 × 6 行：把品类当成了行）",
+          "fix": "values[行][列]：行对应 rows（如库区），列对应 cols（如品类），形状必须是 rows.length × cols.length；需要时先转置。colorValues 同形"
+        },
+        {
+          "mistake": ":values=\"{ 'A 区': [4580, 1200], 'B 区': [2400, 3600] }\"（values 写成\"行 → 数组\"的对象）",
+          "fix": "values 是二维数组，行名放进 rows：:rows=\"['A 区', 'B 区']\" :values=\"[[4580, 1200], [2400, 3600]]\""
+        },
+        {
+          "mistake": ":color-values=\"coverDays\" 却少了一行或一列（与 values 不同形）",
+          "fix": "colorValues 与 values 一一对应，同样 rows.length 行、每行 cols.length 个；没有第四维时省略 colorValues，颜色就按高度取"
+        },
+        {
+          "mistake": "<ScreenLayer><Surface …><BarMatrix3D … /></Surface></ScreenLayer>，或放进 scroll",
+          "fix": "3D 图表只在世界层：放进 <Space> 里的 <Block>（最好包一张 <Card title=\"…\">），不能放进可滚动的 scroll"
+        }
+      ]
+    },
+    {
+      "name": "Block",
+      "description": "空间界面里的一块界面：一块玻璃背板的世界层 Surface，只能放在 <Space> 里（name 在 Space 里唯一）。width / height 是 pt，固定不随内容撑开（ptPerUnit 默认 244 pt 一个世界单位）。没给 position 时 Space 把它排在弧上，镜头对焦到焦点 Block 的正前方。出现时从 enterFrom 弹到原位，被 v-if / v-for 移除或 Space 卸载时飞到 leaveTo 并淡出，内容随它一起飞走后才移除。默认插槽是内容，排在一个纵向排列的内容盒里（padding 40、gap 24）；tw / class / style 落到这个内容盒上。非焦点 Block 向后退一点（沿自身 −z 0.4、缩到 0.96），焦点切换时用弹簧移过去；它看得见也点得着，但一次按下只把它设为焦点（Space 发出 update:focus），不传给里面的控件，也不显示悬停。分组用 <Card>：更薄的玻璃（圆角 24 pt），浮在背板上方 24 pt 并在背板上投下阴影，Block 进场时依次升起。",
+      "props": [
+        {
+          "name": "name",
+          "type": {
+            "type": "string",
+            "minLength": 1,
+            "description": "名字，在 Space 里唯一：v-model:focus 用它指定焦点 Block；弧上的位置也按名字记住（v-if 移除再回来，回到原位）"
+          },
+          "required": true,
+          "description": "名字，在 Space 里唯一：v-model:focus 用它指定焦点 Block；弧上的位置也按名字记住（v-if 移除再回来，回到原位）"
+        },
+        {
+          "name": "width",
+          "type": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "宽，pt（固定）"
+          },
+          "required": true,
+          "description": "宽，pt（固定）"
+        },
+        {
+          "name": "height",
+          "type": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "高，pt（固定，不随内容撑开：内容超出时开发期会 console.warn）"
+          },
+          "required": true,
+          "description": "高，pt（固定，不随内容撑开：内容超出时开发期会 console.warn）"
+        },
+        {
+          "name": "position",
+          "type": {
+            "description": "Block 中心的位置 [x, y, z]，世界单位；省略时由 Space 排在弧上（给了就不占弧上的位置）",
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "required": false,
+          "description": "Block 中心的位置 [x, y, z]，世界单位；省略时由 Space 排在弧上（给了就不占弧上的位置）"
+        },
+        {
+          "name": "rotation",
+          "type": {
+            "description": "旋转 [x, y, z]，弧度，XYZ 顺序；省略时取弧上的朝向（正对弧心），给了 position 而省略它时不旋转",
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "required": false,
+          "description": "旋转 [x, y, z]，弧度，XYZ 顺序；省略时取弧上的朝向（正对弧心），给了 position 而省略它时不旋转"
+        },
+        {
+          "name": "scale",
+          "type": {
+            "description": "缩放：一个数或 [x, y, z]（默认 1）",
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3
+              }
+            ]
+          },
+          "required": false,
+          "description": "缩放：一个数或 [x, y, z]（默认 1）"
+        },
+        {
+          "name": "radius",
+          "type": {
+            "default": 48,
+            "description": "圆角，pt：背板和内容盒的圆角；内容盒里写 radius: concentric 的子项按它减去 40 pt 内边距取圆角（Card 默认 24 pt，不随它变）",
+            "type": "number",
+            "minimum": 0
+          },
+          "required": false,
+          "default": 48,
+          "description": "圆角，pt：背板和内容盒的圆角；内容盒里写 radius: concentric 的子项按它减去 40 pt 内边距取圆角（Card 默认 24 pt，不随它变）"
+        },
+        {
+          "name": "background",
+          "type": {
+            "default": "glass",
+            "description": "背景：glass（玻璃背板，默认）、none（透明）或颜色 token / #hex（不透明底色）",
+            "type": "string"
+          },
+          "required": false,
+          "default": "glass",
+          "description": "背景：glass（玻璃背板，默认）、none（透明）或颜色 token / #hex（不透明底色）"
+        },
+        {
+          "name": "ptPerUnit",
+          "type": {
+            "description": "每个世界单位多少 pt（默认 244）：越大，同样 pt 尺寸的 Block 在场景里越小",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "description": "每个世界单位多少 pt（默认 244）：越大，同样 pt 尺寸的 Block 在场景里越小"
+        },
+        {
+          "name": "enterFrom",
+          "type": {
+            "default": {
+              "position": [
+                0,
+                0,
+                -1.2
+              ],
+              "scale": 0.92,
+              "opacity": 0
+            },
+            "description": "进场起点 { position?, rotation?, scale?, opacity? }：相对原位的偏移，在 Block 自己的坐标系里（−z 是远离观众）；position 与 rotation 相加，scale 与 opacity 相乘。整个替换默认值，省略的字段不偏移（opacity 省略即 1）。默认 { position: [0, 0, -1.2], scale: 0.92, opacity: 0 }：从后方淡入",
+            "type": "object",
+            "properties": {
+              "position": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "rotation": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "scale": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 3,
+                    "maxItems": 3
+                  }
+                ]
+              },
+              "opacity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "required": false,
+          "default": {
+            "position": [
+              0,
+              0,
+              -1.2
+            ],
+            "scale": 0.92,
+            "opacity": 0
+          },
+          "description": "进场起点 { position?, rotation?, scale?, opacity? }：相对原位的偏移，在 Block 自己的坐标系里（−z 是远离观众）；position 与 rotation 相加，scale 与 opacity 相乘。整个替换默认值，省略的字段不偏移（opacity 省略即 1）。默认 { position: [0, 0, -1.2], scale: 0.92, opacity: 0 }：从后方淡入"
+        },
+        {
+          "name": "leaveTo",
+          "type": {
+            "default": {
+              "position": [
+                0,
+                0,
+                -1.5
+              ],
+              "scale": 0.9,
+              "opacity": 0
+            },
+            "description": "离场终点，写法同 enterFrom；飞到这里后 Block 才移除，内容随它一起飞走。默认 { position: [0, 0, -1.5], scale: 0.9, opacity: 0 }：向后飞并淡出；向左飞出如 { position: [-4, 0, -1], opacity: 0 }",
+            "type": "object",
+            "properties": {
+              "position": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "rotation": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "scale": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    ],
+                    "items": false,
+                    "minItems": 3,
+                    "maxItems": 3
+                  }
+                ]
+              },
+              "opacity": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "required": false,
+          "default": {
+            "position": [
+              0,
+              0,
+              -1.5
+            ],
+            "scale": 0.9,
+            "opacity": 0
+          },
+          "description": "离场终点，写法同 enterFrom；飞到这里后 Block 才移除，内容随它一起飞走。默认 { position: [0, 0, -1.5], scale: 0.9, opacity: 0 }：向后飞并淡出；向左飞出如 { position: [-4, 0, -1], opacity: 0 }"
+        }
+      ],
+      "events": [
+        {
+          "name": "error",
+          "payload": "Error",
+          "description": "该 Block 的 Surface 渲染失败（它已停止绘制）"
+        }
+      ],
+      "slots": [
+        {
+          "name": "default",
+          "description": "Block 的内容（纵向排列，padding 40、gap 24）"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<Space v-model:focus=\"page\"><Block name=\"login\" :width=\"488\" :height=\"560\"><Text value=\"登录\" size=\"3xl\" :weight=\"700\" /><Text value=\"欢迎回来\" color=\"secondaryLabel\" /></Block><Block name=\"home\" :width=\"880\" :height=\"620\"><Text value=\"首页\" size=\"3xl\" :weight=\"700\" /></Block></Space>",
+        "<Space><Block name=\"stats\" :width=\"880\" :height=\"400\" tw=\"justify-center\"><Stack direction=\"horizontal\" :gap=\"16\"><Card title=\"本周活跃\" :style=\"{ flexGrow: 1, flexBasis: 0 }\"><Text value=\"1,284\" size=\"3xl\" :weight=\"700\" /></Card><Card title=\"完成任务\" :style=\"{ flexGrow: 1, flexBasis: 0 }\"><Text value=\"36\" size=\"3xl\" :weight=\"700\" /></Card></Stack></Block></Space>",
+        "<Space><Block name=\"list\" :width=\"560\" :height=\"480\"><Text value=\"列表\" size=\"2xl\" :weight=\"700\" /></Block><Block v-if=\"open\" name=\"detail\" :width=\"560\" :height=\"480\" :position=\"[3, 0, 2]\" :rotation=\"[0, -0.6, 0]\" :leave-to=\"{ position: [4, 0, 0], opacity: 0 }\"><Text value=\"详情\" size=\"2xl\" :weight=\"700\" /></Block></Space>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Block> 放在 Space 外（直接放在页面或 <Surface> 里）",
+          "fix": "Block 只能是 <Space> 的直接子项：<Space><Block name=\"a\" …>…</Block></Space>"
+        },
+        {
+          "mistake": "<Block name=\"a\" width=\"400\" height=\"300\">",
+          "fix": "<Block name=\"a\" :width=\"400\" :height=\"300\">（数字要绑定）"
+        },
+        {
+          "mistake": "给 Block 里的内容写 pointerEvents: 'auto'（如 :style=\"{ pointerEvents: 'auto' }\"）",
+          "fix": "不要写：非焦点 Block 的内容盒用 pointerEvents: 'none' 挡住按下与悬停，里面写 'auto' 会重新打开，按下直接落到控件上而不是切换焦点；焦点 Block 本来就接收指针"
+        }
+      ]
+    },
+    {
+      "name": "Box",
+      "description": "通用容器：一个 flex 盒子（默认纵向排列），布局、间距、背景色、圆角都用 tw / style / class 设置。它默认没有玻璃：普通内容用背景色，需要玻璃分组时用 Card（Block 内）或 background=\"glass\" 的 Surface，控件里的玻璃可以嵌套。只是把子项排成一行或一列时用 Stack 更直接。",
+      "props": [],
+      "events": [],
+      "slots": [
+        {
+          "name": "default",
+          "description": "子项"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<Box tw=\"flex-row items-center gap-3 p-4\"><Icon name=\"info\" /><Text value=\"提示\" /></Box>",
+        "<Box :style=\"{ width: 64, height: 64, bg: 'accent', radius: 16 }\" />"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Box tw=\"bg-glass\">（内容区用玻璃）",
+          "fix": "普通内容用不透明背景色，如 tw=\"bg-fill rounded-xl\"；玻璃容器用 Card（Block 内）或 background=\"glass\" 的 Surface"
+        },
+        {
+          "mistake": "<Box direction=\"horizontal\">",
+          "fix": "Box 没有自己的属性：用 tw=\"flex-row\"，或 <Stack direction=\"horizontal\">"
+        }
+      ]
+    },
+    {
+      "name": "Button",
+      "description": "按钮（Liquid Glass 控件）。variant 决定外观：glass 清玻璃（次要操作，默认）；glassProminent 带强调色发光的玻璃，白色粗体文字（主操作，每屏通常只有一个）；filled 实心强调色、tinted 淡强调色底、plain 无底的强调色文字（这三种不是玻璃）。size：small 高 36、regular 高 52、large 高 80（参考稿主按钮的尺寸）；文字、图标、左右留白随尺寸。shape：capsule 胶囊（默认）、roundedRectangle 圆角矩形（圆角为高的 23%）、circle 正圆（只放图标：用 leadingIcon 或默认插槽，不能有 label）。内容是前置图标 + 文字 + 后置图标，居中成一组，宽度随内容；fullWidth 让它在交叉轴拉满父容器。注意父容器纵向且 align 为 stretch（Stack、Box 的默认）时子项本来就会被拉宽：要按内容宽度就给父容器 align=\"start\" 或 \"center\"。鼠标、触控笔悬停时上浮 6 pt、朝指针倾斜（最多 3°）：玻璃按钮高光增强；filled 底色变亮、tinted 底色加深、plain 变淡（这三种画在平面上，上浮与倾斜只在玻璃上——如 Card 里——才看得出）。按下缩到 0.96（filled、plain 同时变淡）；触屏没有悬停效果，减少动态效果时不倾斜。点击、Enter、空格（按下时显示按压，松开时触发）都发出 press；可以用 Tab 聚焦，键盘聚焦时显示焦点环。loading 时内容换成三个轮流变亮的点（宽度不变），按钮不响应；disabled 时变淡、不响应、不在 Tab 顺序里。放在 Card 里按嵌套玻璃绘制。",
+      "props": [
+        {
+          "name": "variant",
+          "type": {
+            "default": "glass",
+            "description": "外观：glass 清玻璃（默认，次要操作）、glassProminent 发光玻璃（主操作）、filled 实心强调色、tinted 淡强调色底、plain 无底强调色文字",
+            "type": "string",
+            "enum": [
+              "glass",
+              "glassProminent",
+              "filled",
+              "tinted",
+              "plain"
+            ]
+          },
+          "required": false,
+          "default": "glass",
+          "description": "外观：glass 清玻璃（默认，次要操作）、glassProminent 发光玻璃（主操作）、filled 实心强调色、tinted 淡强调色底、plain 无底强调色文字"
+        },
+        {
+          "name": "size",
+          "type": {
+            "default": "regular",
+            "description": "尺寸：small 高 36、regular 高 52（默认）、large 高 80",
+            "type": "string",
+            "enum": [
+              "small",
+              "regular",
+              "large"
+            ]
+          },
+          "required": false,
+          "default": "regular",
+          "description": "尺寸：small 高 36、regular 高 52（默认）、large 高 80"
+        },
+        {
+          "name": "shape",
+          "type": {
+            "default": "capsule",
+            "description": "形状：capsule 胶囊（默认）、roundedRectangle 圆角矩形（圆角为高的 23%）、circle 正圆（只放图标，不能有 label）",
+            "type": "string",
+            "enum": [
+              "capsule",
+              "roundedRectangle",
+              "circle"
+            ]
+          },
+          "required": false,
+          "default": "capsule",
+          "description": "形状：capsule 胶囊（默认）、roundedRectangle 圆角矩形（圆角为高的 23%）、circle 正圆（只放图标，不能有 label）"
+        },
+        {
+          "name": "label",
+          "type": {
+            "description": "按钮文字；给了默认插槽时由插槽代替",
+            "type": "string"
+          },
+          "required": false,
+          "description": "按钮文字；给了默认插槽时由插槽代替"
+        },
+        {
+          "name": "leadingIcon",
+          "type": {
+            "description": "文字前的内置图标（circle 的图标也写在这里）；给了 leading 插槽时由插槽代替",
+            "type": "string",
+            "enum": [
+              "user",
+              "mail",
+              "lock",
+              "eye",
+              "check",
+              "x",
+              "arrow-right",
+              "apple",
+              "google",
+              "eye-slash",
+              "chevron-left",
+              "chevron-right",
+              "chevron-up",
+              "chevron-down",
+              "plus",
+              "minus",
+              "search",
+              "gear",
+              "info",
+              "warning",
+              "star",
+              "heart"
+            ]
+          },
+          "required": false,
+          "description": "文字前的内置图标（circle 的图标也写在这里）；给了 leading 插槽时由插槽代替"
+        },
+        {
+          "name": "trailingIcon",
+          "type": {
+            "description": "文字后的内置图标；给了 trailing 插槽时由插槽代替",
+            "type": "string",
+            "enum": [
+              "user",
+              "mail",
+              "lock",
+              "eye",
+              "check",
+              "x",
+              "arrow-right",
+              "apple",
+              "google",
+              "eye-slash",
+              "chevron-left",
+              "chevron-right",
+              "chevron-up",
+              "chevron-down",
+              "plus",
+              "minus",
+              "search",
+              "gear",
+              "info",
+              "warning",
+              "star",
+              "heart"
+            ]
+          },
+          "required": false,
+          "description": "文字后的内置图标；给了 trailing 插槽时由插槽代替"
+        },
+        {
+          "name": "loading",
+          "type": {
+            "default": false,
+            "description": "加载中：内容换成三个轮流变亮的点，宽度不变，按钮不响应",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "加载中：内容换成三个轮流变亮的点，宽度不变，按钮不响应"
+        },
+        {
+          "name": "disabled",
+          "type": {
+            "default": false,
+            "description": "禁用：变淡（不透明度 0.4），不响应指针和键盘，不在 Tab 顺序里",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "禁用：变淡（不透明度 0.4），不响应指针和键盘，不在 Tab 顺序里"
+        },
+        {
+          "name": "fullWidth",
+          "type": {
+            "default": false,
+            "description": "在父容器的交叉轴上拉满（纵向容器里即占满整行宽度）",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "在父容器的交叉轴上拉满（纵向容器里即占满整行宽度）"
+        },
+        {
+          "name": "glassId",
+          "type": {
+            "description": "玻璃形变标识（对应 Apple 的 glassEffectID）：同一 glassId 的按钮被移除、500 ms 内在别处出现时，新按钮从旧按钮的位置和大小形变到自己的位置（同一应用、同一个仍存活的 Surface 里才匹配，不能跨 Surface，同一时刻不能有重复标识），键盘焦点也跟过去；在 GlassContainer 里与相遇的素玻璃融合。换位置要让按钮重新挂载：v-if 两处各放一个，或换 key。旧按钮外面套着 GlassTransition（或 Transition）离场动画时不形变：离场结束才移除它，那时新按钮早已出现；当前不支持 KeepAlive；只有实际卸载再挂载才匹配",
+            "type": "string"
+          },
+          "required": false,
+          "description": "玻璃形变标识（对应 Apple 的 glassEffectID）：同一 glassId 的按钮被移除、500 ms 内在别处出现时，新按钮从旧按钮的位置和大小形变到自己的位置（同一应用、同一个仍存活的 Surface 里才匹配，不能跨 Surface，同一时刻不能有重复标识），键盘焦点也跟过去；在 GlassContainer 里与相遇的素玻璃融合。换位置要让按钮重新挂载：v-if 两处各放一个，或换 key。旧按钮外面套着 GlassTransition（或 Transition）离场动画时不形变：离场结束才移除它，那时新按钮早已出现；当前不支持 KeepAlive；只有实际卸载再挂载才匹配"
+        }
+      ],
+      "events": [
+        {
+          "name": "press",
+          "payload": "{ pointerType: 'mouse' | 'touch' | 'pen' | 'xr' | 'keyboard' }",
+          "description": "按钮被触发：点击（带指针类型）、Enter 键，或空格键松开（keyboard）；禁用或加载中时不发"
+        }
+      ],
+      "slots": [
+        {
+          "name": "default",
+          "description": "代替 label 的内容"
+        },
+        {
+          "name": "leading",
+          "description": "代替 leadingIcon 的前置内容"
+        },
+        {
+          "name": "trailing",
+          "description": "代替 trailingIcon 的后置内容"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<Button variant=\"glassProminent\" size=\"large\" label=\"Create account\" trailing-icon=\"arrow-right\" full-width @press=\"submit\" />",
+        "<Stack direction=\"horizontal\" :gap=\"12\" align=\"center\"><Button label=\"取消\" @press=\"close\" /><Button variant=\"glassProminent\" label=\"保存\" leading-icon=\"check\" :loading=\"saving\" @press=\"save\" /></Stack>",
+        "<Button shape=\"circle\" leading-icon=\"plus\" @press=\"add\" />"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Button label=\"提交\" @click=\"submit\" />",
+          "fix": "@press=\"submit\"：press 还覆盖 Enter 与空格键，禁用、加载中时不发；@click 落到宿主节点上，禁用时照样触发"
+        },
+        {
+          "mistake": "<Button shape=\"circle\" label=\"添加\" />",
+          "fix": "circle 只放图标：<Button shape=\"circle\" leading-icon=\"plus\" />；要文字就用默认的 capsule"
+        },
+        {
+          "mistake": "<Button variant=\"primary\" />",
+          "fix": "主操作用 variant=\"glassProminent\"，次要操作用默认的 glass"
+        },
+        {
+          "mistake": "<Button><Text value=\"保存\" /></Button>",
+          "fix": "<Button label=\"保存\" />：label 按尺寸取字号，按 variant 取颜色与字重"
+        },
+        {
+          "mistake": "<Stack><Button label=\"确定\" /></Stack>（以为按钮按内容宽度）",
+          "fix": "纵向 Stack 默认 align stretch，会把按钮拉满整行：按内容宽度用 <Stack align=\"start\">（或 center）；要拉满就明写 full-width"
+        },
+        {
+          "mistake": "<Button v-for=\"t in tabs\" :key=\"t\" glass-id=\"tab-active\" :variant=\"t === tab ? 'glassProminent' : 'glass'\" />（以为切换选中项时高亮会形变过去）",
+          "fix": "只有选中的那个带 glass-id，并让它在选中项变化时重新挂载：:key=\"t === tab ? t + '-on' : t\"、:glass-id=\"t === tab ? 'tab-active' : undefined\"；同一个按钮只换属性不会形变，几个按钮同时带同一个 glass-id 也不会"
+        },
+        {
+          "mistake": "<Button :variant=\"saved ? 'filled' : 'glass'\" />（运行时在玻璃与非玻璃外观之间切换）",
+          "fix": "glass、glassProminent 是玻璃节点，filled、tinted、plain 是普通 box：两组之间切换会重建按钮节点，焦点和进行中的动画（上浮、倾斜、按压）都会丢失；运行时切换外观就在同一组里切（glass ↔ glassProminent，或 filled ↔ tinted ↔ plain）"
+        }
+      ]
+    },
+    {
+      "name": "Card",
+      "description": "Block 里的分组容器：一块更薄的玻璃（厚 12 pt），圆角 24 pt（主题的 xl），默认纵向排列、padding 24、gap 12，放在 Block 里、Stack 里都一样。它浮在背板上方 24 pt，在背板上投下真实的阴影；指针悬停时上浮到 40 pt 并朝指针倾斜（每个方向最多 4°），离开时回落。悬停只在焦点 Block 里有（非焦点 Block 的内容不接收指针），触屏没有悬停效果，减少动态效果时只上浮、不倾斜。Block 进场时，里面的 Card 从 0 升到 24 pt，一起出现的按出现顺序每张晚 60 ms；motion 为 frozen 时直接就位。这些都是 Card 自带的，不用写什么。title 是排在最上面的标题（17 pt、600 字重）。style 落到 Card 本身，按键覆盖这些默认值（如 :style=\"{ flexGrow: 1, flexBasis: 0 }\" 让几张 Card 平分一行，:style=\"{ padding: 16 }\" 改内边距）；浮起与倾斜的动画手感也写在 style 的 transition 里（默认 { elevation: smooth, tilt: snappy }）。里面可以再放玻璃控件（按钮、输入框），它们按嵌套玻璃绘制。Card 自己就是玻璃，不用再包玻璃的 Box。",
+      "props": [
+        {
+          "name": "title",
+          "type": {
+            "description": "标题，17 pt、600 字重，排在内容最上面；省略时没有标题",
+            "type": "string"
+          },
+          "required": false,
+          "description": "标题，17 pt、600 字重，排在内容最上面；省略时没有标题"
+        }
+      ],
+      "events": [],
+      "slots": [
+        {
+          "name": "default",
+          "description": "卡片内容"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<Card title=\"本周活跃\"><Text value=\"1,284\" size=\"3xl\" :weight=\"700\" /><Text value=\"比上周 +12%\" color=\"success\" size=\"sm\" /></Card>",
+        "<Stack direction=\"horizontal\" :gap=\"16\"><Card title=\"完成任务\" :style=\"{ flexGrow: 1, flexBasis: 0 }\"><Text value=\"36\" size=\"3xl\" :weight=\"700\" /></Card><Card title=\"存储用量\" :style=\"{ flexGrow: 1, flexBasis: 0 }\"><Text value=\"68%\" size=\"3xl\" :weight=\"700\" /></Card></Stack>",
+        "<Card title=\"通知\" :style=\"{ padding: 16, gap: 8, transition: { elevation: 'bouncy' } }\"><Text value=\"每天 9:00 推送摘要\" color=\"secondaryLabel\" /></Card>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Card><Box tw=\"bg-glass rounded-xl p-4\">…</Box></Card>（Card 里再包一层玻璃 Box）",
+          "fix": "Card 不需要再包一层玻璃 Box：内容直接放进 Card；要改内边距或圆角就写在 Card 的 style 上（:style=\"{ padding: 16 }\"）"
+        },
+        {
+          "mistake": "<Card :style=\"{ elevation: 40 }\">（想让 Card 浮得更高或贴住背板）",
+          "fix": "elevation 不是样式：Card 自己管浮起（静止 24 pt，悬停 40 pt，进场从 0 升起）；能调的是动画手感，如 :style=\"{ transition: { elevation: 'bouncy' } }\""
+        }
+      ]
+    },
+    {
+      "name": "Checkbox",
+      "description": "复选框（Liquid Glass 控件）：44 × 44、圆角 12 的清玻璃方块，选中时里面是强调色的对勾（缩放淡入），indeterminate 时是一条横线（不论 checked）。受控组件：显示的永远是 checked，用 v-model:checked 双向绑定，点击只发出新值。点方块或标签、方块聚焦时按 Enter、空格（按下时显示按压，松开时切换）都会切换，依次发出 update:checked 与 change；同 HTML 的 label，按住标签时方块显示按压，点标签还会让方块获得焦点（不显示焦点环）；行被父容器拉宽后多出的空白不响应点击。indeterminate 时切换总是发出 true，父组件收到后自己把 indeterminate 清掉（例如\"全选\"）。label（或默认插槽）在方块右侧，相距 16 pt。可以用 Tab 聚焦方块，键盘聚焦时显示焦点环；鼠标、触控笔悬停在方块上时上浮 6 pt、朝指针倾斜（最多 3°）、高光增强，按下缩到 0.9；触屏没有悬停效果，减少动态效果时不倾斜。disabled 时整行变淡、不响应、不在 Tab 顺序里。",
+      "props": [
+        {
+          "name": "checked",
+          "type": {
+            "default": false,
+            "description": "是否选中；用 v-model:checked 双向绑定（受控：组件自己不改它，只发出新值）",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "是否选中；用 v-model:checked 双向绑定（受控：组件自己不改它，只发出新值）"
+        },
+        {
+          "name": "indeterminate",
+          "type": {
+            "default": false,
+            "description": "部分选中：显示横线，不论 checked；此时切换发出 checked = true，由父组件清掉 indeterminate",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "部分选中：显示横线，不论 checked；此时切换发出 checked = true，由父组件清掉 indeterminate"
+        },
+        {
+          "name": "disabled",
+          "type": {
+            "default": false,
+            "description": "禁用：整行（方块与标签）变淡到 0.4，不响应指针和键盘，不在 Tab 顺序里",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "禁用：整行（方块与标签）变淡到 0.4，不响应指针和键盘，不在 Tab 顺序里"
+        },
+        {
+          "name": "label",
+          "type": {
+            "description": "方块右侧的标签，点击它也会切换；给了默认插槽时由插槽代替",
+            "type": "string"
+          },
+          "required": false,
+          "description": "方块右侧的标签，点击它也会切换；给了默认插槽时由插槽代替"
+        }
+      ],
+      "events": [
+        {
+          "name": "update:checked",
+          "payload": "boolean",
+          "description": "用户切换后的新值（v-model:checked 靠它更新；indeterminate 时总是 true）；禁用时不发"
+        },
+        {
+          "name": "change",
+          "payload": "boolean",
+          "description": "用户切换了复选框：新值，紧跟 update:checked 发出；禁用时不发"
+        }
+      ],
+      "slots": [
+        {
+          "name": "default",
+          "description": "代替 label 的标签内容（同样在方块右侧，点击也会切换）"
+        }
+      ],
+      "vModel": [
+        "v-model:checked"
+      ],
+      "examples": [
+        "<Checkbox v-model:checked=\"agree\" label=\"我已阅读并同意服务条款\" />",
+        "<Checkbox :checked=\"all\" :indeterminate=\"some && !all\" label=\"全选\" @change=\"selectAll\" />",
+        "<Checkbox v-model:checked=\"news\" disabled>订阅产品动态</Checkbox>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Checkbox v-model=\"agree\" />",
+          "fix": "<Checkbox v-model:checked=\"agree\" />：复选框的值叫 checked，不是 modelValue"
+        },
+        {
+          "mistake": "<Checkbox label=\"同意\" />（没有绑定，以为点了会自己变）",
+          "fix": "Checkbox 是受控的，显示的永远是 checked：用 v-model:checked=\"agree\"，或 :checked 加 @update:checked 自己接住新值"
+        },
+        {
+          "mistake": "<Checkbox :checked=\"all\" indeterminate @change=\"selectAll\" />（indeterminate 写死）",
+          "fix": ":indeterminate=\"some && !all\"：横线不论 checked 都显示，要由父组件在全选或全不选时把它算成 false"
+        }
+      ]
+    },
+    {
+      "name": "Dialog",
+      "description": "模态对话框：打开时整个屏幕铺上一层暗化背景，中间浮起一块玻璃面板（圆角 32，宽 width，默认 480，高度随内容），面板从 0.9 弹到原大小并淡入，背景同时淡入；关闭时反向退场，结束后移除。用 v-model:open 控制（受控：Dialog 自己不改 open）：用户按 Escape 或点击背景时发出 update:open（false）和 close（closeOnEscape / closeOnBackdrop 可关掉），父组件把 open 改成 false 时只关闭、不发 close。面板里是一列（padding 28、间距 20）：title（22 pt 粗体）、默认插槽、footer 插槽（右对齐的一行，间距 12，放按钮；footer 的按钮不会自动关闭对话框）。打开时键盘只在面板里（Tab 在面板内循环），第一个可聚焦的控件（如 Input）获得焦点；关闭时键盘和焦点回到打开前的 Surface 与控件（在 Space 里就是焦点 Block）。Dialog 在它所在的位置不占空间，可以写在任何组件里；tw / class / style / id 落到面板里的内容列上。motion 为 frozen 或减少动态效果时直接出现、直接消失。屏幕层的 Surface 按创建顺序叠放：对话框打开期间新建的 Surface 会叠在它上方。面板高度随内容、不滚动：内容高过屏幕时超出部分看不到，长内容放进对话框里一个固定高度的 <scroll>。",
+      "props": [
+        {
+          "name": "open",
+          "type": {
+            "default": false,
+            "description": "是否打开（v-model:open）：true 时显示；用户按 Escape 或点背景时发出 update:open（false），由 v-model 关闭",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "是否打开（v-model:open）：true 时显示；用户按 Escape 或点背景时发出 update:open（false），由 v-model 关闭"
+        },
+        {
+          "name": "title",
+          "type": {
+            "description": "标题，22 pt 粗体，在内容上方；省略时没有标题",
+            "type": "string"
+          },
+          "required": false,
+          "description": "标题，22 pt 粗体，在内容上方；省略时没有标题"
+        },
+        {
+          "name": "width",
+          "type": {
+            "default": 480,
+            "description": "面板宽，pt（默认 480）；高度随内容",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "default": 480,
+          "description": "面板宽，pt（默认 480）；高度随内容"
+        },
+        {
+          "name": "closeOnBackdrop",
+          "type": {
+            "default": true,
+            "description": "点面板外的暗化背景时关闭（默认 true）",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": true,
+          "description": "点面板外的暗化背景时关闭（默认 true）"
+        },
+        {
+          "name": "closeOnEscape",
+          "type": {
+            "default": true,
+            "description": "按 Escape 时关闭（默认 true）",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": true,
+          "description": "按 Escape 时关闭（默认 true）"
+        }
+      ],
+      "events": [
+        {
+          "name": "update:open",
+          "payload": "false",
+          "description": "用户要求关闭（按 Escape 或点击背景）：v-model:open 据此关闭"
+        },
+        {
+          "name": "close",
+          "payload": "无",
+          "description": "用户关闭了对话框（按 Escape 或点击背景）；父组件把 open 改为 false 时不发"
+        }
+      ],
+      "slots": [
+        {
+          "name": "default",
+          "description": "内容（标题下方，纵向排列，间距 20）"
+        },
+        {
+          "name": "footer",
+          "description": "底部按钮行（右对齐，间距 12）：通常是取消与确认 Button"
+        }
+      ],
+      "vModel": [
+        "v-model:open"
+      ],
+      "examples": [
+        "<Dialog v-model:open=\"confirming\" title=\"删除项目？\"><Text value=\"此操作不可撤销。\" color=\"secondaryLabel\" /><template #footer><Button label=\"取消\" @press=\"confirming = false\" /><Button variant=\"filled\" label=\"删除\" @press=\"remove\" /></template></Dialog>",
+        "<Dialog v-model:open=\"renaming\" title=\"重命名\" :width=\"420\"><Input v-model=\"name\" placeholder=\"新名称\" @submit=\"rename\" /><template #footer><Button label=\"取消\" @press=\"renaming = false\" /><Button variant=\"glassProminent\" label=\"保存\" @press=\"rename\" /></template></Dialog>",
+        "<Dialog v-model:open=\"syncing\" title=\"正在同步\" :close-on-backdrop=\"false\" :close-on-escape=\"false\"><Text value=\"请稍候，完成后自动关闭。\" color=\"secondaryLabel\" /></Dialog>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Dialog :open=\"show\">（只绑定 open，不处理 update:open）",
+          "fix": "Dialog 是受控的：<Dialog v-model:open=\"show\">；只写 :open 时按 Escape 或点背景只发出事件，对话框不会关"
+        },
+        {
+          "mistake": "<Dialog v-model=\"show\">",
+          "fix": "<Dialog v-model:open=\"show\">：开关是 open 属性，不是 modelValue"
+        },
+        {
+          "mistake": "<template #footer><Button label=\"取消\" /></template>（以为 footer 的按钮会自动关闭）",
+          "fix": "<Button label=\"取消\" @press=\"show = false\" />：按钮自己把 open 改为 false"
+        },
+        {
+          "mistake": "<Dialog v-if=\"show\" v-model:open=\"show\">",
+          "fix": "去掉 v-if，只用 v-model:open：v-if 卸载时面板立即消失，没有退场动画"
+        },
+        {
+          "mistake": "对话框打开期间再新建屏幕层 Surface（如此时才出现的 <Surface layer=\"screen\">，或改了它 fill / center 等创建时固定的属性）",
+          "fix": "屏幕层的 Surface 按创建顺序叠放，打开期间新建的会叠在对话框上方：要放在对话框里的内容写进 Dialog 的插槽，其余的 Surface 在打开对话框之前就创建好"
+        },
+        {
+          "mistake": "<Dialog title=\"选择城市\"><Stack><Text v-for=\"c in 300个城市\" … /></Stack></Dialog>（内容高过屏幕）",
+          "fix": "面板高度随内容、不滚动，超出屏幕的部分看不到：保持对话框简短；长列表放进固定高度的 <scroll :style=\"{ height: 360 }\">"
+        }
+      ]
+    },
+    {
+      "name": "GlassContainer",
+      "description": "玻璃容器（对应 Apple 的 GlassEffectContainer）：把子项排成一行（horizontal，默认）或一列（vertical），间距 gap（pt，默认 8），交叉轴居中；里面相邻的玻璃控件形状相距小于 spacing（pt，默认 16）时融合成一整块液态玻璃，拉开到 spacing 以上又各自分开。用于工具栏、导航坞、分段按钮组这类一排玻璃按钮。只有素玻璃会融合：variant=\"glass\" 的 Button 这类没有发光、没有着色的玻璃。工具栏里的主按钮（glassProminent、filled、tinted）单独成一块，不与旁边的素玻璃融合——这是有意的，就像 Apple 工具栏里被选中的项：glassProminent（发光）和 Switch（无论开关都带着色）是带自己边缘的单独玻璃，旁边的素玻璃在它两侧各自融合；filled、tinted、plain 的 Button 本来就不是玻璃。悬停的那一个上浮时整块玻璃跟着它的高度与高光。配合 Button 的 glassId：同一应用、同一个仍存活的 Surface 里，同一 glassId 的按钮被移除、500 ms 内在别处重新挂载时，新按钮从旧按钮的位置和大小形变过去，在容器里与相遇的素玻璃融合。容器本身不是玻璃，不画背景。",
+      "props": [
+        {
+          "name": "spacing",
+          "type": {
+            "default": 16,
+            "description": "融合距离，pt（默认 16）：两块玻璃的形状相距小于它时融成一块；gap 要小于它，按钮才会融合",
+            "type": "number",
+            "minimum": 0
+          },
+          "required": false,
+          "default": 16,
+          "description": "融合距离，pt（默认 16）：两块玻璃的形状相距小于它时融成一块；gap 要小于它，按钮才会融合"
+        },
+        {
+          "name": "direction",
+          "type": {
+            "default": "horizontal",
+            "description": "排列方向：horizontal 一行（默认）、vertical 一列",
+            "type": "string",
+            "enum": [
+              "horizontal",
+              "vertical"
+            ]
+          },
+          "required": false,
+          "default": "horizontal",
+          "description": "排列方向：horizontal 一行（默认）、vertical 一列"
+        },
+        {
+          "name": "gap",
+          "type": {
+            "default": 8,
+            "description": "子项间距，pt（默认 8）；不小于 spacing 时按钮之间不融合",
+            "type": "number",
+            "minimum": 0
+          },
+          "required": false,
+          "default": 8,
+          "description": "子项间距，pt（默认 8）；不小于 spacing 时按钮之间不融合"
+        }
+      ],
+      "events": [],
+      "slots": [
+        {
+          "name": "default",
+          "description": "子项：通常是一排 Button（shape=\"circle\" 的图标按钮或胶囊按钮）"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<GlassContainer><Button shape=\"circle\" leading-icon=\"plus\" @press=\"zoomIn\" /><Button shape=\"circle\" leading-icon=\"minus\" @press=\"zoomOut\" /><Button shape=\"circle\" leading-icon=\"search\" @press=\"find\" /></GlassContainer>",
+        "<GlassContainer :spacing=\"16\" :gap=\"8\"><Button v-for=\"v in views\" :key=\"v.name === current ? v.name + '-on' : v.name\" shape=\"circle\" :leading-icon=\"v.icon\" :variant=\"v.name === current ? 'glassProminent' : 'glass'\" :glass-id=\"v.name === current ? 'dock-active' : undefined\" @press=\"current = v.name\" /></GlassContainer>",
+        "<GlassContainer direction=\"vertical\" :gap=\"6\"><Button label=\"今日\" size=\"small\" /><Button label=\"本周\" size=\"small\" /><Button label=\"本月\" size=\"small\" /></GlassContainer>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<GlassContainer><Button variant=\"glassProminent\" label=\"保存\" /><Button label=\"取消\" /></GlassContainer>（以为主按钮也会融进那一条）",
+          "fix": "工具栏里的主按钮（glassProminent、filled、tinted）不与旁边的素玻璃融合，单独成一块：glassProminent 是带自己边缘的发光玻璃，filled、tinted 本来就不是玻璃。这是有意的，就像 Apple 工具栏里被选中的项；要融成一条就都用默认的 variant=\"glass\""
+        },
+        {
+          "mistake": "<GlassContainer :spacing=\"8\" :gap=\"12\">",
+          "fix": "gap 不小于 spacing 时按钮之间永远不融合：融合的工具栏用 gap 小于 spacing（默认 gap 8、spacing 16）"
+        },
+        {
+          "mistake": "spacing=\"16\" / gap=\"8\"",
+          "fix": ":spacing=\"16\" / :gap=\"8\"（数字要绑定）"
+        },
+        {
+          "mistake": "<GlassContainer tw=\"flex-col\">",
+          "fix": "direction=\"vertical\"：方向、间距用属性（容器自己的布局优先，tw 里的 flex-col、gap-* 不会生效）"
+        },
+        {
+          "mistake": "<GlassContainer><Card>…</Card></GlassContainer>（把内容区放进容器）",
+          "fix": "GlassContainer 用于融合一排玻璃按钮（工具栏、导航坞）；玻璃内容容器用 Card，普通布局用 Box"
+        }
+      ]
+    },
+    {
+      "name": "Icon",
+      "description": "内置线条图标（SF Symbols 风格：24 单位网格，圆头圆角描边），以 2 倍分辨率画成图片并缓存；颜色 token 按当前主题与明暗模式解析，切换时重绘。apple 是实心标志，google 保留品牌四色。图标与文字并排用 Stack direction=\"horizontal\"。",
+      "props": [
+        {
+          "name": "name",
+          "type": {
+            "type": "string",
+            "enum": [
+              "user",
+              "mail",
+              "lock",
+              "eye",
+              "check",
+              "x",
+              "arrow-right",
+              "apple",
+              "google",
+              "eye-slash",
+              "chevron-left",
+              "chevron-right",
+              "chevron-up",
+              "chevron-down",
+              "plus",
+              "minus",
+              "search",
+              "gear",
+              "info",
+              "warning",
+              "star",
+              "heart"
+            ],
+            "description": "图标名（内置图标之一）"
+          },
+          "required": true,
+          "description": "图标名（内置图标之一）"
+        },
+        {
+          "name": "size",
+          "type": {
+            "default": 24,
+            "description": "边长，pt",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "default": 24,
+          "description": "边长，pt"
+        },
+        {
+          "name": "color",
+          "type": {
+            "default": "label",
+            "description": "颜色 token（label、secondaryLabel、accent…）或 #hex",
+            "type": "string"
+          },
+          "required": false,
+          "default": "label",
+          "description": "颜色 token（label、secondaryLabel、accent…）或 #hex"
+        },
+        {
+          "name": "weight",
+          "type": {
+            "default": 0.1,
+            "description": "描边粗细，占 size 的比例",
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 0.5
+          },
+          "required": false,
+          "default": 0.1,
+          "description": "描边粗细，占 size 的比例"
+        }
+      ],
+      "events": [],
+      "slots": [],
+      "vModel": [],
+      "examples": [
+        "<Icon name=\"check\" :size=\"20\" color=\"accent\" />",
+        "<Icon name=\"search\" color=\"secondaryLabel\" />",
+        "<Icon name=\"warning\" :size=\"28\" color=\"danger\" :weight=\"0.12\" />"
+      ],
+      "mistakes": [
+        {
+          "mistake": "size=\"20\" (a string)",
+          "fix": ":size=\"20\""
+        },
+        {
+          "mistake": "name=\"close\"",
+          "fix": "name=\"x\""
+        }
+      ]
+    },
+    {
+      "name": "Input",
+      "description": "单行文本输入框（Liquid Glass 控件）：胶囊形清玻璃，里面是可编辑的文字，前面可放图标。用 v-model 双向绑定。打字、输入法（中文拼音等，组字时下划线标出、候选窗出现在光标下方）、复制粘贴、撤销都由页面里一个看不见的原生输入框代理，世界层（场景里的面板）上同样可用。type：text 文本（默认）；password 显示为圆点，右侧的眼睛图标切换明文；number 只接受数字（可带负号与一个小数点），v-model 得到 number，空或只有 \"-\" 时为 null。点击放置光标，拖动选择，双击选中一个词；文字超出时随光标横向滚动；粘贴的多行文字换行变成空格。Enter 发出 submit，Escape 退出编辑（这一按键照样向外层传递：在 Dialog 里按 Escape 直接关闭对话框）；Tab 在 Surface 的可聚焦控件间移动（键盘聚焦时全选并显示焦点环）。v-model 只在组字结束后更新（与 Vue 原生 input 的 v-model 一致）。clearable 在有内容时显示清除按钮；maxLength 限制长度（UTF-16 码元，同原生 maxlength）。size：small 高 36、regular 高 52、large 高 84（参考稿的输入框）。纵向容器里默认拉满宽度，横向容器里约十个字宽。鼠标、触控笔悬停时上浮、朝指针倾斜（最多 3°）、高光增强；按下不缩小。disabled 时变淡、不响应、不在 Tab 顺序里。没有 label：标签用它上方的 Text，提示用 placeholder。",
+      "props": [
+        {
+          "name": "modelValue",
+          "type": {
+            "description": "输入的值；用 v-model 双向绑定（受控：外部改变时输入框跟着变）。type=\"number\" 时是 number 或 null",
+            "type": [
+              "string",
+              "number",
+              "null"
+            ]
+          },
+          "required": false,
+          "description": "输入的值；用 v-model 双向绑定（受控：外部改变时输入框跟着变）。type=\"number\" 时是 number 或 null"
+        },
+        {
+          "name": "placeholder",
+          "type": {
+            "description": "值为空（且没有在组字）时显示的提示文字，三级标签色",
+            "type": "string"
+          },
+          "required": false,
+          "description": "值为空（且没有在组字）时显示的提示文字，三级标签色"
+        },
+        {
+          "name": "type",
+          "type": {
+            "default": "text",
+            "description": "类型：text 文本（默认）、password 密码（圆点显示，眼睛图标切换明文）、number 数字（v-model 为 number 或 null）",
+            "type": "string",
+            "enum": [
+              "text",
+              "password",
+              "number"
+            ]
+          },
+          "required": false,
+          "default": "text",
+          "description": "类型：text 文本（默认）、password 密码（圆点显示，眼睛图标切换明文）、number 数字（v-model 为 number 或 null）"
+        },
+        {
+          "name": "clearable",
+          "type": {
+            "default": false,
+            "description": "有内容时在右侧显示清除按钮，点击清空并保持编辑",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "有内容时在右侧显示清除按钮，点击清空并保持编辑"
+        },
+        {
+          "name": "disabled",
+          "type": {
+            "default": false,
+            "description": "禁用：变淡（不透明度 0.4），不响应指针和键盘，不在 Tab 顺序里",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "禁用：变淡（不透明度 0.4），不响应指针和键盘，不在 Tab 顺序里"
+        },
+        {
+          "name": "size",
+          "type": {
+            "default": "regular",
+            "description": "尺寸：small 高 36、regular 高 52（默认）、large 高 84（参考稿的输入框）；字号、图标、留白随尺寸",
+            "type": "string",
+            "enum": [
+              "small",
+              "regular",
+              "large"
+            ]
+          },
+          "required": false,
+          "default": "regular",
+          "description": "尺寸：small 高 36、regular 高 52（默认）、large 高 84（参考稿的输入框）；字号、图标、留白随尺寸"
+        },
+        {
+          "name": "leadingIcon",
+          "type": {
+            "description": "文字前的内置图标（如 mail、lock、user、search）；给了 leading 插槽时由插槽代替",
+            "type": "string",
+            "enum": [
+              "user",
+              "mail",
+              "lock",
+              "eye",
+              "check",
+              "x",
+              "arrow-right",
+              "apple",
+              "google",
+              "eye-slash",
+              "chevron-left",
+              "chevron-right",
+              "chevron-up",
+              "chevron-down",
+              "plus",
+              "minus",
+              "search",
+              "gear",
+              "info",
+              "warning",
+              "star",
+              "heart"
+            ]
+          },
+          "required": false,
+          "description": "文字前的内置图标（如 mail、lock、user、search）；给了 leading 插槽时由插槽代替"
+        },
+        {
+          "name": "maxLength",
+          "type": {
+            "description": "最多多少个字符（UTF-16 码元，同原生 maxlength）：超出的粘贴被截断，继续输入无效",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "required": false,
+          "description": "最多多少个字符（UTF-16 码元，同原生 maxlength）：超出的粘贴被截断，继续输入无效"
+        }
+      ],
+      "events": [
+        {
+          "name": "update:modelValue",
+          "payload": "string（type=\"number\" 时为 number | null）",
+          "description": "用户编辑后的新值（v-model 靠它更新）；组字过程中不发，组字结束时发"
+        },
+        {
+          "name": "submit",
+          "payload": "string（type=\"number\" 时为 number | null）",
+          "description": "在输入框里按了 Enter：当前的值"
+        },
+        {
+          "name": "focus",
+          "payload": "无",
+          "description": "开始编辑（点击或 Tab 聚焦）"
+        },
+        {
+          "name": "blur",
+          "payload": "无",
+          "description": "结束编辑（焦点移走、Escape，或点击了页面别处）"
+        }
+      ],
+      "slots": [
+        {
+          "name": "leading",
+          "description": "代替 leadingIcon 的前置内容"
+        },
+        {
+          "name": "trailing",
+          "description": "文字后、清除按钮与眼睛图标前的后置内容（如单位、按钮）"
+        }
+      ],
+      "vModel": [
+        "v-model"
+      ],
+      "examples": [
+        "<Input v-model=\"email\" size=\"large\" leading-icon=\"mail\" placeholder=\"Email address\" @submit=\"next\" />",
+        "<Input v-model=\"password\" type=\"password\" size=\"large\" leading-icon=\"lock\" placeholder=\"Password\" />",
+        "<Stack :gap=\"8\"><Text value=\"数量\" size=\"sm\" color=\"secondaryLabel\" /><Input v-model=\"qty\" type=\"number\" clearable placeholder=\"0\" :max-length=\"6\" /></Stack>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Input v-model:value=\"name\" />",
+          "fix": "<Input v-model=\"name\" />：输入框的值是 modelValue（默认的 v-model）"
+        },
+        {
+          "mistake": "<Input label=\"邮箱\" v-model=\"email\" />",
+          "fix": "没有 label：<Stack :gap=\"8\"><Text value=\"邮箱\" /><Input v-model=\"email\" placeholder=\"name@example.com\" /></Stack>，或只用 placeholder"
+        },
+        {
+          "mistake": "<Input type=\"email\" />",
+          "fix": "type 只有 text、password、number：邮箱用 type=\"text\"（默认），在 @submit 或 v-model 变化时自己校验"
+        },
+        {
+          "mistake": "<Input v-model=\"q\" @keyup.enter=\"search\" />",
+          "fix": "@submit=\"search\"：按键交给页面里的原生输入框，Enter 以 submit 发出（组字中按的 Enter 只确认候选，不提交）"
+        },
+        {
+          "mistake": "<Input v-model=\"age\" type=\"number\" />，然后 age.trim() / age === \"\"",
+          "fix": "type=\"number\" 时 v-model 是 number 或 null（空、只有 \"-\" 时为 null），不是字符串"
+        }
+      ]
+    },
+    {
+      "name": "LineChart",
+      "description": "2D 折线图（趋势图）：上方一行图例（每个系列一个 8 pt 色点加名称），下面是高 height（默认 200）pt、宽度撑满的图表区。图表区用 Canvas2D 按 2 倍像素画成一张图片：左侧 44 pt 是纵轴刻度（3–6 个\"好看\"的刻度，步长 1、2、5 × 10ⁿ，从 yMin 起），底部 22 pt 是横轴标签（最多 6 个，均匀抽取），横向网格线，每个系列一条平滑曲线（单调三次插值，不会冲过数据）与曲线下渐变的面积。指针悬停时最近的点上画一条竖直准线、每条曲线上一个圆点，旁边浮出一块平面面板列出该点的标签与各系列的 format 值，并发出 hover。颜色是主题的颜色 token，明暗切换、宽度变化、数据变化时重画。它是平面内容（不是玻璃），屏幕层、世界层都能用，通常放在 <Card> 里。",
+      "props": [
+        {
+          "name": "labels",
+          "type": {
+            "minItems": 2,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "横轴标签，每个点一个，从左到右（至少 2 个）；最多显示 6 个，均匀抽取，首尾总在"
+          },
+          "required": true,
+          "description": "横轴标签，每个点一个，从左到右（至少 2 个）；最多显示 6 个，均匀抽取，首尾总在"
+        },
+        {
+          "name": "series",
+          "type": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "系列名：显示在图例与悬停面板里"
+                },
+                "data": {
+                  "type": "array",
+                  "items": {
+                    "type": "number"
+                  },
+                  "description": "数值，与 labels 一一对应（长度相同），有限数"
+                },
+                "color": {
+                  "description": "线与面积的颜色：颜色 token 或 #hex（默认依次 accent、success、danger、secondaryLabel，再循环）",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "data"
+              ],
+              "additionalProperties": false
+            },
+            "description": "系列，每项 { name, data, color? }，一项一条曲线；空数组时只显示\"暂无数据\""
+          },
+          "required": true,
+          "description": "系列，每项 { name, data, color? }，一项一条曲线；空数组时只显示\"暂无数据\""
+        },
+        {
+          "name": "height",
+          "type": {
+            "default": 200,
+            "description": "图表区高度，pt（不含上方图例；横轴标签占其中底部 22 pt）",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "default": 200,
+          "description": "图表区高度，pt（不含上方图例；横轴标签占其中底部 22 pt）"
+        },
+        {
+          "name": "format",
+          "type": {
+            "description": "纵轴刻度与悬停面板里数值的写法 (v: number) => string，如 v => `${v} 件`；默认最多两位小数（1.5、2、0.33）。刻度标签放在左侧 36 pt 内，过长时整列缩小字号"
+          },
+          "required": false,
+          "description": "纵轴刻度与悬停面板里数值的写法 (v: number) => string，如 v => `${v} 件`；默认最多两位小数（1.5、2、0.33）。刻度标签放在左侧 36 pt 内，过长时整列缩小字号"
+        },
+        {
+          "name": "yMin",
+          "type": {
+            "default": 0,
+            "description": "纵轴下端（默认 0）：从它或它下面最近的刻度起；有数据比它小时纵轴向下延伸到能放下",
+            "type": "number"
+          },
+          "required": false,
+          "default": 0,
+          "description": "纵轴下端（默认 0）：从它或它下面最近的刻度起；有数据比它小时纵轴向下延伸到能放下"
+        }
+      ],
+      "events": [
+        {
+          "name": "hover",
+          "payload": "{ index: number; label: string; values: number[] } | null",
+          "description": "悬停的点变了：它的序号（从 0 起）、标签与各系列在该点的值（与 series 同序）；指针离开图表区时为 null"
+        }
+      ],
+      "slots": [],
+      "vModel": [],
+      "examples": [
+        "<Card title=\"近 30 天出入库\"><LineChart :labels=\"days\" :series=\"[{ name: '入库', data: inbound }, { name: '出库', data: outbound }]\" :format=\"v => `${v} 件`\" /></Card>",
+        "<Card title=\"今日订单量\"><LineChart :labels=\"['09:00', '11:00', '13:00', '15:00', '17:00', '19:00']\" :series=\"[{ name: '订单', data: [58, 91, 76, 104, 88, 41], color: 'success' }]\" :height=\"160\" /></Card>",
+        "<Card title=\"库位利用率\"><LineChart :labels=\"['第 1 周', '第 2 周', '第 3 周', '第 4 周']\" :series=\"[{ name: 'A 区', data: [72, 75, 81, 86] }, { name: 'B 区', data: [64, 66, 63, 70] }]\" :y-min=\"60\" :format=\"v => `${v}%`\" @hover=\"e => focused = e?.label ?? null\" /></Card>"
+      ],
+      "mistakes": [
+        {
+          "mistake": ":series=\"[{ name: '入库', data: { '10-01': 120, '10-02': 98 } }]\"（data 写成\"标签 → 数值\"的对象）",
+          "fix": "data 是与 labels 一一对应的数字数组，标签放进 labels：:labels=\"['10-01', '10-02']\" :series=\"[{ name: '入库', data: [120, 98] }]\""
+        },
+        {
+          "mistake": ":labels=\"['一', '二', '三']\" :series=\"[{ name: '入库', data: [120, 98] }]\"（data 与 labels 长度不同）",
+          "fix": "每条系列的 data 长度必须等于 labels 的长度（一个标签一个点）；缺数据的点要补上数值，不能省略"
+        },
+        {
+          "mistake": ":series=\"{ name: '入库', data: [120, 98] }\"（只有一条曲线时省掉了数组）",
+          "fix": "series 总是数组，一条曲线也要包一层：:series=\"[{ name: '入库', data: [120, 98] }]\""
+        }
+      ]
+    },
+    {
+      "name": "ScreenLayer",
+      "description": "屏幕层：其中没有写 layer 的 <Surface> 都放在屏幕层（叠在三维场景之上，1 pt = 1 CSS px，用 fill、center 或 left / top 摆放）。它自己不渲染节点，只渲染默认插槽。",
+      "props": [],
+      "events": [],
+      "slots": [
+        {
+          "name": "default",
+          "description": "其中 <Surface> 的默认层（screen）"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<ScreenLayer><Surface fill :width=\"1280\" :height=\"800\"><Text value=\"HUD\" /></Surface></ScreenLayer>",
+        "<ScreenLayer><Surface center :width=\"400\" :height=\"240\" background=\"glass\" /></ScreenLayer>"
+      ],
+      "mistakes": []
+    },
+    {
+      "name": "Space",
+      "description": "空间界面的容器：把一个 Vue 应用的各个界面块（<Block>）摆在 3D 空间里，持有相机并管理焦点。默认插槽只放 <Block>（v-if / v-for 照常可用）；没给 position 的 Block 排在一条朝向观众的弧上（radius、gap，世界单位），按 name 记住位置：被 v-if 移除再回来时回到原位，其它 Block 不挪动。focus（v-model:focus）是焦点 Block 的 name：镜头沿弹簧移到它正前方，它成为键盘的目标（Tab 只在它里面循环），原焦点 Block 里的焦点节点失焦；没绑定时 Space 自己记住焦点，开始时是第一个 Block。点击非焦点 Block 只把它设为焦点（发出 update:focus），不传给里面的控件。camera 为 true 时 Space 每帧写相机位姿：宿主不能同时开 OrbitControls。motion 为 frozen 时对焦、进场、离场都直接到位，视差关闭。Space 自己不渲染节点：它不接受 tw / class / style。一个应用只放一个 Space。",
+      "props": [
+        {
+          "name": "focus",
+          "type": {
+            "description": "焦点 Block 的 name（v-model:focus）：镜头对焦到它，键盘与 Tab 只在它里面；省略时 Space 自己记住焦点，开始时是第一个 Block，点击非焦点 Block 照样切换",
+            "type": "string"
+          },
+          "required": false,
+          "description": "焦点 Block 的 name（v-model:focus）：镜头对焦到它，键盘与 Tab 只在它里面；省略时 Space 自己记住焦点，开始时是第一个 Block，点击非焦点 Block 照样切换"
+        },
+        {
+          "name": "radius",
+          "type": {
+            "default": 7,
+            "description": "自动排布的弧半径，世界单位：没给 position 的 Block 排在这条朝向观众的弧上，第一个在原点，之后依次向右",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "default": 7,
+          "description": "自动排布的弧半径，世界单位：没给 position 的 Block 排在这条朝向观众的弧上，第一个在原点，之后依次向右"
+        },
+        {
+          "name": "gap",
+          "type": {
+            "default": 0.5,
+            "description": "弧上相邻 Block 的间隔，世界单位",
+            "type": "number",
+            "minimum": 0
+          },
+          "required": false,
+          "default": 0.5,
+          "description": "弧上相邻 Block 的间隔，世界单位"
+        },
+        {
+          "name": "camera",
+          "type": {
+            "default": true,
+            "description": "由 Space 驱动相机：挂载时对焦到焦点 Block，焦点变化时镜头沿弹簧移过去；为 true 时宿主不能同时开 OrbitControls 一类控制器。false 时只排布与管理焦点，不动相机",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": true,
+          "description": "由 Space 驱动相机：挂载时对焦到焦点 Block，焦点变化时镜头沿弹簧移过去；为 true 时宿主不能同时开 OrbitControls 一类控制器。false 时只排布与管理焦点，不动相机"
+        },
+        {
+          "name": "parallax",
+          "type": {
+            "default": true,
+            "description": "闲置时镜头随指针轻微视差（减少动态效果或 motion 为 frozen 时关闭）",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": true,
+          "description": "闲置时镜头随指针轻微视差（减少动态效果或 motion 为 frozen 时关闭）"
+        }
+      ],
+      "events": [
+        {
+          "name": "update:focus",
+          "payload": "string",
+          "description": "按下了非焦点 Block：它的 name（v-model:focus 据此切换焦点）"
+        }
+      ],
+      "slots": [
+        {
+          "name": "default",
+          "description": "只放 <Block>"
+        }
+      ],
+      "vModel": [
+        "v-model:focus"
+      ],
+      "examples": [
+        "<Space v-model:focus=\"page\"><Block name=\"login\" :width=\"488\" :height=\"560\"><Text value=\"登录\" size=\"3xl\" :weight=\"700\" /></Block><Block name=\"home\" :width=\"880\" :height=\"620\"><Text value=\"首页\" size=\"3xl\" :weight=\"700\" /></Block></Space>",
+        "<Space v-model:focus=\"tab\" :radius=\"9\" :gap=\"0.8\"><Block v-for=\"t in tabs\" :key=\"t.id\" :name=\"t.id\" :width=\"560\" :height=\"480\"><Text :value=\"t.title\" size=\"2xl\" :weight=\"700\" /></Block></Space>",
+        "<Space :camera=\"false\"><Block name=\"panel\" :width=\"400\" :height=\"300\"><Text value=\"相机由宿主控制\" /></Block></Space>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Space> 与 OrbitControls 同时开（宿主自己再控制相机）",
+          "fix": "Space 的相机 rig 每帧写相机位姿，两者会互相打架：用 Space 时不要同时开 OrbitControls 一类控制器；要自己控制相机就写 :camera=\"false\""
+        },
+        {
+          "mistake": "focus 写不存在的名字（v-model:focus=\"page\"，page 是 \"landng\"）",
+          "fix": "focus 必须是某个 Block 的 name（区分大小写）；报错会列出现有的名字"
+        },
+        {
+          "mistake": "<Space><Text value=\"标题\" /><Block …/></Space>",
+          "fix": "Space 的插槽只放 <Block>：标题等内容放进某个 Block 里"
+        }
+      ]
+    },
+    {
+      "name": "Stack",
+      "description": "把子项排成一列（vertical，默认）、一行（horizontal）或叠在一起（z）。gap 是子项间距（pt，默认 8）；align 是交叉轴对齐，justify 是主轴分布。方向、间距、对齐、分布和换行只用这些属性：tw / class 里写同类的类（flex-row、gap-4、items-center、justify-between、flex-wrap）会报错。z 时每个子项各占一层、铺满整个 Stack（绝对定位，inset 0），align / justify 作用在每层之内，指针穿过层的空白处落到下面的层；层不撑开 Stack，所以 z 的 Stack 要给定尺寸。",
+      "props": [
+        {
+          "name": "direction",
+          "type": {
+            "default": "vertical",
+            "description": "排列方向：vertical 一列、horizontal 一行、z 叠放",
+            "type": "string",
+            "enum": [
+              "horizontal",
+              "vertical",
+              "z"
+            ]
+          },
+          "required": false,
+          "default": "vertical",
+          "description": "排列方向：vertical 一列、horizontal 一行、z 叠放"
+        },
+        {
+          "name": "gap",
+          "type": {
+            "default": 8,
+            "description": "子项间距，pt（z 时不用）",
+            "type": "number",
+            "minimum": 0
+          },
+          "required": false,
+          "default": 8,
+          "description": "子项间距，pt（z 时不用）"
+        },
+        {
+          "name": "align",
+          "type": {
+            "description": "交叉轴对齐（默认 stretch）",
+            "type": "string",
+            "enum": [
+              "start",
+              "center",
+              "end",
+              "stretch"
+            ]
+          },
+          "required": false,
+          "description": "交叉轴对齐（默认 stretch）"
+        },
+        {
+          "name": "justify",
+          "type": {
+            "description": "主轴分布（默认 start）",
+            "type": "string",
+            "enum": [
+              "start",
+              "center",
+              "end",
+              "between"
+            ]
+          },
+          "required": false,
+          "description": "主轴分布（默认 start）"
+        },
+        {
+          "name": "wrap",
+          "type": {
+            "description": "一行（列）放不下时换行（z 时不用）",
+            "type": "boolean"
+          },
+          "required": false,
+          "description": "一行（列）放不下时换行（z 时不用）"
+        }
+      ],
+      "events": [],
+      "slots": [
+        {
+          "name": "default",
+          "description": "子项"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<Stack direction=\"horizontal\" :gap=\"12\" align=\"center\"><Icon name=\"mail\" /><Text value=\"邮箱\" /></Stack>",
+        "<Stack :gap=\"16\"><Text value=\"标题\" :size=\"24\" :weight=\"700\" /><Text value=\"说明\" color=\"secondaryLabel\" /></Stack>",
+        "<Stack direction=\"z\" align=\"center\" justify=\"center\" :style=\"{ width: 64, height: 64 }\"><Box tw=\"w-full h-full rounded-xl bg-accent\" /><Icon name=\"star\" color=\"#ffffff\" /></Stack>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "gap=\"12\"",
+          "fix": ":gap=\"12\"（数字要绑定）"
+        },
+        {
+          "mistake": "direction=\"row\"",
+          "fix": "direction=\"horizontal\"（列是 vertical，叠放是 z）"
+        },
+        {
+          "mistake": "<Stack tw=\"flex-row gap-4 items-center\">",
+          "fix": "<Stack direction=\"horizontal\" :gap=\"16\" align=\"center\">（布局用属性，tw 只放间距、背景等其他样式）"
+        },
+        {
+          "mistake": "<Stack direction=\"z\">（不给尺寸）",
+          "fix": "层是绝对定位的，不撑开 Stack：用 :style 或 tw 给它宽高"
+        }
+      ]
+    },
+    {
+      "name": "Surface",
+      "description": "一块 Surface：组件画在它上面。屏幕层（layer=\"screen\"）的 Surface 叠在三维场景之上，1 pt = 1 CSS px，用 fill、center 或 left / top 摆放；世界层（layer=\"world\"）的 Surface 是场景里的一块面板，用 position / rotation / scale 摆放（ptPerUnit：每个世界单位多少 pt）。layer 省略时取最近的 <ScreenLayer> / <WorldLayer>，都没有时为 world。默认插槽是它的内容，排在 Surface 的根里（一个与 Surface 同宽高、纵向排列的 flex 盒子）；Surface 自己不渲染节点，tw / class / style 写在内容里的 <Box> 上。background：none 透明（默认，空白处指针穿过）、glass 一整块玻璃面板、颜色 token 或 #hex 不透明底色。layer、fill、left、top、center、background、radius、ptPerUnit、contentScale 在创建时固定，改它们会重建 Surface（内容移进新的 Surface）；width / height、position / rotation / scale、billboard、interactive、castShadows 就地生效。castShadows 为 false 时它不在界面上投影。第一期没有 shadow（Surface 的玻璃投影到场景，castToWorld 还没有效果）。",
+      "props": [
+        {
+          "name": "layer",
+          "type": {
+            "description": "所在层：screen 屏幕层或 world 世界层；省略时取最近的 <ScreenLayer> / <WorldLayer>，都没有时为 world",
+            "type": "string",
+            "enum": [
+              "screen",
+              "world"
+            ]
+          },
+          "required": false,
+          "description": "所在层：screen 屏幕层或 world 世界层；省略时取最近的 <ScreenLayer> / <WorldLayer>，都没有时为 world"
+        },
+        {
+          "name": "width",
+          "type": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "宽，pt（fill 时只是初始宽度，之后跟随视口）"
+          },
+          "required": true,
+          "description": "宽，pt（fill 时只是初始宽度，之后跟随视口）"
+        },
+        {
+          "name": "height",
+          "type": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "description": "高，pt（fill 时只是初始高度，之后跟随视口）"
+          },
+          "required": true,
+          "description": "高，pt（fill 时只是初始高度，之后跟随视口）"
+        },
+        {
+          "name": "fill",
+          "type": {
+            "description": "屏幕层：铺满视口，尺寸跟随视口",
+            "type": "boolean"
+          },
+          "required": false,
+          "description": "屏幕层：铺满视口，尺寸跟随视口"
+        },
+        {
+          "name": "left",
+          "type": {
+            "description": "屏幕层：左上角到视口左边的距离，CSS px（默认 0）",
+            "type": "number"
+          },
+          "required": false,
+          "description": "屏幕层：左上角到视口左边的距离，CSS px（默认 0）"
+        },
+        {
+          "name": "top",
+          "type": {
+            "description": "屏幕层：左上角到视口上边的距离，CSS px（默认 0）",
+            "type": "number"
+          },
+          "required": false,
+          "description": "屏幕层：左上角到视口上边的距离，CSS px（默认 0）"
+        },
+        {
+          "name": "center",
+          "type": {
+            "description": "屏幕层：居中于视口（fill 优先于 center，center 优先于 left / top）",
+            "type": "boolean"
+          },
+          "required": false,
+          "description": "屏幕层：居中于视口（fill 优先于 center，center 优先于 left / top）"
+        },
+        {
+          "name": "position",
+          "type": {
+            "description": "世界层：Surface 中心的位置 [x, y, z]，世界单位；省略时不动它（创建时在原点）",
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "required": false,
+          "description": "世界层：Surface 中心的位置 [x, y, z]，世界单位；省略时不动它（创建时在原点）"
+        },
+        {
+          "name": "rotation",
+          "type": {
+            "description": "旋转 [x, y, z]，弧度，XYZ 顺序；省略时不动它（创建时不旋转）",
+            "type": "array",
+            "prefixItems": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "items": false,
+            "minItems": 3,
+            "maxItems": 3
+          },
+          "required": false,
+          "description": "旋转 [x, y, z]，弧度，XYZ 顺序；省略时不动它（创建时不旋转）"
+        },
+        {
+          "name": "scale",
+          "type": {
+            "description": "缩放：一个数或 [x, y, z]；省略时不动它（创建时为 1）",
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                ],
+                "items": false,
+                "minItems": 3,
+                "maxItems": 3
+              }
+            ]
+          },
+          "required": false,
+          "description": "缩放：一个数或 [x, y, z]；省略时不动它（创建时为 1）"
+        },
+        {
+          "name": "background",
+          "type": {
+            "default": "none",
+            "description": "背景：none（透明，空白处指针穿过）、glass（整块玻璃面板）或颜色 token / #hex（不透明底色）",
+            "type": "string"
+          },
+          "required": false,
+          "default": "none",
+          "description": "背景：none（透明，空白处指针穿过）、glass（整块玻璃面板）或颜色 token / #hex（不透明底色）"
+        },
+        {
+          "name": "radius",
+          "type": {
+            "default": 0,
+            "description": "Surface 的圆角，pt",
+            "type": "number",
+            "minimum": 0
+          },
+          "required": false,
+          "default": 0,
+          "description": "Surface 的圆角，pt"
+        },
+        {
+          "name": "billboard",
+          "type": {
+            "default": false,
+            "description": "世界层：每帧转向相机（此时 rotation 不起作用）",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "世界层：每帧转向相机（此时 rotation 不起作用）"
+        },
+        {
+          "name": "interactive",
+          "type": {
+            "default": true,
+            "description": "是否接收指针；false 时指针穿过它",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": true,
+          "description": "是否接收指针；false 时指针穿过它"
+        },
+        {
+          "name": "castShadows",
+          "type": {
+            "default": true,
+            "description": "是否在界面上投下阴影（默认 true）：false 时它的玻璃、挂在它上面的 3D 物体和内容都不进阴影贴图，自己仍接收阴影。浮在别的面板前方的提示面板常用，免得在后面投下一大块影子",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": true,
+          "description": "是否在界面上投下阴影（默认 true）：false 时它的玻璃、挂在它上面的 3D 物体和内容都不进阴影贴图，自己仍接收阴影。浮在别的面板前方的提示面板常用，免得在后面投下一大块影子"
+        },
+        {
+          "name": "ptPerUnit",
+          "type": {
+            "description": "世界层：每个世界单位多少 pt（默认 244）",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "description": "世界层：每个世界单位多少 pt（默认 244）"
+        },
+        {
+          "name": "contentScale",
+          "type": {
+            "description": "内容贴图清晰度的倍数（默认 1；大于 1 更清晰，也更占显存）",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "description": "内容贴图清晰度的倍数（默认 1；大于 1 更清晰，也更占显存）"
+        }
+      ],
+      "events": [
+        {
+          "name": "error",
+          "payload": "Error",
+          "description": "该 Surface 的渲染失败（它已停止绘制）"
+        }
+      ],
+      "slots": [
+        {
+          "name": "default",
+          "description": "Surface 的内容"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<Surface :width=\"480\" :height=\"320\" :position=\"[0, 1.4, -2]\" :rotation=\"[0, -0.3, 0]\" background=\"glass\" :radius=\"32\"><Stack tw=\"p-8\" :gap=\"12\"><Text value=\"世界层面板\" size=\"xl\" :weight=\"700\" /><Text value=\"场景里的一块玻璃\" color=\"secondaryLabel\" /></Stack></Surface>",
+        "<ScreenLayer><Surface fill :width=\"1280\" :height=\"800\"><Box tw=\"p-6\"><Text value=\"铺满屏幕的 HUD\" /></Box></Surface></ScreenLayer>",
+        "<Surface layer=\"screen\" center :width=\"420\" :height=\"280\" background=\"glass\" :radius=\"28\"><Stack tw=\"p-8\" :gap=\"16\" align=\"center\"><Text value=\"登录\" size=\"2xl\" :weight=\"700\" /></Stack></Surface>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Surface fill :width=\"1280\" :height=\"800\">（没有 layer）",
+          "fix": "fill、center、left、top 只用于屏幕层：<ScreenLayer><Surface fill …></ScreenLayer> 或 layer=\"screen\"（默认是世界层）"
+        },
+        {
+          "mistake": "<Surface layer=\"screen\" :position=\"[0, 1, -2]\">",
+          "fix": "position 只用于世界层；屏幕层用 center 或 :left / :top"
+        },
+        {
+          "mistake": "<Surface tw=\"p-6\">",
+          "fix": "Surface 不接受 tw / class / style：<Surface …><Box tw=\"p-6\">…</Box></Surface>"
+        }
+      ]
+    },
+    {
+      "name": "SurfaceChart3D",
+      "description": "3D 热力曲面图：两个坐标轴（xLabels 列、yLabels 行，如时段 × 日期）上的数值画成一张平滑曲面，高度就是数值，颜色按高度在色带上取（默认淡蓝紫 → 主题色 → 深品红），一眼看出高峰与规律。曲面立在一块半透明底板上，底板上有沿行列的细网格线；列标签沿底板前缘、行标签沿左缘平躺在底板上，数值刻度立在左后角，都随图表一起透视。图表像桌面一样向后倾，进场时曲面一行接一行从底板长出，数据变化时弹到新高度（减少动态效果时直接到位）。指针指到曲面上时，该点立起一根竖直指示线和一个圆点，下方读数行显示\"日期 · 时段 · 数值\"并发出 hover；点击发出 select。图表区高 height（默认 280）pt、宽度撑满，下面是 20 pt 的读数行。通常放在 <Card> 里，只能用在 <Block>（世界层）里，不能放进 scroll。",
+      "props": [
+        {
+          "name": "xLabels",
+          "type": {
+            "minItems": 2,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "列标签（横轴，从左到右），一列一个，如 24 个时段 \"00\"…\"23\"；至少 2 个。放不下时均匀隔几个显示一个"
+          },
+          "required": true,
+          "description": "列标签（横轴，从左到右），一列一个，如 24 个时段 \"00\"…\"23\"；至少 2 个。放不下时均匀隔几个显示一个"
+        },
+        {
+          "name": "yLabels",
+          "type": {
+            "minItems": 2,
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "行标签（纵深，从后往前），一行一个，如近 14 天的日期 \"10-03\"…\"10-16\"；至少 2 个。第一行在最后面，最后一行离观者最近"
+          },
+          "required": true,
+          "description": "行标签（纵深，从后往前），一行一个，如近 14 天的日期 \"10-03\"…\"10-16\"；至少 2 个。第一行在最后面，最后一行离观者最近"
+        },
+        {
+          "name": "values",
+          "type": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "description": "数值，行 × 列：values[行][列]，共 yLabels.length 行、每行 xLabels.length 个，都是不小于 0 的有限数；数值就是曲面的高度（第三维）。空数组时只显示\"暂无数据\""
+          },
+          "required": true,
+          "description": "数值，行 × 列：values[行][列]，共 yLabels.length 行、每行 xLabels.length 个，都是不小于 0 的有限数；数值就是曲面的高度（第三维）。空数组时只显示\"暂无数据\""
+        },
+        {
+          "name": "max",
+          "type": {
+            "description": "满高对应的数值；默认把最大值向上取到好看的刻度顶（236 → 250、17 → 20；全为 0 时取 1）。刻度标签从 0 均匀排到它；比它大的数值按它封顶（曲面不会高过最高刻度，读数仍显示原值）",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "description": "满高对应的数值；默认把最大值向上取到好看的刻度顶（236 → 250、17 → 20；全为 0 时取 1）。刻度标签从 0 均匀排到它；比它大的数值按它封顶（曲面不会高过最高刻度，读数仍显示原值）"
+        },
+        {
+          "name": "ramp",
+          "type": {
+            "description": "色带：2–6 个颜色 token 或 #hex，从低到高；曲面每个点按 数值 / max 在色带上取色。默认 [\"#cfd8ff\", \"#a59bff\", \"accent\", \"#c2185b\"]（淡蓝紫 → 主题色 → 深品红）",
+            "minItems": 2,
+            "maxItems": 6,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "required": false,
+          "description": "色带：2–6 个颜色 token 或 #hex，从低到高；曲面每个点按 数值 / max 在色带上取色。默认 [\"#cfd8ff\", \"#a59bff\", \"accent\", \"#c2185b\"]（淡蓝紫 → 主题色 → 深品红）"
+        },
+        {
+          "name": "format",
+          "type": {
+            "description": "刻度与读数里数值的写法 (v: number) => string，如 v => `${v} 单`；默认最多两位小数（1.5、2、0.33）"
+          },
+          "required": false,
+          "description": "刻度与读数里数值的写法 (v: number) => string，如 v => `${v} 单`；默认最多两位小数（1.5、2、0.33）"
+        },
+        {
+          "name": "height",
+          "type": {
+            "default": 280,
+            "description": "图表区高度，pt（不含下方 20 pt 的读数行）；宽度撑满",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "default": 280,
+          "description": "图表区高度，pt（不含下方 20 pt 的读数行）；宽度撑满"
+        }
+      ],
+      "events": [
+        {
+          "name": "hover",
+          "payload": "{ row: number; col: number; value: number; x: string; y: string } | null",
+          "description": "指向的格点变了：行号、列号（从 0 起）、数值与它的列标签 x、行标签 y；离开曲面时为 null。触屏不发（没有悬停）"
+        },
+        {
+          "name": "select",
+          "payload": "{ row: number; col: number; value: number; x: string; y: string }",
+          "description": "点击了曲面上的某个格点：同 hover 的内容"
+        }
+      ],
+      "slots": [],
+      "vModel": [],
+      "examples": [
+        "<Space><Block name=\"overview\" :width=\"1100\" :height=\"760\"><Card title=\"出库热力 · 近 14 天\"><SurfaceChart3D :x-labels=\"hours\" :y-labels=\"days\" :values=\"outbound\" :format=\"v => `${v} 单`\" @hover=\"e => peak = e\" /></Card></Block></Space>",
+        "<Space><Block name=\"pick\" :width=\"900\" :height=\"620\"><Card title=\"拣货效率（件/时）\"><SurfaceChart3D :x-labels=\"['08', '10', '12', '14', '16', '18']\" :y-labels=\"['周一', '周二', '周三', '周四', '周五']\" :values=\"rates\" :max=\"400\" :height=\"240\" @select=\"e => openShift(e.y, e.x)\" /></Card></Block></Space>",
+        "<Space><Block name=\"dock\" :width=\"980\" :height=\"700\"><Card title=\"月台占用率\"><SurfaceChart3D :x-labels=\"slots\" :y-labels=\"['1 号月台', '2 号月台', '3 号月台', '4 号月台']\" :values=\"busy\" :max=\"100\" :ramp=\"['#e8f5e9', 'success', '#ff9f0a', 'danger']\" :format=\"v => `${v}%`\" /></Card></Block></Space>"
+      ],
+      "mistakes": [
+        {
+          "mistake": ":values=\"byHour\"（24 行 × 14 列：把时段当成了行）",
+          "fix": "values[行][列]：行对应 yLabels（如日期），列对应 xLabels（如时段），形状必须是 yLabels.length × xLabels.length；需要时先转置"
+        },
+        {
+          "mistake": ":values=\"{ '10-15': [12, 30, …], '10-16': [8, 26, …] }\"（values 写成\"日期 → 数组\"的对象）",
+          "fix": "values 是二维数组，日期放进 yLabels：:y-labels=\"['10-15', '10-16']\" :values=\"[[12, 30, …], [8, 26, …]]\""
+        },
+        {
+          "mistake": "<ScreenLayer><Surface …><SurfaceChart3D … /></Surface></ScreenLayer>，或放进 scroll",
+          "fix": "3D 图表只在世界层：放进 <Space> 里的 <Block>（最好包一张 <Card title=\"…\">），不能放进可滚动的 scroll"
+        }
+      ]
+    },
+    {
+      "name": "Switch",
+      "description": "开关（Liquid Glass 控件）：136 × 62 的胶囊玻璃，上面一颗白色圆形旋钮。受控组件：显示的永远是 checked，用 v-model:checked 双向绑定，点击只发出新值。打开时旋钮在右，玻璃发出强调色的光并染上强调色，光在旋钮处柔和地截止；关闭时旋钮在左，是清玻璃。切换时旋钮滑过去，发光与染色随之渐变；按住时旋钮朝中间拉长到 58 pt（外侧边缘不动）。点击开关或标签、Enter、空格（按下时显示按压，松开时切换）都会切换，依次发出 update:checked 与 change；按住标签时开关显示按压，点标签还会让开关获得焦点（不显示焦点环），同 HTML 的 label。可以用 Tab 聚焦，键盘聚焦时显示焦点环。label（或默认插槽）在开关左侧，右对齐、相距 16 pt（参考稿的 \"Remember me\"）；行被父容器拉宽时整行靠右（开关贴在右边）。鼠标、触控笔悬停时上浮 6 pt、朝指针倾斜（最多 3°）、高光增强；按下缩到 0.96；触屏没有悬停效果，减少动态效果时不倾斜。disabled 时整行变淡、不响应、不在 Tab 顺序里。",
+      "props": [
+        {
+          "name": "checked",
+          "type": {
+            "default": false,
+            "description": "是否打开；用 v-model:checked 双向绑定（受控：组件自己不改它，只发出新值）",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "是否打开；用 v-model:checked 双向绑定（受控：组件自己不改它，只发出新值）"
+        },
+        {
+          "name": "disabled",
+          "type": {
+            "default": false,
+            "description": "禁用：整行（开关与标签）变淡到 0.4，不响应指针和键盘，不在 Tab 顺序里",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "禁用：整行（开关与标签）变淡到 0.4，不响应指针和键盘，不在 Tab 顺序里"
+        },
+        {
+          "name": "label",
+          "type": {
+            "description": "开关左侧的标签，右对齐，点击它也会切换；给了默认插槽时由插槽代替",
+            "type": "string"
+          },
+          "required": false,
+          "description": "开关左侧的标签，右对齐，点击它也会切换；给了默认插槽时由插槽代替"
+        }
+      ],
+      "events": [
+        {
+          "name": "update:checked",
+          "payload": "boolean",
+          "description": "用户切换后的新值（v-model:checked 靠它更新）；禁用时不发"
+        },
+        {
+          "name": "change",
+          "payload": "boolean",
+          "description": "用户切换了开关：新值，紧跟 update:checked 发出；禁用时不发"
+        }
+      ],
+      "slots": [
+        {
+          "name": "default",
+          "description": "代替 label 的标签内容（同样在开关左侧，点击也会切换）"
+        }
+      ],
+      "vModel": [
+        "v-model:checked"
+      ],
+      "examples": [
+        "<Switch v-model:checked=\"remember\" label=\"记住我\" />",
+        "<Stack direction=\"horizontal\" :gap=\"12\" align=\"center\"><Text value=\"飞行模式\" /><Switch v-model:checked=\"airplane\" @change=\"save\" /></Stack>",
+        "<Switch :checked=\"true\" disabled label=\"由管理员开启\" />"
+      ],
+      "mistakes": [
+        {
+          "mistake": "<Switch v-model=\"on\" />",
+          "fix": "<Switch v-model:checked=\"on\" />：开关的值叫 checked，不是 modelValue"
+        },
+        {
+          "mistake": "<Switch label=\"通知\" />（没有绑定，以为点了会自己变）",
+          "fix": "Switch 是受控的，显示的永远是 checked：用 v-model:checked=\"notify\"，或 :checked 加 @update:checked 自己接住新值"
+        },
+        {
+          "mistake": "<Switch v-model:checked=\"on\" @click=\"save\" />",
+          "fix": "@change=\"save\"：change 也覆盖 Enter、空格与点标签，禁用时不发；@click 落到外层的行上，禁用时照样触发"
+        },
+        {
+          "mistake": "<Stack><Switch v-model:checked=\"wifi\" label=\"Wi-Fi\" /></Stack>（以为开关在左边）",
+          "fix": "纵向 Stack 默认 align stretch，会把开关这一行拉满，行内靠右排（参考稿 \"Remember me\" 的排法：开关贴在右边，标签右对齐紧挨它）；要放在左边就给父容器 align=\"start\"（或 center），或只给这个开关 :style=\"{ alignSelf: 'flex-start' }\""
+        }
+      ]
+    },
+    {
+      "name": "Text",
+      "description": "一段文字（支持中文与系统字体回退）。value 或默认插槽给出内容（二选一；插槽首尾空白会去掉）；value 也可以是片段数组：各自颜色/字重/字号，排成可换行的一排，片段首尾的空格保留，换行只发生在片段之间或片段内部，不跨片段重排；片段数组不支持 maxLines，wrap: false 让整排与每个片段都不换行。不可选择、不可编辑：输入用 Input。",
+      "props": [
+        {
+          "name": "value",
+          "type": {
+            "description": "文字内容；省略时用默认插槽的纯文本",
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "text": {
+                      "type": "string"
+                    },
+                    "color": {
+                      "type": "string"
+                    },
+                    "weight": {
+                      "type": "integer",
+                      "minimum": 100,
+                      "maximum": 900
+                    },
+                    "size": {
+                      "type": "number",
+                      "exclusiveMinimum": 0
+                    }
+                  },
+                  "required": [
+                    "text"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            ]
+          },
+          "required": false,
+          "description": "文字内容；省略时用默认插槽的纯文本"
+        },
+        {
+          "name": "size",
+          "type": {
+            "description": "字号，pt 数字或 fontSize token（xs/sm/base/lg/xl/2xl/3xl/4xl）",
+            "anyOf": [
+              {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "required": false,
+          "description": "字号，pt 数字或 fontSize token（xs/sm/base/lg/xl/2xl/3xl/4xl）"
+        },
+        {
+          "name": "weight",
+          "type": {
+            "description": "字重 100–900",
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 900
+          },
+          "required": false,
+          "description": "字重 100–900"
+        },
+        {
+          "name": "color",
+          "type": {
+            "description": "颜色 token（label、secondaryLabel、accent…）或 #hex",
+            "type": "string"
+          },
+          "required": false,
+          "description": "颜色 token（label、secondaryLabel、accent…）或 #hex"
+        },
+        {
+          "name": "maxLines",
+          "type": {
+            "description": "最多行数，超出以 … 截断（片段数组不支持）",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "required": false,
+          "description": "最多行数，超出以 … 截断（片段数组不支持）"
+        },
+        {
+          "name": "align",
+          "type": {
+            "description": "对齐（片段数组时对齐整排）",
+            "type": "string",
+            "enum": [
+              "left",
+              "center",
+              "right"
+            ]
+          },
+          "required": false,
+          "description": "对齐（片段数组时对齐整排）"
+        },
+        {
+          "name": "wrap",
+          "type": {
+            "description": "是否在宽度处换行（默认 true）",
+            "type": "boolean"
+          },
+          "required": false,
+          "description": "是否在宽度处换行（默认 true）"
+        }
+      ],
+      "events": [],
+      "slots": [
+        {
+          "name": "default",
+          "description": "纯文本内容（value 省略时）"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<Text value=\"创建账号\" :size=\"24\" :weight=\"700\" />",
+        "<Text color=\"secondaryLabel\" :max-lines=\"2\">很长的说明文字…</Text>",
+        "<Text :value=\"[{ text: '已有账号？' }, { text: '登录', color: 'accent', weight: 600 }]\" />"
+      ],
+      "mistakes": [
+        {
+          "mistake": "size=\"20\"",
+          "fix": ":size=\"20\"（数字要绑定）"
+        },
+        {
+          "mistake": "<Text>{{ a }}<Icon /></Text>",
+          "fix": "Text 只放文字；图标与文字并排用 Stack direction=\"horizontal\""
+        }
+      ]
+    },
+    {
+      "name": "Viewport3D",
+      "description": "通用 3D 插槽：一个布局盒（默认 alignSelf: stretch、高 200 pt），把一个 three.js 物体挂在上面，随所在的 Block 一起移动、淡入淡出、飞走。物体的坐标：原点在盒子中心，z = 0 在盒子所贴的面上（最近的玻璃祖先如 Card 的顶面，没有就是 Block 的内容面），x 向右、y 向上、z 朝外，1 个单位 = 1 pt。指针打在物体上算打在这个盒子上：pointerenter / pointerleave / pointermove / click 的事件带 object（命中的 Object3D）。只能用在世界层（<Block> 或世界层 <Surface> 里），不能放进 scroll。tw / class / style 落到盒子上（如 :style=\"{ height: 320 }\"）。柱状图直接用 <BarChart3D>。",
+      "props": [
+        {
+          "name": "object",
+          "type": {
+            "description": "要挂的 three.js 物体（Object3D：Mesh、Group…），原点放在盒子中心。用 shallowRef 或 markRaw 持有它（深层 ref 会把它包成代理）；换成另一个物体时先卸下旧的。Viewport3D 不销毁物体：几何体与材质由你在不用时 dispose"
+          },
+          "required": true,
+          "description": "要挂的 three.js 物体（Object3D：Mesh、Group…），原点放在盒子中心。用 shallowRef 或 markRaw 持有它（深层 ref 会把它包成代理）；换成另一个物体时先卸下旧的。Viewport3D 不销毁物体：几何体与材质由你在不用时 dispose"
+        },
+        {
+          "name": "depth",
+          "type": {
+            "description": "pt：物体从所贴的面最多凸出多高，用来框定阴影范围；默认取盒子的宽",
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "required": false,
+          "description": "pt：物体从所贴的面最多凸出多高，用来框定阴影范围；默认取盒子的宽"
+        },
+        {
+          "name": "update",
+          "type": {
+            "description": "每帧调用 (dt, ctx) => boolean：dt 是秒，ctx 是 { width, height, reducedMotion, theme, scheme }（width / height 为盒子的 pt 尺寸）；返回 true 表示还要下一帧（动画没停）"
+          },
+          "required": false,
+          "description": "每帧调用 (dt, ctx) => boolean：dt 是秒，ctx 是 { width, height, reducedMotion, theme, scheme }（width / height 为盒子的 pt 尺寸）；返回 true 表示还要下一帧（动画没停）"
+        }
+      ],
+      "events": [
+        {
+          "name": "pointerenter",
+          "payload": "UIEvent，object 为命中的 Object3D（不在物体上时缺省）；命中 InstancedMesh 时 instanceId 为命中的实例序号（否则缺省）",
+          "description": "指针进入盒子或其上的物体"
+        },
+        {
+          "name": "pointerleave",
+          "payload": "UIEvent，object 为命中的 Object3D（不在物体上时缺省）；命中 InstancedMesh 时 instanceId 为命中的实例序号（否则缺省）",
+          "description": "指针离开盒子与物体"
+        },
+        {
+          "name": "pointermove",
+          "payload": "UIEvent，object 为命中的 Object3D（不在物体上时缺省）；命中 InstancedMesh 时 instanceId 为命中的实例序号（否则缺省）",
+          "description": "指针在盒子或物体上移动；在物体上时 object 是命中的那个（如一根柱子），用它的 userData 区分；InstancedMesh 用 instanceId 区分是哪一个实例"
+        },
+        {
+          "name": "click",
+          "payload": "UIEvent，object 为命中的 Object3D（不在物体上时缺省）；命中 InstancedMesh 时 instanceId 为命中的实例序号（否则缺省）",
+          "description": "点击盒子或物体；点在物体上时 object 是命中的那个"
+        }
+      ],
+      "slots": [],
+      "vModel": [],
+      "examples": [
+        "<Space><Block name=\"model\" :width=\"560\" :height=\"480\"><Text value=\"模型预览\" size=\"2xl\" :weight=\"700\" /><Card><Viewport3D :object=\"model\" :depth=\"120\" :style=\"{ height: 260 }\" /></Card></Block></Space>",
+        "<Space><Block name=\"spin\" :width=\"488\" :height=\"400\"><Viewport3D :object=\"cube\" :update=\"spin\" @click=\"e => picked = e.object\" /></Block></Space>",
+        "<Space><Block name=\"globe\" :width=\"600\" :height=\"520\"><Viewport3D :object=\"globe\" :style=\"{ flexGrow: 1 }\" @pointermove=\"e => hovered = e.object ?? null\" @pointerleave=\"hovered = null\" /></Block></Space>"
+      ],
+      "mistakes": [
+        {
+          "mistake": "const mesh = ref(new Mesh(geometry, material))（深层 ref 持有 three 物体）",
+          "fix": "const mesh = shallowRef(new Mesh(geometry, material)) 或 markRaw(new Mesh(…))：深层 ref 把物体包成代理，three 读它的只读属性时会报错"
+        },
+        {
+          "mistake": "<ScreenLayer><Surface …><Viewport3D :object=\"mesh\" /></Surface></ScreenLayer>（放在屏幕层）",
+          "fix": "3D 物体只挂在世界层：放进 <Space> 里的 <Block>（或世界层的 <Surface>）"
+        },
+        {
+          "mistake": "把 Viewport3D 放进可滚动的 scroll 里",
+          "fix": "本期不支持裁剪 3D 物体：放在 scroll 外，Block 的高度给够"
+        }
+      ]
+    },
+    {
+      "name": "WorldLayer",
+      "description": "世界层：其中没有写 layer 的 <Surface> 都是场景里的面板（用 position / rotation / scale 摆放）。没有层组件时 <Surface> 本来就在世界层；它用来在 <ScreenLayer> 里面放回世界层。它自己不渲染节点，只渲染默认插槽。",
+      "props": [],
+      "events": [],
+      "slots": [
+        {
+          "name": "default",
+          "description": "其中 <Surface> 的默认层（world）"
+        }
+      ],
+      "vModel": [],
+      "examples": [
+        "<WorldLayer><Surface :width=\"400\" :height=\"300\" :position=\"[0, 1.5, -2]\" background=\"glass\" /></WorldLayer>",
+        "<ScreenLayer><Surface fill :width=\"1280\" :height=\"800\" /><WorldLayer><Surface :width=\"300\" :height=\"200\" :position=\"[1, 1, -1]\" /></WorldLayer></ScreenLayer>"
+      ],
+      "mistakes": []
+    }
+  ],
+  "style": {
+    "keys": [
+      {
+        "name": "display",
+        "type": {
+          "type": "string",
+          "enum": [
+            "flex",
+            "none"
+          ]
+        }
+      },
+      {
+        "name": "position",
+        "type": {
+          "type": "string",
+          "enum": [
+            "relative",
+            "absolute"
+          ]
+        }
+      },
+      {
+        "name": "flexDirection",
+        "type": {
+          "type": "string",
+          "enum": [
+            "row",
+            "column",
+            "row-reverse",
+            "column-reverse"
+          ]
+        }
+      },
+      {
+        "name": "justifyContent",
+        "type": {
+          "type": "string",
+          "enum": [
+            "flex-start",
+            "center",
+            "flex-end",
+            "space-between",
+            "space-around",
+            "space-evenly"
+          ]
+        }
+      },
+      {
+        "name": "alignItems",
+        "type": {
+          "type": "string",
+          "enum": [
+            "flex-start",
+            "center",
+            "flex-end",
+            "stretch",
+            "baseline"
+          ]
+        }
+      },
+      {
+        "name": "alignSelf",
+        "type": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "flex-start",
+            "center",
+            "flex-end",
+            "stretch"
+          ]
+        }
+      },
+      {
+        "name": "flexWrap",
+        "type": {
+          "type": "string",
+          "enum": [
+            "nowrap",
+            "wrap"
+          ]
+        }
+      },
+      {
+        "name": "flex",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "flexGrow",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "flexShrink",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "flexBasis",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "width",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "height",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "minWidth",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "maxWidth",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "minHeight",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "maxHeight",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "aspectRatio",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "padding",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "paddingX",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "paddingY",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "paddingTop",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "paddingRight",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "paddingBottom",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "paddingLeft",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "margin",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "marginX",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "marginY",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "marginTop",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "marginRight",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "marginBottom",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "marginLeft",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "gap",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "rowGap",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "columnGap",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "top",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "right",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "bottom",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "left",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "inset",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+            },
+            {
+              "type": "string",
+              "const": "auto"
+            }
+          ]
+        }
+      },
+      {
+        "name": "overflow",
+        "type": {
+          "type": "string",
+          "enum": [
+            "visible",
+            "hidden",
+            "scroll"
+          ]
+        }
+      },
+      {
+        "name": "pointerEvents",
+        "type": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "none",
+            "box-none"
+          ]
+        }
+      },
+      {
+        "name": "bg",
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "string",
+              "const": "glass"
+            },
+            {
+              "type": "string",
+              "const": "glass-clear"
+            },
+            {
+              "type": "string",
+              "const": "none"
+            }
+          ]
+        }
+      },
+      {
+        "name": "radius",
+        "type": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "string",
+              "const": "capsule"
+            },
+            {
+              "type": "string",
+              "const": "concentric"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      {
+        "name": "border",
+        "type": {
+          "type": "object",
+          "properties": {
+            "width": {
+              "type": "number"
+            },
+            "color": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "width",
+            "color"
+          ],
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "shadow",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "name": "opacity",
+        "type": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      {
+        "name": "scale",
+        "type": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      {
+        "name": "font",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "name": "fontSize",
+        "type": {
+          "type": [
+            "number",
+            "string"
+          ]
+        }
+      },
+      {
+        "name": "fontWeight",
+        "type": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 900
+        }
+      },
+      {
+        "name": "lineHeight",
+        "type": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      {
+        "name": "letterSpacing",
+        "type": {
+          "type": "number"
+        }
+      },
+      {
+        "name": "textAlign",
+        "type": {
+          "type": "string",
+          "enum": [
+            "left",
+            "center",
+            "right"
+          ]
+        }
+      },
+      {
+        "name": "color",
+        "type": {
+          "type": "string"
+        }
+      },
+      {
+        "name": "maxLines",
+        "type": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      {
+        "name": "wrap",
+        "type": {
+          "type": "boolean"
+        }
+      },
+      {
+        "name": "glass",
+        "type": {
+          "type": "object",
+          "properties": {
+            "variant": {
+              "type": "string",
+              "enum": [
+                "regular",
+                "clear"
+              ]
+            },
+            "thickness": {
+              "type": "number",
+              "minimum": 0
+            },
+            "fillet": {
+              "type": "number",
+              "minimum": 0
+            },
+            "filletBottom": {
+              "type": "number",
+              "minimum": 0
+            },
+            "profile": {
+              "type": "string",
+              "enum": [
+                "fillet",
+                "lens"
+              ]
+            },
+            "scatter": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "lift": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "edgeGlow": {
+              "type": "number",
+              "minimum": 0
+            },
+            "glow": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "color": {
+                      "type": "string"
+                    },
+                    "strength": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "split": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "color",
+                    "strength"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "ior": {
+              "type": "number"
+            },
+            "dispersion": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "roughness": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "tint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "absorption": {
+              "type": "number",
+              "minimum": 0
+            },
+            "envIntensity": {
+              "type": "number",
+              "minimum": 0
+            },
+            "specularIntensity": {
+              "type": "number",
+              "minimum": 0
+            },
+            "innerGlow": {
+              "type": "number",
+              "minimum": 0
+            },
+            "adaptive": {
+              "type": "boolean"
+            },
+            "cornerExponent": {
+              "type": "number",
+              "minimum": 2
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "transition",
+        "type": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "enum": [
+              "x",
+              "y",
+              "width",
+              "height",
+              "scale",
+              "opacity",
+              "color",
+              "bg",
+              "radius",
+              "glass",
+              "elevation",
+              "tilt"
+            ]
+          },
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "snappy",
+                  "smooth",
+                  "bouncy"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "stiffness": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "damping": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "mass": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "stiffness",
+                  "damping"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "response": {
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "dampingFraction": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "response",
+                  "dampingFraction"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "duration": {
+                    "type": "number"
+                  },
+                  "easing": {
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "ease-in",
+                      "ease-out",
+                      "ease-in-out"
+                    ]
+                  }
+                },
+                "required": [
+                  "duration",
+                  "easing"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      {
+        "name": "hover",
+        "type": {
+          "type": "object",
+          "properties": {
+            "display": {
+              "type": "string",
+              "enum": [
+                "flex",
+                "none"
+              ]
+            },
+            "position": {
+              "type": "string",
+              "enum": [
+                "relative",
+                "absolute"
+              ]
+            },
+            "flexDirection": {
+              "type": "string",
+              "enum": [
+                "row",
+                "column",
+                "row-reverse",
+                "column-reverse"
+              ]
+            },
+            "justifyContent": {
+              "type": "string",
+              "enum": [
+                "flex-start",
+                "center",
+                "flex-end",
+                "space-between",
+                "space-around",
+                "space-evenly"
+              ]
+            },
+            "alignItems": {
+              "type": "string",
+              "enum": [
+                "flex-start",
+                "center",
+                "flex-end",
+                "stretch",
+                "baseline"
+              ]
+            },
+            "alignSelf": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "flex-start",
+                "center",
+                "flex-end",
+                "stretch"
+              ]
+            },
+            "flexWrap": {
+              "type": "string",
+              "enum": [
+                "nowrap",
+                "wrap"
+              ]
+            },
+            "flex": {
+              "type": "number"
+            },
+            "flexGrow": {
+              "type": "number"
+            },
+            "flexShrink": {
+              "type": "number"
+            },
+            "flexBasis": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "minWidth": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "maxWidth": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "minHeight": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "maxHeight": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "aspectRatio": {
+              "type": "number"
+            },
+            "padding": {
+              "type": "number"
+            },
+            "paddingX": {
+              "type": "number"
+            },
+            "paddingY": {
+              "type": "number"
+            },
+            "paddingTop": {
+              "type": "number"
+            },
+            "paddingRight": {
+              "type": "number"
+            },
+            "paddingBottom": {
+              "type": "number"
+            },
+            "paddingLeft": {
+              "type": "number"
+            },
+            "margin": {
+              "type": "number"
+            },
+            "marginX": {
+              "type": "number"
+            },
+            "marginY": {
+              "type": "number"
+            },
+            "marginTop": {
+              "type": "number"
+            },
+            "marginRight": {
+              "type": "number"
+            },
+            "marginBottom": {
+              "type": "number"
+            },
+            "marginLeft": {
+              "type": "number"
+            },
+            "gap": {
+              "type": "number"
+            },
+            "rowGap": {
+              "type": "number"
+            },
+            "columnGap": {
+              "type": "number"
+            },
+            "top": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "right": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "bottom": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "left": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "inset": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "overflow": {
+              "type": "string",
+              "enum": [
+                "visible",
+                "hidden",
+                "scroll"
+              ]
+            },
+            "pointerEvents": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "none",
+                "box-none"
+              ]
+            },
+            "bg": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "const": "glass"
+                },
+                {
+                  "type": "string",
+                  "const": "glass-clear"
+                },
+                {
+                  "type": "string",
+                  "const": "none"
+                }
+              ]
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "const": "capsule"
+                },
+                {
+                  "type": "string",
+                  "const": "concentric"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "border": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "number"
+                },
+                "color": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "width",
+                "color"
+              ],
+              "additionalProperties": false
+            },
+            "shadow": {
+              "type": "string"
+            },
+            "opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "scale": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "font": {
+              "type": "string"
+            },
+            "fontSize": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "fontWeight": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 900
+            },
+            "lineHeight": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "letterSpacing": {
+              "type": "number"
+            },
+            "textAlign": {
+              "type": "string",
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ]
+            },
+            "color": {
+              "type": "string"
+            },
+            "maxLines": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "wrap": {
+              "type": "boolean"
+            },
+            "glass": {
+              "type": "object",
+              "properties": {
+                "variant": {
+                  "type": "string",
+                  "enum": [
+                    "regular",
+                    "clear"
+                  ]
+                },
+                "thickness": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "fillet": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "filletBottom": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "profile": {
+                  "type": "string",
+                  "enum": [
+                    "fillet",
+                    "lens"
+                  ]
+                },
+                "scatter": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "lift": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "edgeGlow": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "glow": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "color": {
+                          "type": "string"
+                        },
+                        "strength": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "split": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        }
+                      },
+                      "required": [
+                        "color",
+                        "strength"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ior": {
+                  "type": "number"
+                },
+                "dispersion": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "roughness": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "tint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "absorption": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "envIntensity": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "specularIntensity": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "innerGlow": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "adaptive": {
+                  "type": "boolean"
+                },
+                "cornerExponent": {
+                  "type": "number",
+                  "minimum": 2
+                }
+              },
+              "additionalProperties": false
+            },
+            "transition": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "enum": [
+                  "x",
+                  "y",
+                  "width",
+                  "height",
+                  "scale",
+                  "opacity",
+                  "color",
+                  "bg",
+                  "radius",
+                  "glass",
+                  "elevation",
+                  "tilt"
+                ]
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "snappy",
+                      "smooth",
+                      "bouncy"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "stiffness": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "damping": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "mass": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "stiffness",
+                      "damping"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "response": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "dampingFraction": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "response",
+                      "dampingFraction"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "duration": {
+                        "type": "number"
+                      },
+                      "easing": {
+                        "type": "string",
+                        "enum": [
+                          "linear",
+                          "ease-in",
+                          "ease-out",
+                          "ease-in-out"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "duration",
+                      "easing"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "pressed",
+        "type": {
+          "type": "object",
+          "properties": {
+            "display": {
+              "type": "string",
+              "enum": [
+                "flex",
+                "none"
+              ]
+            },
+            "position": {
+              "type": "string",
+              "enum": [
+                "relative",
+                "absolute"
+              ]
+            },
+            "flexDirection": {
+              "type": "string",
+              "enum": [
+                "row",
+                "column",
+                "row-reverse",
+                "column-reverse"
+              ]
+            },
+            "justifyContent": {
+              "type": "string",
+              "enum": [
+                "flex-start",
+                "center",
+                "flex-end",
+                "space-between",
+                "space-around",
+                "space-evenly"
+              ]
+            },
+            "alignItems": {
+              "type": "string",
+              "enum": [
+                "flex-start",
+                "center",
+                "flex-end",
+                "stretch",
+                "baseline"
+              ]
+            },
+            "alignSelf": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "flex-start",
+                "center",
+                "flex-end",
+                "stretch"
+              ]
+            },
+            "flexWrap": {
+              "type": "string",
+              "enum": [
+                "nowrap",
+                "wrap"
+              ]
+            },
+            "flex": {
+              "type": "number"
+            },
+            "flexGrow": {
+              "type": "number"
+            },
+            "flexShrink": {
+              "type": "number"
+            },
+            "flexBasis": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "minWidth": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "maxWidth": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "minHeight": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "maxHeight": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "aspectRatio": {
+              "type": "number"
+            },
+            "padding": {
+              "type": "number"
+            },
+            "paddingX": {
+              "type": "number"
+            },
+            "paddingY": {
+              "type": "number"
+            },
+            "paddingTop": {
+              "type": "number"
+            },
+            "paddingRight": {
+              "type": "number"
+            },
+            "paddingBottom": {
+              "type": "number"
+            },
+            "paddingLeft": {
+              "type": "number"
+            },
+            "margin": {
+              "type": "number"
+            },
+            "marginX": {
+              "type": "number"
+            },
+            "marginY": {
+              "type": "number"
+            },
+            "marginTop": {
+              "type": "number"
+            },
+            "marginRight": {
+              "type": "number"
+            },
+            "marginBottom": {
+              "type": "number"
+            },
+            "marginLeft": {
+              "type": "number"
+            },
+            "gap": {
+              "type": "number"
+            },
+            "rowGap": {
+              "type": "number"
+            },
+            "columnGap": {
+              "type": "number"
+            },
+            "top": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "right": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "bottom": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "left": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "inset": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "overflow": {
+              "type": "string",
+              "enum": [
+                "visible",
+                "hidden",
+                "scroll"
+              ]
+            },
+            "pointerEvents": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "none",
+                "box-none"
+              ]
+            },
+            "bg": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "const": "glass"
+                },
+                {
+                  "type": "string",
+                  "const": "glass-clear"
+                },
+                {
+                  "type": "string",
+                  "const": "none"
+                }
+              ]
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "const": "capsule"
+                },
+                {
+                  "type": "string",
+                  "const": "concentric"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "border": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "number"
+                },
+                "color": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "width",
+                "color"
+              ],
+              "additionalProperties": false
+            },
+            "shadow": {
+              "type": "string"
+            },
+            "opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "scale": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "font": {
+              "type": "string"
+            },
+            "fontSize": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "fontWeight": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 900
+            },
+            "lineHeight": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "letterSpacing": {
+              "type": "number"
+            },
+            "textAlign": {
+              "type": "string",
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ]
+            },
+            "color": {
+              "type": "string"
+            },
+            "maxLines": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "wrap": {
+              "type": "boolean"
+            },
+            "glass": {
+              "type": "object",
+              "properties": {
+                "variant": {
+                  "type": "string",
+                  "enum": [
+                    "regular",
+                    "clear"
+                  ]
+                },
+                "thickness": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "fillet": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "filletBottom": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "profile": {
+                  "type": "string",
+                  "enum": [
+                    "fillet",
+                    "lens"
+                  ]
+                },
+                "scatter": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "lift": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "edgeGlow": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "glow": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "color": {
+                          "type": "string"
+                        },
+                        "strength": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "split": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        }
+                      },
+                      "required": [
+                        "color",
+                        "strength"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ior": {
+                  "type": "number"
+                },
+                "dispersion": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "roughness": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "tint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "absorption": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "envIntensity": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "specularIntensity": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "innerGlow": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "adaptive": {
+                  "type": "boolean"
+                },
+                "cornerExponent": {
+                  "type": "number",
+                  "minimum": 2
+                }
+              },
+              "additionalProperties": false
+            },
+            "transition": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "enum": [
+                  "x",
+                  "y",
+                  "width",
+                  "height",
+                  "scale",
+                  "opacity",
+                  "color",
+                  "bg",
+                  "radius",
+                  "glass",
+                  "elevation",
+                  "tilt"
+                ]
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "snappy",
+                      "smooth",
+                      "bouncy"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "stiffness": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "damping": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "mass": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "stiffness",
+                      "damping"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "response": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "dampingFraction": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "response",
+                      "dampingFraction"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "duration": {
+                        "type": "number"
+                      },
+                      "easing": {
+                        "type": "string",
+                        "enum": [
+                          "linear",
+                          "ease-in",
+                          "ease-out",
+                          "ease-in-out"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "duration",
+                      "easing"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "focused",
+        "type": {
+          "type": "object",
+          "properties": {
+            "display": {
+              "type": "string",
+              "enum": [
+                "flex",
+                "none"
+              ]
+            },
+            "position": {
+              "type": "string",
+              "enum": [
+                "relative",
+                "absolute"
+              ]
+            },
+            "flexDirection": {
+              "type": "string",
+              "enum": [
+                "row",
+                "column",
+                "row-reverse",
+                "column-reverse"
+              ]
+            },
+            "justifyContent": {
+              "type": "string",
+              "enum": [
+                "flex-start",
+                "center",
+                "flex-end",
+                "space-between",
+                "space-around",
+                "space-evenly"
+              ]
+            },
+            "alignItems": {
+              "type": "string",
+              "enum": [
+                "flex-start",
+                "center",
+                "flex-end",
+                "stretch",
+                "baseline"
+              ]
+            },
+            "alignSelf": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "flex-start",
+                "center",
+                "flex-end",
+                "stretch"
+              ]
+            },
+            "flexWrap": {
+              "type": "string",
+              "enum": [
+                "nowrap",
+                "wrap"
+              ]
+            },
+            "flex": {
+              "type": "number"
+            },
+            "flexGrow": {
+              "type": "number"
+            },
+            "flexShrink": {
+              "type": "number"
+            },
+            "flexBasis": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "minWidth": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "maxWidth": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "minHeight": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "maxHeight": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "aspectRatio": {
+              "type": "number"
+            },
+            "padding": {
+              "type": "number"
+            },
+            "paddingX": {
+              "type": "number"
+            },
+            "paddingY": {
+              "type": "number"
+            },
+            "paddingTop": {
+              "type": "number"
+            },
+            "paddingRight": {
+              "type": "number"
+            },
+            "paddingBottom": {
+              "type": "number"
+            },
+            "paddingLeft": {
+              "type": "number"
+            },
+            "margin": {
+              "type": "number"
+            },
+            "marginX": {
+              "type": "number"
+            },
+            "marginY": {
+              "type": "number"
+            },
+            "marginTop": {
+              "type": "number"
+            },
+            "marginRight": {
+              "type": "number"
+            },
+            "marginBottom": {
+              "type": "number"
+            },
+            "marginLeft": {
+              "type": "number"
+            },
+            "gap": {
+              "type": "number"
+            },
+            "rowGap": {
+              "type": "number"
+            },
+            "columnGap": {
+              "type": "number"
+            },
+            "top": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "right": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "bottom": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "left": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "inset": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "overflow": {
+              "type": "string",
+              "enum": [
+                "visible",
+                "hidden",
+                "scroll"
+              ]
+            },
+            "pointerEvents": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "none",
+                "box-none"
+              ]
+            },
+            "bg": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "const": "glass"
+                },
+                {
+                  "type": "string",
+                  "const": "glass-clear"
+                },
+                {
+                  "type": "string",
+                  "const": "none"
+                }
+              ]
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "const": "capsule"
+                },
+                {
+                  "type": "string",
+                  "const": "concentric"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "border": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "number"
+                },
+                "color": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "width",
+                "color"
+              ],
+              "additionalProperties": false
+            },
+            "shadow": {
+              "type": "string"
+            },
+            "opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "scale": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "font": {
+              "type": "string"
+            },
+            "fontSize": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "fontWeight": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 900
+            },
+            "lineHeight": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "letterSpacing": {
+              "type": "number"
+            },
+            "textAlign": {
+              "type": "string",
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ]
+            },
+            "color": {
+              "type": "string"
+            },
+            "maxLines": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "wrap": {
+              "type": "boolean"
+            },
+            "glass": {
+              "type": "object",
+              "properties": {
+                "variant": {
+                  "type": "string",
+                  "enum": [
+                    "regular",
+                    "clear"
+                  ]
+                },
+                "thickness": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "fillet": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "filletBottom": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "profile": {
+                  "type": "string",
+                  "enum": [
+                    "fillet",
+                    "lens"
+                  ]
+                },
+                "scatter": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "lift": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "edgeGlow": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "glow": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "color": {
+                          "type": "string"
+                        },
+                        "strength": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "split": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        }
+                      },
+                      "required": [
+                        "color",
+                        "strength"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ior": {
+                  "type": "number"
+                },
+                "dispersion": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "roughness": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "tint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "absorption": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "envIntensity": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "specularIntensity": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "innerGlow": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "adaptive": {
+                  "type": "boolean"
+                },
+                "cornerExponent": {
+                  "type": "number",
+                  "minimum": 2
+                }
+              },
+              "additionalProperties": false
+            },
+            "transition": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "enum": [
+                  "x",
+                  "y",
+                  "width",
+                  "height",
+                  "scale",
+                  "opacity",
+                  "color",
+                  "bg",
+                  "radius",
+                  "glass",
+                  "elevation",
+                  "tilt"
+                ]
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "snappy",
+                      "smooth",
+                      "bouncy"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "stiffness": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "damping": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "mass": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "stiffness",
+                      "damping"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "response": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "dampingFraction": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "response",
+                      "dampingFraction"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "duration": {
+                        "type": "number"
+                      },
+                      "easing": {
+                        "type": "string",
+                        "enum": [
+                          "linear",
+                          "ease-in",
+                          "ease-out",
+                          "ease-in-out"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "duration",
+                      "easing"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      {
+        "name": "disabled",
+        "type": {
+          "type": "object",
+          "properties": {
+            "display": {
+              "type": "string",
+              "enum": [
+                "flex",
+                "none"
+              ]
+            },
+            "position": {
+              "type": "string",
+              "enum": [
+                "relative",
+                "absolute"
+              ]
+            },
+            "flexDirection": {
+              "type": "string",
+              "enum": [
+                "row",
+                "column",
+                "row-reverse",
+                "column-reverse"
+              ]
+            },
+            "justifyContent": {
+              "type": "string",
+              "enum": [
+                "flex-start",
+                "center",
+                "flex-end",
+                "space-between",
+                "space-around",
+                "space-evenly"
+              ]
+            },
+            "alignItems": {
+              "type": "string",
+              "enum": [
+                "flex-start",
+                "center",
+                "flex-end",
+                "stretch",
+                "baseline"
+              ]
+            },
+            "alignSelf": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "flex-start",
+                "center",
+                "flex-end",
+                "stretch"
+              ]
+            },
+            "flexWrap": {
+              "type": "string",
+              "enum": [
+                "nowrap",
+                "wrap"
+              ]
+            },
+            "flex": {
+              "type": "number"
+            },
+            "flexGrow": {
+              "type": "number"
+            },
+            "flexShrink": {
+              "type": "number"
+            },
+            "flexBasis": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "width": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "height": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "minWidth": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "maxWidth": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "minHeight": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "maxHeight": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "aspectRatio": {
+              "type": "number"
+            },
+            "padding": {
+              "type": "number"
+            },
+            "paddingX": {
+              "type": "number"
+            },
+            "paddingY": {
+              "type": "number"
+            },
+            "paddingTop": {
+              "type": "number"
+            },
+            "paddingRight": {
+              "type": "number"
+            },
+            "paddingBottom": {
+              "type": "number"
+            },
+            "paddingLeft": {
+              "type": "number"
+            },
+            "margin": {
+              "type": "number"
+            },
+            "marginX": {
+              "type": "number"
+            },
+            "marginY": {
+              "type": "number"
+            },
+            "marginTop": {
+              "type": "number"
+            },
+            "marginRight": {
+              "type": "number"
+            },
+            "marginBottom": {
+              "type": "number"
+            },
+            "marginLeft": {
+              "type": "number"
+            },
+            "gap": {
+              "type": "number"
+            },
+            "rowGap": {
+              "type": "number"
+            },
+            "columnGap": {
+              "type": "number"
+            },
+            "top": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "right": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "bottom": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "left": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "inset": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^-?\\d+(?:\\.\\d+)?(%)$"
+                },
+                {
+                  "type": "string",
+                  "const": "auto"
+                }
+              ]
+            },
+            "overflow": {
+              "type": "string",
+              "enum": [
+                "visible",
+                "hidden",
+                "scroll"
+              ]
+            },
+            "pointerEvents": {
+              "type": "string",
+              "enum": [
+                "auto",
+                "none",
+                "box-none"
+              ]
+            },
+            "bg": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "string",
+                  "const": "glass"
+                },
+                {
+                  "type": "string",
+                  "const": "glass-clear"
+                },
+                {
+                  "type": "string",
+                  "const": "none"
+                }
+              ]
+            },
+            "radius": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string",
+                  "const": "capsule"
+                },
+                {
+                  "type": "string",
+                  "const": "concentric"
+                },
+                {
+                  "type": "string"
+                }
+              ]
+            },
+            "border": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "type": "number"
+                },
+                "color": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "width",
+                "color"
+              ],
+              "additionalProperties": false
+            },
+            "shadow": {
+              "type": "string"
+            },
+            "opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "scale": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "font": {
+              "type": "string"
+            },
+            "fontSize": {
+              "type": [
+                "number",
+                "string"
+              ]
+            },
+            "fontWeight": {
+              "type": "integer",
+              "minimum": 100,
+              "maximum": 900
+            },
+            "lineHeight": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "letterSpacing": {
+              "type": "number"
+            },
+            "textAlign": {
+              "type": "string",
+              "enum": [
+                "left",
+                "center",
+                "right"
+              ]
+            },
+            "color": {
+              "type": "string"
+            },
+            "maxLines": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            },
+            "wrap": {
+              "type": "boolean"
+            },
+            "glass": {
+              "type": "object",
+              "properties": {
+                "variant": {
+                  "type": "string",
+                  "enum": [
+                    "regular",
+                    "clear"
+                  ]
+                },
+                "thickness": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "fillet": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "filletBottom": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "profile": {
+                  "type": "string",
+                  "enum": [
+                    "fillet",
+                    "lens"
+                  ]
+                },
+                "scatter": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "lift": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "edgeGlow": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "glow": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "color": {
+                          "type": "string"
+                        },
+                        "strength": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "split": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
+                        }
+                      },
+                      "required": [
+                        "color",
+                        "strength"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "ior": {
+                  "type": "number"
+                },
+                "dispersion": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "roughness": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "tint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "absorption": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "envIntensity": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "specularIntensity": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "innerGlow": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "adaptive": {
+                  "type": "boolean"
+                },
+                "cornerExponent": {
+                  "type": "number",
+                  "minimum": 2
+                }
+              },
+              "additionalProperties": false
+            },
+            "transition": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string",
+                "enum": [
+                  "x",
+                  "y",
+                  "width",
+                  "height",
+                  "scale",
+                  "opacity",
+                  "color",
+                  "bg",
+                  "radius",
+                  "glass",
+                  "elevation",
+                  "tilt"
+                ]
+              },
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "snappy",
+                      "smooth",
+                      "bouncy"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "stiffness": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "damping": {
+                        "type": "number",
+                        "minimum": 0
+                      },
+                      "mass": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      }
+                    },
+                    "required": [
+                      "stiffness",
+                      "damping"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "response": {
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "dampingFraction": {
+                        "type": "number",
+                        "minimum": 0
+                      }
+                    },
+                    "required": [
+                      "response",
+                      "dampingFraction"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "duration": {
+                        "type": "number"
+                      },
+                      "easing": {
+                        "type": "string",
+                        "enum": [
+                          "linear",
+                          "ease-in",
+                          "ease-out",
+                          "ease-in-out"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "duration",
+                      "easing"
+                    ],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    ],
+    "states": [
+      "hover",
+      "pressed",
+      "focused",
+      "disabled"
+    ],
+    "tw": [
+      "flex",
+      "hidden",
+      "absolute",
+      "relative",
+      "flex-row",
+      "flex-col",
+      "flex-row-reverse",
+      "flex-col-reverse",
+      "flex-wrap",
+      "flex-nowrap",
+      "flex-1",
+      "grow",
+      "shrink-0",
+      "items-start",
+      "items-center",
+      "items-end",
+      "items-stretch",
+      "items-baseline",
+      "justify-start",
+      "justify-center",
+      "justify-end",
+      "justify-between",
+      "justify-around",
+      "justify-evenly",
+      "self-start",
+      "self-center",
+      "self-end",
+      "self-stretch",
+      "rounded-none",
+      "rounded-sm",
+      "rounded-md",
+      "rounded-lg",
+      "rounded-xl",
+      "rounded-2xl",
+      "rounded-full",
+      "bg-glass",
+      "bg-glass-clear",
+      "bg-none",
+      "text-left",
+      "text-center",
+      "text-right",
+      "font-medium",
+      "font-semibold",
+      "font-bold",
+      "overflow-hidden",
+      "overflow-scroll",
+      "overflow-visible",
+      "shadow-sm",
+      "shadow-md",
+      "shadow-lg",
+      "w-full",
+      "w-auto",
+      "h-full",
+      "h-auto",
+      "p-N",
+      "px-N",
+      "py-N",
+      "pt-N",
+      "pr-N",
+      "pb-N",
+      "pl-N",
+      "m-N",
+      "mx-N",
+      "my-N",
+      "mt-N",
+      "mr-N",
+      "mb-N",
+      "ml-N",
+      "gap-N",
+      "gap-x-N",
+      "gap-y-N",
+      "inset-N",
+      "top-N",
+      "right-N",
+      "bottom-N",
+      "left-N",
+      "w-N",
+      "h-N",
+      "min-w-N",
+      "max-w-N",
+      "min-h-N",
+      "max-h-N",
+      "font-{weight}",
+      "opacity-N",
+      "scale-N",
+      "scale-[N]",
+      "text-xs",
+      "text-sm",
+      "text-base",
+      "text-lg",
+      "text-xl",
+      "text-2xl",
+      "text-3xl",
+      "text-4xl",
+      "text-accent",
+      "text-label",
+      "text-secondaryLabel",
+      "text-tertiaryLabel",
+      "text-fill",
+      "text-separator",
+      "text-danger",
+      "text-success",
+      "text-scrim",
+      "bg-accent",
+      "bg-label",
+      "bg-secondaryLabel",
+      "bg-tertiaryLabel",
+      "bg-fill",
+      "bg-separator",
+      "bg-danger",
+      "bg-success",
+      "bg-scrim",
+      "text-[#hex]",
+      "bg-[#hex]"
+    ]
+  },
+  "theme": {
+    "colors": [
+      "accent",
+      "label",
+      "secondaryLabel",
+      "tertiaryLabel",
+      "fill",
+      "separator",
+      "danger",
+      "success",
+      "scrim"
+    ],
+    "fontSize": {
+      "xs": 12,
+      "sm": 14,
+      "base": 17,
+      "lg": 20,
+      "xl": 24,
+      "2xl": 30,
+      "3xl": 36,
+      "4xl": 46
+    },
+    "radius": {
+      "none": 0,
+      "sm": 8,
+      "md": 12,
+      "lg": 16,
+      "xl": 24,
+      "2xl": 32
+    },
+    "spacing": [
+      0,
+      4,
+      8,
+      12,
+      16,
+      20,
+      24,
+      32,
+      40,
+      48,
+      64,
+      80,
+      96
+    ],
+    "metrics": {
+      "controlPadding": 26,
+      "icon": 28,
+      "iconGap": 14,
+      "groupGap": 12,
+      "checkbox": 44,
+      "checkboxRadius": 12,
+      "switchWidth": 136,
+      "switchHeight": 62,
+      "knob": 48,
+      "knobMargin": 7
+    }
+  },
+  "rules": [
+    "Use glass for containers (Surface, Block, Card, Dialog) and controls; use Box for plain content/layout. Nested glass controls inside Card are supported.",
+    "Buttons default to capsule; circle buttons contain only an icon. Use fixed radii for panels and concentric radii for nested rounded content.",
+    "Use one glassProminent primary action per screen; secondary actions use glass. filled, tinted and plain buttons are flat.",
+    "Use design tokens for color, fontSize, radius and spacing; numeric layout values are pt, rotations are radians, world positions are world units.",
+    "Bind numeric and boolean values with :prop; use Stack direction/gap/align/justify/wrap props rather than conflicting tw layout classes.",
+    "Button uses @press; Input uses v-model, Switch/Checkbox use v-model:checked, Dialog uses v-model:open, Space uses v-model:focus. Controlled values must be updated by the parent.",
+    "Glass controls lift and tilt on hover and shrink on press; touch has no hover. Reduced motion and motion=frozen suppress animation.",
+    "Surface, ScreenLayer, WorldLayer and Space have no host node; put style, class and tw on their content instead.",
+    "An invisible overlay with opacity:0 can still intercept pointers: set pointerEvents:none when it should let pointers through. Surface interactive=false lets pointers through that entire Surface.",
+    "Host tags are box, text, image, glass, scroll and portal. Use a Vue compiler isCustomElement predicate matching HOST_TAGS for raw host elements.",
+    "KeepAlive and Suspense are unsupported. Use v-if/v-for, slots, Teleport and Transition/GlassTransition with the documented renderer limits.",
+    "Named Teleport targets use <portal name=\"overlay\" /> and to=\"overlay\". The target must exist even when disabled; same-pass named targets require Teleport defer. Keep deferred content simple and validate it; avoid nested or conditionally mounted deferred targets.",
+    "glassId morphs match a removed and newly mounted button within 500 ms in the same app and same live Surface. Do not duplicate a live id or move it across Surfaces; transition-leaving and KeepAlive-deactivated buttons do not count as removed.",
+    "GlassContainer fuses nearby plain glass when gap is less than spacing; glowing/tinted controls keep their own rim.",
+    "Blocks live directly in a Space, with unique names; focus names an existing Block. A Block size is fixed (width/height in pt), never content-sized.",
+    "Use one CameraRig per root, normally owned by Space; do not run OrbitControls next to a camera-driving Space. Use :camera=\"false\" only when the host owns the camera.",
+    "Space currently arranges Blocks on an arc using radius and gap; explicit position/rotation override placement.",
+    "3D charts and Viewport3D require a world Surface/Block and cannot be placed in scroll. Hold three.js objects with shallowRef or markRaw; dispose owned geometry/materials yourself.",
+    "Dialog owns its screen Surfaces and traps focus; keep it mounted and control open for exit animation. Footer actions must close it explicitly; long content needs a fixed-height scroll.",
+    "JSON Schema describes representable inputs; custom function/Object3D validators use an unconstrained schema with their API contract in description. Runtime validation still applies."
+  ]
+}

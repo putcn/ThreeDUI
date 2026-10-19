@@ -2,7 +2,25 @@
   "name": "@glassui/vue",
   "version": "0.0.0",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@glassui/core": "workspace:*", "@glassui/text": "workspace:*", "@vue/runtime-core": "3.5.44", "zod": "^4.6.5" },
-  "devDependencies": { "@glassui/render": "workspace:*", "@napi-rs/canvas": "^1.0.10" }
+  "exports": {
+    ".": "./src/index.ts",
+    "./manifest.json": "./manifest.json",
+    "./manifest": "./src/manifest.ts"
+  },
+  "dependencies": {
+    "@glassui/core": "workspace:*",
+    "@glassui/text": "workspace:*",
+    "@vue/runtime-core": "3.5.44",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@glassui/render": "workspace:*",
+    "@napi-rs/canvas": "^1.0.10",
+    "@vue/compiler-dom": "3.5.44"
+  },
+  "files": [
+    "src",
+    "manifest.json",
+    "README.md"
+  ]
 }

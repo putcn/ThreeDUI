@@ -125,6 +125,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^1.0.10
         version: 1.0.10
+      '@vue/compiler-dom':
+        specifier: 3.5.44
+        version: 3.5.44
 
   spikes/glyph-cjk:
     dependencies:
