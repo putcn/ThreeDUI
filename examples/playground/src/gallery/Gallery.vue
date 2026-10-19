@@ -1,21 +1,14 @@
 <script setup lang="ts">
-// The component gallery (`?scene=gallery`): every @glassui/vue component, section by section. The content sits on the
-// wall with no glass under it (spec §8.3: glass on controls, never on content areas); the controls (Buttons, Switches,
-// Checkboxes, Inputs) are glass right on the wall, with no panel behind them; the Glass Container section fuses a
-// toolbar of them into one slab and morphs a glassId between places. The Dialog section's Button opens a
-// <Dialog>: a glass panel of its own over a scrim that dims the whole screen. Beside the column stands a world-layer
-// <Surface>: a glass panel in the scene, turned about Y, with hover, clicks and an Input of its own.
+// Six navigable Blocks on one arc; all controls remain real Vue components.
 import { computed, h, onBeforeUnmount, ref, type FunctionalComponent } from 'vue'
-import { Box, Button, Checkbox, Dialog, GlassContainer, Icon, ICON_NAMES, Input, Stack, Surface, Switch, Text, useScheme } from '@glassui/vue'
+import { Box, Button, Checkbox, Dialog, GlassContainer, Icon, ICON_NAMES, Input, Stack, Block, Space, Switch, Text, useScheme } from '@glassui/vue'
 
-// The page is a vertical `scroll` (the wheel scrolls it once later sections outgrow the viewport). No page fill: the
-// content sits on the wall itself, which the later sections' glass refracts.
 const scheme = useScheme()
 /** The wrap tile's chip fill: the scheme's accent (theme `accent`) at low alpha; a little more under the pointer. */
 const chip = computed(() => scheme.value === 'dark' ? '#8a83ff33' : '#6b63f524')
-const chipHover = computed(() => scheme.value === 'dark' ? '#8a83ff59' : '#6b63f547')
-/** Clicks on the world panel's button. */
-const taps = ref(0)
+const sections = ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers'] as const
+const props = defineProps<{ initialFocus?: string }>()
+const focus = ref(sections.find(s => s === props.initialFocus) ?? 'primitives')
 
 /** A small spaced caption over each group. */
 const Caption: FunctionalComponent<{ value: string }> = p => h(Text, { value: p.value, size: 12, weight: 600, color: 'secondaryLabel', style: { letterSpacing: 1.4 } })
@@ -83,8 +76,6 @@ const setAll = (on: boolean) => { for (const c of channels.value) c.on = on }
 const nickname = ref(''), city = ref('杭州市西湖区文三路 90 号'), secret = ref('glass-ui-2026'), qty = ref<number | null>(12)
 const query = ref('液态玻璃'), poem = ref('春眠不觉晓，处处闻啼鸟。夜来风雨声，花落知多少。')
 const fullName = ref(''), email = ref(''), password = ref(''), submitted = ref('')
-/** The world panel's field. */
-const note = ref('')
 
 /** The Dialog section: renaming the project in a dialog (its field starts from the current name), and how it ended. */
 const project = ref('玻璃界面实验室'), renaming = ref(false), draft = ref(''), outcome = ref('')
@@ -98,15 +89,15 @@ const cancelRename = () => { outcome.value = '已取消'; renaming.value = false
 </script>
 
 <template>
-  <scroll id="gallery" :style="{ width: '100%', height: '100%', overflow: 'scroll' }">
-    <Box :style="{ flexShrink: 0, paddingX: 64, paddingTop: 44, paddingBottom: 40, gap: 32 }">
-      <Stack :gap="6">
-        <Text value="GLASSUI · @glassui/vue" :size="12" :weight="600" color="accent" :style="{ letterSpacing: 1.6 }" />
-        <Text value="组件画廊 Gallery" size="3xl" :weight="700" />
-        <Text value="这里的每一行文字、每个图标和每一处布局，都由 Vue 组件渲染进 three.js 场景里的 Surface。" color="secondaryLabel" />
+  <Space v-model:focus="focus" :radius="10" :gap="0.3">
+    <Block name="primitives" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
+      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
+        <Text value="Gallery" :size="20" :weight="700" :style="{ marginRight: 16 }" />
+        <Button v-for="section in sections" :id="`gallery-primitives-to-${section}`" :key="section" :label="section" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="focus = section" />
       </Stack>
-
-      <Stack id="primitives" :gap="24">
+      <scroll id="gallery-primitives-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+        <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
+          <Stack id="primitives" :gap="24">
         <Stack :gap="12">
           <Stack direction="horizontal" justify="between" align="end">
             <Text value="Primitives" size="xl" :weight="700" />
@@ -220,8 +211,17 @@ const cancelRename = () => { outcome.value = '已取消'; renaming.value = false
           </Stack>
         </Stack>
       </Stack>
-
-      <Stack id="buttons" :gap="24">
+        </Box>
+      </scroll>
+    </Block>
+    <Block name="buttons" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
+      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
+        <Text value="Gallery" :size="20" :weight="700" :style="{ marginRight: 16 }" />
+        <Button v-for="section in sections" :id="`gallery-buttons-to-${section}`" :key="section" :label="section" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="focus = section" />
+      </Stack>
+      <scroll id="gallery-buttons-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+        <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
+          <Stack id="buttons" :gap="24">
         <Stack :gap="12">
           <Stack direction="horizontal" justify="between" align="end">
             <Text value="Buttons" size="xl" :weight="700" />
@@ -282,59 +282,17 @@ const cancelRename = () => { outcome.value = '已取消'; renaming.value = false
           <Text :value="presses ? `press 触发了 ${presses} 次` : '点按、Enter 或空格都会触发 press；Tab 聚焦时显示焦点环'" size="sm" color="secondaryLabel" />
         </Stack>
       </Stack>
-
-      <Stack id="containers" :gap="24">
-        <Stack :gap="12">
-          <Stack direction="horizontal" justify="between" align="end">
-            <Text value="Glass Container" size="xl" :weight="700" />
-            <Text value="玻璃容器 · 相距小于 spacing 的素玻璃融成一块 · glassId 形变" size="sm" color="secondaryLabel" :style="{ marginBottom: 3 }" />
-          </Stack>
-          <Box :style="{ height: 1, bg: 'separator' }" />
-        </Stack>
-
-        <!-- the toolbar: fused at gap 8 (under spacing 16), apart at gap 24; the Buttons slide (an x spring each) -->
-        <Stack direction="horizontal" :gap="40" align="end" wrap>
-          <Stack :gap="10">
-            <GlassContainer id="containers-toolbar" :spacing="16" :gap="toolbarGap">
-              <Button v-for="i in toolbar" :key="i" shape="circle" :leading-icon="i" :style="{ transition: { x: 'smooth' } }" />
-            </GlassContainer>
-            <Caption :value="`工具栏 TOOLBAR · spacing 16 · gap ${toolbarGap}`" />
-          </Stack>
-          <Stack :gap="10">
-            <Button id="containers-widen" :label="wide ? '收拢到 gap 8' : '拉开到 gap 24'" :leading-icon="wide ? 'minus' : 'plus'" @press="wide = !wide" />
-            <Caption value="间距超过 spacing 时各自分开" />
-          </Stack>
-        </Stack>
-
-        <!-- glassId: the star leaves one end and mounts at the other; the new one grows out of the old place -->
-        <Stack :gap="10">
-          <Stack direction="horizontal" :gap="24" align="center">
-            <GlassContainer id="containers-swap-bar" :spacing="16" :gap="8">
-              <Button v-if="swapLeft" key="l" shape="circle" leading-icon="star" glass-id="gallery-swap" />
-              <Box v-else key="lx" :style="{ width: 52, height: 52 }" />
-              <Button v-for="i in swapMiddle" :key="i" shape="circle" :leading-icon="i" />
-              <Button v-if="!swapLeft" key="r" shape="circle" leading-icon="star" glass-id="gallery-swap" />
-              <Box v-else key="rx" :style="{ width: 52, height: 52 }" />
-            </GlassContainer>
-            <Button id="containers-swap" :label="swapLeft ? '换到右边' : '换到左边'" :trailing-icon="swapLeft ? 'chevron-right' : 'chevron-left'" @press="swapLeft = !swapLeft" />
-          </Stack>
-          <Caption value="GLASSID 形变 · 同一 glass-id 的按钮换个位置重新挂载时，从旧处长过去，与相遇的玻璃融合" />
-        </Stack>
-
-        <!-- the selected item: glowing glass stands apart (like Apple's selected toolbar item); keyed to re-mount, its
-             glassId moves the highlight to the new one -->
-        <Stack :gap="10">
-          <GlassContainer id="containers-tabs" :spacing="16" :gap="8">
-            <Button
-              v-for="t in tabs" :key="t.name === tab ? `${t.name}-on` : t.name" shape="circle" :leading-icon="t.icon"
-              :variant="t.name === tab ? 'glassProminent' : 'glass'" :glass-id="t.name === tab ? 'gallery-tab' : undefined" @press="tab = t.name"
-            />
-          </GlassContainer>
-          <Caption value="选中项 SELECTED · 发光的玻璃单独成块，点别的图标试试" />
-        </Stack>
+        </Box>
+      </scroll>
+    </Block>
+    <Block name="toggles" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
+      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
+        <Text value="Gallery" :size="20" :weight="700" :style="{ marginRight: 16 }" />
+        <Button v-for="section in sections" :id="`gallery-toggles-to-${section}`" :key="section" :label="section" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="focus = section" />
       </Stack>
-
-      <Stack id="toggles" :gap="24">
+      <scroll id="gallery-toggles-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+        <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
+          <Stack id="toggles" :gap="24">
         <Stack :gap="12">
           <Stack direction="horizontal" justify="between" align="end">
             <Text value="Switch & Checkbox" size="xl" :weight="700" />
@@ -392,8 +350,17 @@ const cancelRename = () => { outcome.value = '已取消'; renaming.value = false
           <Text :value="`条款：${terms ? '已同意' : '未同意'} · 记住我：${rememberMe ? '开' : '关'}；Tab 聚焦时显示焦点环`" size="sm" color="secondaryLabel" />
         </Stack>
       </Stack>
-
-      <Stack id="inputs" :gap="24">
+        </Box>
+      </scroll>
+    </Block>
+    <Block name="inputs" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
+      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
+        <Text value="Gallery" :size="20" :weight="700" :style="{ marginRight: 16 }" />
+        <Button v-for="section in sections" :id="`gallery-inputs-to-${section}`" :key="section" :label="section" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="focus = section" />
+      </Stack>
+      <scroll id="gallery-inputs-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+        <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
+          <Stack id="inputs" :gap="24">
         <Stack :gap="12">
           <Stack direction="horizontal" justify="between" align="end">
             <Text value="Inputs" size="xl" :weight="700" />
@@ -449,8 +416,17 @@ const cancelRename = () => { outcome.value = '已取消'; renaming.value = false
           <Text :value="submitted ? `Enter 提交了：${submitted}` : '点按或 Tab 进入编辑；Enter 发出 submit，Esc 退出；拖动选择，双击选词'" size="sm" color="secondaryLabel" />
         </Stack>
       </Stack>
-
-      <Stack id="dialogs" :gap="24">
+        </Box>
+      </scroll>
+    </Block>
+    <Block name="dialog" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
+      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
+        <Text value="Gallery" :size="20" :weight="700" :style="{ marginRight: 16 }" />
+        <Button v-for="section in sections" :id="`gallery-dialog-to-${section}`" :key="section" :label="section" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="focus = section" />
+      </Stack>
+      <scroll id="gallery-dialog-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+        <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
+          <Stack id="dialog" :gap="24">
         <Stack :gap="12">
           <Stack direction="horizontal" justify="between" align="end">
             <Text value="Dialog" size="xl" :weight="700" />
@@ -476,33 +452,68 @@ const cancelRename = () => { outcome.value = '已取消'; renaming.value = false
           </template>
         </Dialog>
       </Stack>
-    </Box>
-  </scroll>
-
-  <!-- In the strip right of the column (main.ts: `galleryColumn`): through the playground camera, x = 2.5 keeps the
-       panel in that strip and on screen from 4:3 to ultrawide. 340 × 300 pt at 244 pt per unit: 1.39 × 1.23 units.
-       Seen from the camera it is already ≈ 0.34 rad off-axis there (−0.35 would face the viewer square on), so −0.7
-       turns it ≈ 0.37 rad past that, toward the gallery: a visible slant (its near, right edge ≈ 13 % taller) that
-       keeps the text legible. -->
-  <Surface :width="340" :height="300" :position="[2.5, 0.9, 0]" :rotation="[0, -0.7, 0]" background="glass" :radius="28">
-    <Stack id="world-panel" justify="between" :gap="14" :style="{ padding: 24, flexGrow: 1 }">
-      <Stack :gap="10">
-        <Stack direction="horizontal" :gap="10" align="center">
-          <Icon name="star" :size="24" color="accent" />
-          <Text value="世界层 World layer" size="lg" :weight="700" />
-        </Stack>
-        <Text value="一块世界层 Surface：场景里的玻璃面板，绕 Y 轴转了 −0.7 rad，有自己的悬停、点击与输入。" size="sm" color="secondaryLabel" />
+        </Box>
+      </scroll>
+    </Block>
+    <Block name="containers" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
+      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
+        <Text value="Gallery" :size="20" :weight="700" :style="{ marginRight: 16 }" />
+        <Button v-for="section in sections" :id="`gallery-containers-to-${section}`" :key="section" :label="section" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="focus = section" />
       </Stack>
-      <!-- typed into on a tilted Surface: the IME proxy (and its candidate window) follows the projected caret -->
-      <Input id="world-input" v-model="note" leading-icon="info" placeholder="在世界层输入…" clearable />
-      <Box
-        id="world-tap" tw="flex-row items-center gap-2"
-        :style="{ alignSelf: 'flex-start', paddingX: 14, paddingY: 8, radius: 'capsule', bg: chip, hover: { bg: chipHover }, pressed: { scale: 0.96 }, transition: { bg: 'smooth', scale: 'snappy' } }"
-        @click="taps++"
-      >
-        <Icon name="check" :size="18" color="accent" />
-        <Text :value="taps ? `点了 ${taps} 次` : '悬停、点我试试'" size="sm" :weight="600" color="accent" />
-      </Box>
-    </Stack>
-  </Surface>
+      <scroll id="gallery-containers-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+        <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
+          <Stack id="containers" :gap="24">
+        <Stack :gap="12">
+          <Stack direction="horizontal" justify="between" align="end">
+            <Text value="Glass Container" size="xl" :weight="700" />
+            <Text value="玻璃容器 · 相距小于 spacing 的素玻璃融成一块 · glassId 形变" size="sm" color="secondaryLabel" :style="{ marginBottom: 3 }" />
+          </Stack>
+          <Box :style="{ height: 1, bg: 'separator' }" />
+        </Stack>
+
+        <!-- the toolbar: fused at gap 8 (under spacing 16), apart at gap 24; the Buttons slide (an x spring each) -->
+        <Stack direction="horizontal" :gap="40" align="end" wrap>
+          <Stack :gap="10">
+            <GlassContainer id="containers-toolbar" :spacing="16" :gap="toolbarGap">
+              <Button v-for="i in toolbar" :key="i" shape="circle" :leading-icon="i" :style="{ transition: { x: 'smooth' } }" />
+            </GlassContainer>
+            <Caption :value="`工具栏 TOOLBAR · spacing 16 · gap ${toolbarGap}`" />
+          </Stack>
+          <Stack :gap="10">
+            <Button id="containers-widen" :label="wide ? '收拢到 gap 8' : '拉开到 gap 24'" :leading-icon="wide ? 'minus' : 'plus'" @press="wide = !wide" />
+            <Caption value="间距超过 spacing 时各自分开" />
+          </Stack>
+        </Stack>
+
+        <!-- glassId: the star leaves one end and mounts at the other; the new one grows out of the old place -->
+        <Stack :gap="10">
+          <Stack direction="horizontal" :gap="24" align="center">
+            <GlassContainer id="containers-swap-bar" :spacing="16" :gap="8">
+              <Button v-if="swapLeft" key="l" shape="circle" leading-icon="star" glass-id="gallery-swap" />
+              <Box v-else key="lx" :style="{ width: 52, height: 52 }" />
+              <Button v-for="i in swapMiddle" :key="i" shape="circle" :leading-icon="i" />
+              <Button v-if="!swapLeft" key="r" shape="circle" leading-icon="star" glass-id="gallery-swap" />
+              <Box v-else key="rx" :style="{ width: 52, height: 52 }" />
+            </GlassContainer>
+            <Button id="containers-swap" :label="swapLeft ? '换到右边' : '换到左边'" :trailing-icon="swapLeft ? 'chevron-right' : 'chevron-left'" @press="swapLeft = !swapLeft" />
+          </Stack>
+          <Caption value="GLASSID 形变 · 同一 glass-id 的按钮换个位置重新挂载时，从旧处长过去，与相遇的玻璃融合" />
+        </Stack>
+
+        <!-- the selected item: glowing glass stands apart (like Apple's selected toolbar item); keyed to re-mount, its
+             glassId moves the highlight to the new one -->
+        <Stack :gap="10">
+          <GlassContainer id="containers-tabs" :spacing="16" :gap="8">
+            <Button
+              v-for="t in tabs" :key="t.name === tab ? `${t.name}-on` : t.name" shape="circle" :leading-icon="t.icon"
+              :variant="t.name === tab ? 'glassProminent' : 'glass'" :glass-id="t.name === tab ? 'gallery-tab' : undefined" @press="tab = t.name"
+            />
+          </GlassContainer>
+          <Caption value="选中项 SELECTED · 发光的玻璃单独成块，点别的图标试试" />
+        </Stack>
+      </Stack>
+        </Box>
+      </scroll>
+    </Block>
+  </Space>
 </template>

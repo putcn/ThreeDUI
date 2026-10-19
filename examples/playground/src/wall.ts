@@ -1,14 +1,16 @@
+import type { ColorScheme } from '@glassui/core'
 import { BackSide, CylinderGeometry, DirectionalLight, HemisphereLight, Mesh, PlaneGeometry, type Object3D } from 'three'
 import { MeshStandardNodeMaterial, type Node } from 'three/webgpu'
 import { abs, Fn, float, floor, fract, length, max, mix, smoothstep, uv, vec2, vec3 } from 'three/tsl'
 
+// Dark mode preserves the pastel hues and refraction gradients at 3.5% linear RGB; light mode is unchanged.
 type ColorNode = Node<'vec3'>
 
 /**
  * The backdrop's material (ported from `spikes/glass3d/main.ts`): a soft pastel gradient with colour blobs, a diagonal
  * light beam (so refraction has gradients to bend) and a vignette, over uv (u across, v up).
  */
-function pastelMaterial(): MeshStandardNodeMaterial {
+function pastelMaterial(scheme: ColorScheme): MeshStandardNodeMaterial {
   const material = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 })
   material.colorNode = Fn(() => {
     const q = uv()
@@ -27,7 +29,7 @@ function pastelMaterial(): MeshStandardNodeMaterial {
     c = mix(c, vec3(1.0, 0.98, 0.95), smoothstep(0.55, 0.75, beam).mul(float(1).sub(smoothstep(0.95, 1.2, beam))).mul(0.8))
     c = mix(c, vec3(0.30, 0.28, 0.36), smoothstep(0.45, 0.2, beam).mul(0.6))
     const vignette = float(1).sub(smoothstep(0.4, 1.0, length(q.sub(vec2(0.45, 0.62))).mul(0.9)))
-    return c.mul(0.95).mul(float(0.8).add(vignette.mul(0.25)))
+    return c.mul(0.95).mul(float(0.8).add(vignette.mul(0.25))).mul(scheme === 'dark' ? 0.035 : 1)
   })()
   return material
 }
@@ -36,8 +38,8 @@ function pastelMaterial(): MeshStandardNodeMaterial {
  * The backdrop wall: the pastel material on a 16 × 11 unit plane at z = −2.5; it neither casts nor receives shadows. It
  * lives in the host scene, so it is lit by `createHostLights`, not by the UI's lights.
  */
-export function createWall(): Mesh {
-  const wall = new Mesh(new PlaneGeometry(16, 11), pastelMaterial())
+export function createWall(scheme: ColorScheme = 'light'): Mesh {
+  const wall = new Mesh(new PlaneGeometry(16, 11), pastelMaterial(scheme))
   wall.name = 'wall'
   wall.position.z = -2.5
   wall.castShadow = false
@@ -78,7 +80,7 @@ const smooth = (e0: number, e1: number, x: number): number => { const t = Math.m
 const mixRGB = (a: RGB, b: RGB, t: number): [number, number, number] => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 
 /** The arc's pastel at (u, v), linear RGB before lighting: the JS twin of `arcPastelMaterial`'s colour (for tests and tools). */
-export function arcPastel(u: number, v: number): [number, number, number] {
+export function arcPastel(u: number, v: number, scheme: ColorScheme = 'light'): [number, number, number] {
   const P = ARC_PASTEL
   let c = mixRGB(P.base.low, P.base.high, v)
   for (const b of P.blobs) {
@@ -90,12 +92,12 @@ export function arcPastel(u: number, v: number): [number, number, number] {
   // the shade straddles the period's wrap: rising up to it, falling after it
   c = mixRGB(c, P.shade.color, Math.max(smooth(s0, s1, ph), 1 - smooth(s2, s3, ph)) * P.shade.strength)
   const vig = 1 - smooth(P.vignette.edges[0], P.vignette.edges[1], Math.abs(v - P.vignette.centre) * P.vignette.scale)
-  const k = 0.95 * (0.8 + vig * 0.25)
+  const k = 0.95 * (0.8 + vig * 0.25) * (scheme === 'dark' ? 0.035 : 1)
   return [c[0] * k, c[1] * k, c[2] * k]
 }
 
 /** The curved wall's material: `ARC_PASTEL` in TSL (`arcPastel` is its twin), `userData.periodicU` true. */
-function arcPastelMaterial(): MeshStandardNodeMaterial {
+function arcPastelMaterial(scheme: ColorScheme): MeshStandardNodeMaterial {
   const P = ARC_PASTEL, material = new MeshStandardNodeMaterial({ roughness: 1, metalness: 0 })
   material.colorNode = Fn(() => {
     const q = uv()
@@ -108,7 +110,7 @@ function arcPastelMaterial(): MeshStandardNodeMaterial {
     c = mix(c, vec3(...P.beam.color), smoothstep(r0, r1, ph).mul(float(1).sub(smoothstep(r2, r3, ph))).mul(P.beam.strength))
     c = mix(c, vec3(...P.shade.color), max(smoothstep(s0, s1, ph), float(1).sub(smoothstep(s2, s3, ph))).mul(P.shade.strength))
     const vig = float(1).sub(smoothstep(P.vignette.edges[0], P.vignette.edges[1], abs(q.y.sub(P.vignette.centre)).mul(P.vignette.scale)))
-    return c.mul(0.95).mul(float(0.8).add(vig.mul(0.25)))
+    return c.mul(0.95).mul(float(0.8).add(vig.mul(0.25))).mul(scheme === 'dark' ? 0.035 : 1)
   })()
   material.userData.periodicU = true
   return material
@@ -127,7 +129,7 @@ function arcPastelMaterial(): MeshStandardNodeMaterial {
  * inward normals would darken the wall to about a third of its brightness round the curve, while the same light as the
  * plane keeps the pastel as bright all the way round. Neither casts nor receives shadows.
  */
-export function createCurvedWall(opts: { center: [number, number, number]; radius: number; from: number; to: number; height: number }): Mesh {
+export function createCurvedWall(opts: { center: [number, number, number]; radius: number; from: number; to: number; height: number; scheme?: ColorScheme }): Mesh {
   const { center, radius, from, to, height } = opts
   // three's cylinder puts angle φ at (sin φ, ·, cos φ): the arc's θ (towards (sin θ, ·, −cos θ)) is φ = π − θ, so the
   // segment starts at the right end (θ = to) and u runs right to left: flipped below
@@ -135,7 +137,7 @@ export function createCurvedWall(opts: { center: [number, number, number]; radiu
   const uvs = geometry.getAttribute('uv'), normals = geometry.getAttribute('normal')
   const span = radius * (to - from) / MAX_U_LENGTH
   for (let i = 0; i < uvs.count; i++) { uvs.setX(i, 0.5 + (0.5 - uvs.getX(i)) * span); normals.setXYZ(i, 0, 0, -1) }
-  const material = arcPastelMaterial()
+  const material = arcPastelMaterial(opts.scheme ?? 'light')
   material.side = BackSide
   const wall = new Mesh(geometry, material)
   wall.name = 'wall'
