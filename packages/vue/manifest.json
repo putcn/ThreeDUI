@@ -249,7 +249,7 @@
     },
     {
       "name": "Block",
-      "description": "空间界面里的一块界面：一块玻璃背板的世界层 Surface，只能放在 <Space> 里（name 在 Space 里唯一）。width / height 是 pt，固定不随内容撑开（ptPerUnit 默认 244 pt 一个世界单位）。没给 position 时 Space 把它排在弧上，镜头对焦到焦点 Block 的正前方。出现时从 enterFrom 弹到原位，被 v-if / v-for 移除或 Space 卸载时飞到 leaveTo 并淡出，内容随它一起飞走后才移除。默认插槽是内容，排在一个纵向排列的内容盒里（padding 40、gap 24）；tw / class / style 落到这个内容盒上。非焦点 Block 向后退一点（沿自身 −z 0.4、缩到 0.96），焦点切换时用弹簧移过去；它看得见也点得着，但一次按下只把它设为焦点（Space 发出 update:focus），不传给里面的控件，也不显示悬停。分组用 <Card>：更薄的玻璃（圆角 24 pt），浮在背板上方 24 pt 并在背板上投下阴影，Block 进场时依次升起。",
+      "description": "空间界面里的一块界面：一块玻璃背板的世界层 Surface，只能放在 <Space> 里（name 在 Space 里唯一）。width / height 是 pt，固定不随内容撑开（ptPerUnit 默认 244 pt 一个世界单位）。没给 position 时 Space 把它排在弧上，镜头对焦到焦点 Block 的正前方。出现时从 enterFrom 弹到原位，被 v-if / v-for 移除或 Space 卸载时飞到 leaveTo 并淡出，内容随它一起飞走后才移除。默认插槽是内容，排在一个纵向排列的内容盒里（padding 40、gap 24）；tw / class / style 落到这个内容盒上。非焦点 Block 向后退一点（沿自身 −z 0.4、缩到 0.96）；总览模式下按球面网格排布，不后退，悬停会向前浮起并显示焦点边框，点击进入操作模式。非焦点内容不接收指针。分组用 <Card>：更薄的玻璃（圆角 24 pt），浮在背板上方 24 pt 并在背板上投下阴影，Block 进场时依次升起。",
       "props": [
         {
           "name": "name",
@@ -619,7 +619,7 @@
         },
         {
           "mistake": "给 Block 里的内容写 pointerEvents: 'auto'（如 :style=\"{ pointerEvents: 'auto' }\"）",
-          "fix": "不要写：非焦点 Block 的内容盒用 pointerEvents: 'none' 挡住按下与悬停，里面写 'auto' 会重新打开，按下直接落到控件上而不是切换焦点；焦点 Block 本来就接收指针"
+          "fix": "不要写：非焦点 Block 的内容盒用 pointerEvents: 'none' 挡住按下与悬停，里面写 'auto' 会重新打开；总览 Block 只响应悬停与进入操作模式的按下"
         }
       ]
     },
@@ -1615,51 +1615,98 @@
     },
     {
       "name": "Space",
-      "description": "空间界面的容器：把一个 Vue 应用的各个界面块（<Block>）摆在 3D 空间里，持有相机并管理焦点。默认插槽只放 <Block>（v-if / v-for 照常可用）；没给 position 的 Block 排在一条朝向观众的弧上（radius、gap，世界单位），按 name 记住位置：被 v-if 移除再回来时回到原位，其它 Block 不挪动。focus（v-model:focus）是焦点 Block 的 name：镜头沿弹簧移到它正前方，它成为键盘的目标（Tab 只在它里面循环），原焦点 Block 里的焦点节点失焦；没绑定时 Space 自己记住焦点，开始时是第一个 Block。点击非焦点 Block 只把它设为焦点（发出 update:focus），不传给里面的控件。camera 为 true 时 Space 每帧写相机位姿：宿主不能同时开 OrbitControls。motion 为 frozen 时对焦、进场、离场都直接到位，视差关闭。Space 自己不渲染节点：它不接受 tw / class / style。一个应用只放一个 Space。",
+      "description": "空间界面的容器：把 Block 排在弧形或球面网格中并管理焦点。overview 启用总览模式，focus 为 null 时相机框住所有 Block，支持悬停、点击、滚轮与键盘选择；standby 会拉远相机并淡化内容。grid 布局需 columns；radius 与 gap 默认分别为弧形 7 / 0.5、网格 24 / 0.4。没绑定 focus 时 Space 自己记住焦点，开始时为第一个 Block。camera 为 true 时 Space 驱动相机；motion 为 frozen 时动画直接到位。",
       "props": [
         {
           "name": "focus",
           "type": {
-            "description": "焦点 Block 的 name（v-model:focus）：镜头对焦到它，键盘与 Tab 只在它里面；省略时 Space 自己记住焦点，开始时是第一个 Block，点击非焦点 Block 照样切换",
-            "type": "string"
+            "description": "焦点 Block 的 name（v-model:focus）；overview 下 null 表示总览；省略时 Space 自己记住焦点，开始时是第一个 Block",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "required": false,
-          "description": "焦点 Block 的 name（v-model:focus）：镜头对焦到它，键盘与 Tab 只在它里面；省略时 Space 自己记住焦点，开始时是第一个 Block，点击非焦点 Block 照样切换"
+          "description": "焦点 Block 的 name（v-model:focus）；overview 下 null 表示总览；省略时 Space 自己记住焦点，开始时是第一个 Block"
+        },
+        {
+          "name": "layout",
+          "type": {
+            "default": "arc",
+            "description": "自动排布：arc 为弧形；grid 为球面网格（需 columns）",
+            "type": "string",
+            "enum": [
+              "arc",
+              "grid"
+            ]
+          },
+          "required": false,
+          "default": "arc",
+          "description": "自动排布：arc 为弧形；grid 为球面网格（需 columns）"
+        },
+        {
+          "name": "columns",
+          "type": {
+            "description": "grid 布局的列数；layout 为 grid 时必填正整数",
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "required": false,
+          "description": "grid 布局的列数；layout 为 grid 时必填正整数"
         },
         {
           "name": "radius",
           "type": {
-            "default": 7,
-            "description": "自动排布的弧半径，世界单位：没给 position 的 Block 排在这条朝向观众的弧上，第一个在原点，之后依次向右",
+            "description": "球面半径；默认 arc 为 7、grid 为 24（世界单位）",
             "type": "number",
             "exclusiveMinimum": 0
           },
           "required": false,
-          "default": 7,
-          "description": "自动排布的弧半径，世界单位：没给 position 的 Block 排在这条朝向观众的弧上，第一个在原点，之后依次向右"
+          "description": "球面半径；默认 arc 为 7、grid 为 24（世界单位）"
         },
         {
           "name": "gap",
           "type": {
-            "default": 0.5,
-            "description": "弧上相邻 Block 的间隔，世界单位",
+            "description": "自动排布间距；默认 arc 为 0.5、grid 为 0.4（世界单位）",
             "type": "number",
             "minimum": 0
           },
           "required": false,
-          "default": 0.5,
-          "description": "弧上相邻 Block 的间隔，世界单位"
+          "description": "自动排布间距；默认 arc 为 0.5、grid 为 0.4（世界单位）"
+        },
+        {
+          "name": "overview",
+          "type": {
+            "default": false,
+            "description": "启用总览：focus 为 null 时框住全部 Block，支持鼠标悬停、点击与键盘选择",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "启用总览：focus 为 null 时框住全部 Block，支持鼠标悬停、点击与键盘选择"
+        },
+        {
+          "name": "standby",
+          "type": {
+            "default": false,
+            "description": "待机总览：镜头后退 25%，Block 不透明度降至 0.35",
+            "type": "boolean"
+          },
+          "required": false,
+          "default": false,
+          "description": "待机总览：镜头后退 25%，Block 不透明度降至 0.35"
         },
         {
           "name": "camera",
           "type": {
             "default": true,
-            "description": "由 Space 驱动相机：挂载时对焦到焦点 Block，焦点变化时镜头沿弹簧移过去；为 true 时宿主不能同时开 OrbitControls 一类控制器。false 时只排布与管理焦点，不动相机",
+            "description": "由 Space 驱动相机；宿主不能同时开 OrbitControls。false 时只排布与管理焦点",
             "type": "boolean"
           },
           "required": false,
           "default": true,
-          "description": "由 Space 驱动相机：挂载时对焦到焦点 Block，焦点变化时镜头沿弹簧移过去；为 true 时宿主不能同时开 OrbitControls 一类控制器。false 时只排布与管理焦点，不动相机"
+          "description": "由 Space 驱动相机；宿主不能同时开 OrbitControls。false 时只排布与管理焦点"
         },
         {
           "name": "parallax",
@@ -1676,8 +1723,13 @@
       "events": [
         {
           "name": "update:focus",
-          "payload": "string",
-          "description": "按下了非焦点 Block：它的 name（v-model:focus 据此切换焦点）"
+          "payload": "string | null",
+          "description": "切换焦点 Block，或在 overview 下返回总览（null）"
+        },
+        {
+          "name": "arrive",
+          "payload": "string | null",
+          "description": "相机抵达当前焦点或总览位姿"
         }
       ],
       "slots": [
@@ -1691,17 +1743,21 @@
       ],
       "examples": [
         "<Space v-model:focus=\"page\"><Block name=\"login\" :width=\"488\" :height=\"560\"><Text value=\"登录\" size=\"3xl\" :weight=\"700\" /></Block><Block name=\"home\" :width=\"880\" :height=\"620\"><Text value=\"首页\" size=\"3xl\" :weight=\"700\" /></Block></Space>",
-        "<Space v-model:focus=\"tab\" :radius=\"9\" :gap=\"0.8\"><Block v-for=\"t in tabs\" :key=\"t.id\" :name=\"t.id\" :width=\"560\" :height=\"480\"><Text :value=\"t.title\" size=\"2xl\" :weight=\"700\" /></Block></Space>",
+        "<Space layout=\"grid\" :columns=\"3\" overview v-model:focus=\"view\"><Block v-for=\"view in views\" :key=\"view.name\" :name=\"view.name\" :width=\"view.width\" :height=\"view.height\"><Text :value=\"view.name\" /></Block></Space>",
         "<Space :camera=\"false\"><Block name=\"panel\" :width=\"400\" :height=\"300\"><Text value=\"相机由宿主控制\" /></Block></Space>"
       ],
       "mistakes": [
         {
-          "mistake": "<Space> 与 OrbitControls 同时开（宿主自己再控制相机）",
-          "fix": "Space 的相机 rig 每帧写相机位姿，两者会互相打架：用 Space 时不要同时开 OrbitControls 一类控制器；要自己控制相机就写 :camera=\"false\""
+          "mistake": "<Space> 与 OrbitControls 同时开",
+          "fix": "Space 的相机 rig 每帧写相机位姿；要自己控制相机就写 :camera=\"false\""
         },
         {
-          "mistake": "focus 写不存在的名字（v-model:focus=\"page\"，page 是 \"landng\"）",
-          "fix": "focus 必须是某个 Block 的 name（区分大小写）；报错会列出现有的名字"
+          "mistake": "<Space :focus=\"null\">（overview 未启用）",
+          "fix": "只有 overview 为 true 时 focus 才能是 null；null 表示总览模式"
+        },
+        {
+          "mistake": "<Space layout=\"grid\"> 没有 columns",
+          "fix": "grid 布局必须写正整数 :columns，例如 <Space layout=\"grid\" :columns=\"3\">"
         },
         {
           "mistake": "<Space><Text value=\"标题\" /><Block …/></Space>",

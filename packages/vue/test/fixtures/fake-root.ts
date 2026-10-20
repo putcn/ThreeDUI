@@ -3,7 +3,7 @@ import {
   AnimationRuntime, createSurface as createModel, createYogaLayout, defaultTheme, EventDispatcher, FocusManager, GlassUIError, PointerTracker, resolveTextStyle,
   type ColorScheme, type MeasureFn, type Node, type SurfaceModel, type Theme,
 } from '@glassui/core'
-import type { Attach3DOptions, BarChart, BarChartData, BarMatrix, BarMatrixData, BarMatrixLabels, CameraRig, GridCell, CreateSurfaceOptions, ImeBridge, ImeField, ImeState, PoseSpring, Surface, SurfaceCell, SurfaceChart, SurfaceChartData, SurfaceChartLabels, SurfacePose, UIRootEventMap, Viewport3DContext } from '@glassui/render'
+import type { Attach3DOptions, BarChart, BarChartData, BarMatrix, BarMatrixData, BarMatrixLabels, CameraRig, GridCell, CreateSurfaceOptions, ImeBridge, ImeField, ImeState, PoseSpring, Surface, SurfaceCell, SurfaceChart, SurfaceChartData, SurfaceChartLabels, SurfacePose, UIRootEventMap, Viewport3DContext, FrameOptions, WheelGesture, KeyGesture } from '@glassui/render'
 import type { GlassRoot } from '../../src/root'
 import { createFakeText } from './fake-text'
 
@@ -78,6 +78,7 @@ export interface FakeSurface {
 
 /** The fake root's `CameraRig`: `focus` resolves `true` at once, `dispose` sets `disposed`; both are spies. */
 export interface FakeRig {
+  frame: Mock<(targets: readonly Surface[], opts?: FrameOptions) => Promise<boolean>>
   focus: Mock<(target: Surface, opts?: { immediate?: boolean }) => Promise<boolean>>
   dispose: Mock<() => void>
   parallax: boolean
@@ -142,6 +143,7 @@ export interface FakeIme {
   placed: { x: number; y: number } | null
   /** (Not `composing` or `report`: the real bridge's private members of those names would make the intersection `never`.) */
   imeComposing: boolean
+  readonly composing: boolean
   focus(f: ImeField): void
   blur(f: ImeField): void
   sync(f: ImeField): void
@@ -162,6 +164,8 @@ export interface FakeRoot extends GlassRoot {
   readonly surfacesMade: FakeSurface[]
   /** Every rig `createCameraRig` made, disposed ones included, in creation order. */
   readonly rigs: FakeRig[]
+  readonly wheelInterceptors: ((g: WheelGesture) => boolean)[]
+  readonly keyInterceptors: ((g: KeyGesture) => boolean)[]
   /** Every chart `createBarChart` made, in creation order. */
   readonly charts: FakeChart[]
   /** Every chart `createSurfaceChart` made, in creation order. */
@@ -193,9 +197,14 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     switched: { surface: FakeSurface; node: Node; visible: boolean } | null
     readonly blurred: { surface: FakeSurface; node: Node; visible: boolean } | null
     setActive(s: FakeSurface | null): void
+    addWheelInterceptor(fn: (g: WheelGesture) => boolean): () => void
+    addKeyInterceptor(fn: (g: KeyGesture) => boolean): () => void
   }
+  const wheelInterceptors: ((g: WheelGesture) => boolean)[] = [], keyInterceptors: ((g: KeyGesture) => boolean)[] = []
   const bridge: FakeBridge = {
     active: null, switched: null,
+    addWheelInterceptor: fn => { wheelInterceptors.push(fn); return () => { const i = wheelInterceptors.indexOf(fn); if (i >= 0) wheelInterceptors.splice(i, 1) } },
+    addKeyInterceptor: fn => { keyInterceptors.push(fn); return () => { const i = keyInterceptors.indexOf(fn); if (i >= 0) keyInterceptors.splice(i, 1) } },
     get blurred() {
       const b = bridge.switched
       for (let p: Node | null = b?.node ?? null; b && p; p = p.parent) if (p === b.surface.root) return { ...b }
@@ -214,6 +223,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
   const screenFromPoint = (s: Surface, x: number, y: number): { x: number; y: number } => ({ x: x + s.position.x, y: y + s.position.y })
   const ime: FakeIme = {
     active: null, focused: [], synced: [], blurred: [], placed: null, imeComposing: false,
+    get composing() { return this.imeComposing },
     focus(f) { if (f !== this.active) this.imeComposing = false; this.active = f; this.focused.push(f); this.reposition() },
     blur(f) { this.blurred.push(f); if (this.active === f) { this.active = null; this.imeComposing = false } },
     sync(f) { if (f === this.active && this.imeComposing) return; this.synced.push({ value: f.value, selectionStart: f.selectionStart, selectionEnd: f.selectionEnd, composition: null }) },
@@ -284,10 +294,10 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     surfaces: surfaces as unknown as readonly Surface[],
     pointer: bridge as unknown as GlassRoot['pointer'],
     ime: ime as ImeBridge & FakeIme,
-    surfacesMade, rigs, charts, surfaceCharts, barMatrices,
+    surfacesMade, rigs, charts, surfaceCharts, barMatrices, wheelInterceptors, keyInterceptors,
     createSurface: o => make(o) as unknown as Surface,
     createCameraRig() {
-      const rig: FakeRig = { focus: vi.fn(async () => true), dispose: vi.fn(() => { rig.disposed = true }), parallax: true, disposed: false }
+      const rig: FakeRig = { frame: vi.fn(async () => true), focus: vi.fn(async () => true), dispose: vi.fn(() => { rig.disposed = true }), parallax: true, disposed: false }
       rigs.push(rig)
       return rig as unknown as CameraRig
     },

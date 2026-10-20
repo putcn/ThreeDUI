@@ -5,7 +5,7 @@ import type { CreateSurfaceOptions, Surface } from '@glassui/render'
 import { defineGlassComponent, fallthrough } from '../define'
 import { useMotion, useRoot } from '../inject'
 import { holdContent } from '../renderer'
-import { BLOCK, RECEDE, SPACE, type BlockHandle } from '../spatial/context'
+import { BLOCK, LIFT, RECEDE, SPACE, type BlockHandle } from '../spatial/context'
 import { checkBackground, useRenderSurface } from '../surface-host'
 
 type Vec3 = [number, number, number]
@@ -59,7 +59,7 @@ const offset = (r: Rest, o: Offset): Rest & { opacity: number } => ({ ...place(r
 
 export const Block = defineGlassComponent({
   name: 'Block',
-  description: '空间界面里的一块界面：一块玻璃背板的世界层 Surface，只能放在 <Space> 里（name 在 Space 里唯一）。width / height 是 pt，固定不随内容撑开（ptPerUnit 默认 244 pt 一个世界单位）。没给 position 时 Space 把它排在弧上，镜头对焦到焦点 Block 的正前方。出现时从 enterFrom 弹到原位，被 v-if / v-for 移除或 Space 卸载时飞到 leaveTo 并淡出，内容随它一起飞走后才移除。默认插槽是内容，排在一个纵向排列的内容盒里（padding 40、gap 24）；tw / class / style 落到这个内容盒上。非焦点 Block 向后退一点（沿自身 −z 0.4、缩到 0.96），焦点切换时用弹簧移过去；它看得见也点得着，但一次按下只把它设为焦点（Space 发出 update:focus），不传给里面的控件，也不显示悬停。分组用 <Card>：更薄的玻璃（圆角 24 pt），浮在背板上方 24 pt 并在背板上投下阴影，Block 进场时依次升起。',
+  description: '空间界面里的一块界面：一块玻璃背板的世界层 Surface，只能放在 <Space> 里（name 在 Space 里唯一）。width / height 是 pt，固定不随内容撑开（ptPerUnit 默认 244 pt 一个世界单位）。没给 position 时 Space 把它排在弧上，镜头对焦到焦点 Block 的正前方。出现时从 enterFrom 弹到原位，被 v-if / v-for 移除或 Space 卸载时飞到 leaveTo 并淡出，内容随它一起飞走后才移除。默认插槽是内容，排在一个纵向排列的内容盒里（padding 40、gap 24）；tw / class / style 落到这个内容盒上。非焦点 Block 向后退一点（沿自身 −z 0.4、缩到 0.96）；总览模式下按球面网格排布，不后退，悬停会向前浮起并显示焦点边框，点击进入操作模式。非焦点内容不接收指针。分组用 <Card>：更薄的玻璃（圆角 24 pt），浮在背板上方 24 pt 并在背板上投下阴影，Block 进场时依次升起。',
   props: BlockProps,
   events: { error: { payload: 'Error', description: '该 Block 的 Surface 渲染失败（它已停止绘制）' } },
   slots: { default: 'Block 的内容（纵向排列，padding 40、gap 24）' },
@@ -71,12 +71,12 @@ export const Block = defineGlassComponent({
   mistakes: [
     { mistake: '<Block> 放在 Space 外（直接放在页面或 <Surface> 里）', fix: 'Block 只能是 <Space> 的直接子项：<Space><Block name="a" …>…</Block></Space>' },
     { mistake: '<Block name="a" width="400" height="300">', fix: '<Block name="a" :width="400" :height="300">（数字要绑定）' },
-    { mistake: "给 Block 里的内容写 pointerEvents: 'auto'（如 :style=\"{ pointerEvents: 'auto' }\"）", fix: "不要写：非焦点 Block 的内容盒用 pointerEvents: 'none' 挡住按下与悬停，里面写 'auto' 会重新打开，按下直接落到控件上而不是切换焦点；焦点 Block 本来就接收指针" },
+    { mistake: "给 Block 里的内容写 pointerEvents: 'auto'（如 :style=\"{ pointerEvents: 'auto' }\"）", fix: "不要写：非焦点 Block 的内容盒用 pointerEvents: 'none' 挡住按下与悬停，里面写 'auto' 会重新打开；总览 Block 只响应悬停与进入操作模式的按下" },
   ],
 }, (p, { slots, attrs, emit }) => {
   const space = inject(SPACE, null)
   if (!space) throw new GlassUIError('Block', '必须放在 <Space> 里')
-  const root = useRoot(), immediate = useMotion() === 'frozen'
+  const root = useRoot(), motion = useMotion(), immediate = motion === 'frozen'
   /** The props once valid, with a background the theme knows (else the error). */
   const state = computed((): { v: Props } | { error: unknown } => {
     try { const v = p.value; checkBackground('Block', v.background, root.theme, root.scheme); return { v } } catch (error) { return { error } }
@@ -91,6 +91,7 @@ export const Block = defineGlassComponent({
   const handle: BlockHandle = {
     surface: toRef(() => host?.surface.value ?? null),
     width: computed(() => v.value.width / (v.value.ptPerUnit ?? PT_PER_UNIT) * axis(v.value.scale ?? 1, 0)),
+    height: computed(() => v.value.height / (v.value.ptPerUnit ?? PT_PER_UNIT) * axis(v.value.scale ?? 1, 1)),
     arc: computed(() => v.value.position === undefined),
   }
   const name = ref(initial.v.name)
@@ -110,8 +111,10 @@ export const Block = defineGlassComponent({
   const rest = computed((): Rest => {
     const x = v.value, slot = space.slot(name.value), s = x.scale ?? 1
     const own: Rest = { position: x.position ?? slot?.position ?? [0, 0, 0], rotation: x.rotation ?? slot?.rotation ?? [0, 0, 0], scale: typeof s === 'number' ? [s, s, s] : s }
+    if (space.mode.value === 'overview') return space.highlighted.value === name.value ? place(own, LIFT) : own
     return focused.value ? own : place(own, RECEDE)
   })
+  const opacity = computed(() => space.standby.value ? 0.35 : 1)
   const { surface } = useRenderSurface(() => {
     const s = state.value
     if ('error' in s) return null
@@ -125,7 +128,7 @@ export const Block = defineGlassComponent({
       const from = offset(rest.value, v.value.enterFrom)
       s.position.set(...from.position); s.rotation.set(...from.rotation); s.scale.set(...from.scale)
       s.opacity = from.opacity
-      void s.animateTo({ ...rest.value, opacity: 1 }, { immediate })
+      void s.animateTo({ ...rest.value, opacity: opacity.value }, { immediate })
     },
     // the leave: the content stays in the Surface while Vue unmounts its components, and flies to rest ⊕ leaveTo with
     // it; the Surface goes when it lands. `release` has already cancelled its press and blurred it
@@ -138,7 +141,16 @@ export const Block = defineGlassComponent({
   host = { surface }
   onBeforeUnmount(() => { unregister() })
   // a new rest pose (its slot moved, its position changed, the focus came or went) springs the Block there
-  watch(() => JSON.stringify(rest.value), () => { void surface.value?.animateTo(rest.value, { immediate }) })
+  let opacityTimer: ReturnType<typeof setTimeout> | undefined
+  watch([() => JSON.stringify(rest.value), () => opacity.value], () => {
+    if (opacityTimer) clearTimeout(opacityTimer)
+    const s = surface.value
+    if (!s) return
+    const delay = !space.standby.value && s.opacity < 1 && motion !== 'frozen' ? space.row(name.value) * 60 : 0
+    const apply = (): void => { opacityTimer = undefined; void s.animateTo({ ...rest.value, opacity: opacity.value }, { immediate }) }
+    if (delay) opacityTimer = setTimeout(apply, delay); else apply()
+  })
+  onBeforeUnmount(() => { if (opacityTimer) clearTimeout(opacityTimer) })
   watchEffect(() => {
     const s = surface.value, { width, height } = v.value
     if (s && (s.model.width !== width || s.model.height !== height)) s.setSize(width, height)
@@ -176,9 +188,10 @@ export const Block = defineGlassComponent({
     // It fills the Surface and carries its corner radius, so a `concentric` Card inside resolves against it (that
     // radius less the Card's inset; the Surface root has no radius of its own). The root box stays square: all of it
     // takes the press
-    const inner = fallthrough(h('box', { ref: content, style: { flexGrow: 1, flexShrink: 0, flexDirection: 'column', padding: 40, gap: 24, radius: st.v.radius, ...focused.value ? {} : { pointerEvents: 'none' as const } } }, slots.default?.()), attrs)
+    const overview = space.mode.value === 'overview', highlighted = overview && space.highlighted.value === name.value
+    const inner = fallthrough(h('box', { ref: content, style: { flexGrow: 1, flexShrink: 0, flexDirection: 'column', padding: 40, gap: 24, radius: st.v.radius, ...(!focused.value || overview) ? { pointerEvents: 'none' as const } : {} } }, slots.default?.()), attrs)
     return h(Teleport, { to: s.root }, [
-      h('box', { style: { width: '100%', height: '100%' }, onPointerdown: () => { if (!focused.value) space.requestFocus(name.value) } }, [inner]),
+      h('box', { style: { width: '100%', height: '100%', ...(highlighted ? { radius: st.v.radius, border: { width: 4, color: 'accent' } } : {}) }, onPointerenter: () => { if (overview) space.highlight(name.value, 'pointer') }, onPointerleave: () => { if (overview && space.highlighted.value === name.value) space.highlight(null, 'pointer') }, onPointerdown: () => { if (overview || !focused.value) space.requestFocus(name.value) } }, [inner]),
     ])
   }
 })
