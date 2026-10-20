@@ -3,6 +3,8 @@ import { h, nextTick } from 'vue'
 import { Euler, InstancedMesh, LineSegments, Matrix4, Mesh, Quaternion, Vector3, type BufferGeometry, type Material, type Object3D } from 'three'
 import { absoluteRect, defaultTheme, type Node } from '@glassui/core'
 import { fitDistance } from '@glassui/render/internal'
+import { framePose } from '@glassui/render'
+import { focusPose } from '@glassui/render/internal'
 import { flush, type FakeRoot, type FakeSurface } from '../../../packages/vue/test/fixtures/fake-root'
 import { mountGlass } from '../../../packages/vue/test/fixtures/mount'
 import Spatial from '../src/scenes/Spatial.vue'
@@ -10,7 +12,41 @@ import { bins, heat, kpis, laneSummary, lanesOf, network, orders, stock } from '
 import { YAW_LIMIT } from '../src/wms/warehouse'
 import { LIMITS } from '../src/wms/map'
 import { arcPastel, createCurvedWall, MAX_U_LENGTH } from '../src/wall'
-import { GRID, arcAngleOf, BLOCKS, inFrameOf, NETWORK, PANEL, PLACE_PANEL, SLOTS, TWIN, WALL, wallSpan, wallSpanOf, type RestPose } from '../src/scenes/spatial-grid'
+import { GRID, arcAngleOf, BLOCKS, inFrameOf, NETWORK, PANEL, PLACE_PANEL, SLOTS, TWIN, WALL, wallSpan, wallSpanOf, domeSpan, DOME, type RestPose } from '../src/scenes/spatial-grid'
+
+const FOV = 38
+function spatialPoses(aspect: number) {
+  const targets = SLOTS.map((slot, i) => ({ restPose: { position: [...slot.position], rotation: [...slot.rotation], scale: [1, 1, 1] }, parent: null, contentPlaneZ: 0, model: { width: BLOCKS[(['orders', 'dashboard', 'network', 'inbound', 'twin', 'settings'] as const)[i]!].width, height: BLOCKS[(['orders', 'dashboard', 'network', 'inbound', 'twin', 'settings'] as const)[i]!].height, ptPerUnit: PT } })) as never[]
+  const poses: { position: Vector3; quaternion: Quaternion }[] = []
+  for (const distanceScale of [1, 1.25]) {
+    const pose = { position: new Vector3(), quaternion: new Quaternion() }
+    framePose(targets as never, FOV, aspect, 0.08, distanceScale, pose)
+    poses.push(pose)
+  }
+  for (const target of targets) {
+    const pose = { position: new Vector3(), quaternion: new Quaternion() }
+    focusPose(target as never, FOV, aspect, 0.08, pose)
+    poses.push(pose)
+  }
+  return poses
+}
+function frustumCornerRays(pose: { position: Vector3; quaternion: Quaternion }, fov: number, aspect: number) {
+  const h = Math.tan(fov * Math.PI / 360), rays: Vector3[] = []
+  for (const px of [-1, 1]) for (const py of [-1, 1]) for (const dx of [-3, 3]) for (const dy of [-3, 3]) {
+    const q = pose.quaternion.clone().multiply(new Quaternion().setFromEuler(new Euler(dy * Math.PI / 180, dx * Math.PI / 180, 0, 'YXZ')))
+    rays.push(new Vector3(px * h * aspect, py * h, -1).normalize().applyQuaternion(q))
+  }
+  return rays
+}
+function raySphereFromInside(ray: Vector3, center: Vector3, radius: number, origin: Vector3): Vector3 {
+  const o = origin.clone().sub(center), b = o.dot(ray), c = o.lengthSq() - radius * radius
+  const t = -b + Math.sqrt(b * b - c)
+  return origin.clone().addScaledVector(ray, t)
+}
+function anglesOnSphere(point: Vector3, center: Vector3) {
+  const v = point.clone().sub(center).normalize()
+  return { yaw: Math.atan2(v.x, -v.z), pitch: Math.asin(v.y) }
+}
 
 /** pt per world unit (the Blocks' and the panel's). */
 const PT = 244
@@ -27,6 +63,19 @@ async function scene(focus: string, motion: 'live' | 'frozen' = 'live') {
   return { ...m, warn, blocks, orders, dashboard, network, inbound, twin, settings, dock }
 }
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
+
+describe('the spatial aurora dome', () => {
+  it('covers every view of the spatial scene at the supported aspects', () => {
+    const span = domeSpan(), center = new Vector3(0, 0, GRID.radius), radius = GRID.radius + DOME.out
+    for (const aspect of [4 / 3, 16 / 10, 16 / 9, 1512 / 808, 21 / 9]) {
+      for (const pose of spatialPoses(aspect)) for (const ray of frustumCornerRays(pose, FOV, aspect)) {
+        const hit = raySphereFromInside(ray, center, radius, pose.position), { yaw, pitch } = anglesOnSphere(hit, center)
+        expect(yaw).toBeGreaterThanOrEqual(span.yaw[0]); expect(yaw).toBeLessThanOrEqual(span.yaw[1])
+        expect(pitch).toBeGreaterThanOrEqual(span.pitch[0]); expect(pitch).toBeLessThanOrEqual(span.pitch[1])
+      }
+    }
+  })
+})
 
 /** The text nodes under `n` whose value is `value` (a fragment run's text included). */
 function texts(n: Node, value: string, out: Node[] = []): Node[] {

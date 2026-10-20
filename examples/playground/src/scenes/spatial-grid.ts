@@ -1,5 +1,7 @@
 import { Euler, Quaternion, Vector3 } from 'three'
 import { gridSlots } from '@glassui/vue'
+import { framePose } from '@glassui/render'
+import { focusPose } from '@glassui/render/internal'
 import type { ArcSlot } from '@glassui/vue'
 
 export const GRID = { columns: 3, radius: 24, gap: 0.4 } as const
@@ -17,6 +19,7 @@ export const TWIN = SLOT_BY_NAME.twin
 export const PANEL = { width: 300, height: 170, ptPerUnit: 360, offset: [1.15, -0.74, 2.05] as [number, number, number] }
 export const PLACE_PANEL = { width: 320, height: 216, ptPerUnit: 360, offset: { right: [1.35, 0.45, 1.25], left: [-1.35, 0.45, 1.25] } as Record<'left' | 'right', [number, number, number]> }
 export const WALL = { out: 4, height: 16, margin: 34 * Math.PI / 180 } as const
+export const DOME = { out: 8, yawMargin: 6 * Math.PI / 180, pitchMargin: 6 * Math.PI / 180 } as const
 export interface RestPose { position: readonly [number, number, number]; rotation: readonly [number, number, number] }
 export function inFrameOf(pose: ArcSlot, offset: readonly [number, number, number]): ArcSlot {
   const position = new Vector3(...offset).applyQuaternion(new Quaternion().setFromEuler(new Euler(...pose.rotation))).add(new Vector3(...pose.position))
@@ -28,5 +31,37 @@ export function wallSpan(angles: readonly number[]): { from: number; to: number 
 export function wallSpanOf(poses: readonly RestPose[]): { from: number; to: number } {
   const angles = poses.map(p => arcAngleOf(p.position))
   return wallSpan(angles)
+}
+
+/** The camera's visible spherical angles at each supported aspect, including the Space rig's parallax corners. */
+export function domeSpan(): { yaw: [number, number]; pitch: [number, number] } {
+  const aspects = [4 / 3, 16 / 10, 16 / 9, 1512 / 808, 21 / 9]
+  const halfFov = 38 * Math.PI / 360, center = new Vector3(0, 0, GRID.radius)
+  const yaws: number[] = [], pitches: number[] = []
+  for (const aspect of aspects) {
+    const targets = SLOTS.map((slot, i) => {
+      const name = BLOCK_NAMES[i]!
+      return { restPose: { position: [...slot.position], rotation: [...slot.rotation], scale: [1, 1, 1] }, parent: null, contentPlaneZ: 0, model: { width: BLOCKS[name].width, height: BLOCKS[name].height, ptPerUnit: PT } }
+    })
+    const poses: { position: Vector3; quaternion: Quaternion }[] = []
+    for (const scale of [1, 1.25]) {
+      const pose = { position: new Vector3(), quaternion: new Quaternion() }
+      framePose(targets as never, 38, aspect, 0.08, scale, pose)
+      poses.push(pose)
+    }
+    for (const target of targets) {
+      const pose = { position: new Vector3(), quaternion: new Quaternion() }
+      focusPose(target as never, 38, aspect, 0.08, pose)
+      poses.push(pose)
+    }
+    for (const pose of poses) for (const x of [-1, 1]) for (const y of [-1, 1]) for (const px of [-3, 3]) for (const py of [-3, 3]) {
+      const q = pose.quaternion.clone().multiply(new Quaternion().setFromEuler(new Euler(py * Math.PI / 180, px * Math.PI / 180, 0, 'YXZ')))
+      const dir = new Vector3(x * Math.tan(halfFov) * aspect, y * Math.tan(halfFov), -1).normalize().applyQuaternion(q)
+      const o = pose.position.clone().sub(center), b = o.dot(dir), c = o.lengthSq() - (GRID.radius + DOME.out) ** 2
+      const hit = pose.position.clone().addScaledVector(dir, -b + Math.sqrt(b * b - c)).sub(center).normalize()
+      yaws.push(Math.atan2(hit.x, -hit.z)); pitches.push(Math.asin(hit.y))
+    }
+  }
+  return { yaw: [Math.min(...yaws) - DOME.yawMargin, Math.max(...yaws) + DOME.yawMargin], pitch: [Math.min(...pitches) - DOME.pitchMargin, Math.max(...pitches) + DOME.pitchMargin] }
 }
 export const arcAngleOf = (position: readonly [number, number, number]): number => Math.atan2(position[0], GRID.radius - position[2])

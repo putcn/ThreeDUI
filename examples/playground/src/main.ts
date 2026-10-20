@@ -13,7 +13,8 @@ import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
 import Gallery from './gallery/Gallery.vue'
 import Spatial from './scenes/Spatial.vue'
-import { GRID, WALL, wallSpanOf } from './scenes/spatial-grid'
+import { DOME, GRID, WALL, domeSpan } from './scenes/spatial-grid'
+import { createAuroraDome } from './aurora'
 import { createCurvedWall, createHostLights, createWall } from './wall'
 import SignUp from './scenes/SignUp.vue'
 import World from './scenes/World.vue'
@@ -113,7 +114,8 @@ async function start(): Promise<UIRoot> {
   createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}) } : undefined).mount()
   // Vue's initial post-flush effects register Blocks and send the camera rig to the requested focus.
   await nextTick()
-  if (mode === 'spatial') hostScene.add(spatialWall(root.surfaces))
+  const aurora = mode === 'spatial' ? createAuroraDome({ center: [0, 0, GRID.radius], radius: GRID.radius + DOME.out, ...domeSpan() }) : null
+  if (aurora) hostScene.add(aurora.mesh)
   if (mode === 'gallery') {
     const angles = root.surfaces.map(s => Math.atan2(s.restPose.position[0], 10 - s.restPose.position[2]))
     hostScene.add(createCurvedWall({ center: [0, 0, 10], radius: 10 + WALL.out, from: Math.min(...angles) - WALL.margin, to: Math.max(...angles) + WALL.margin, height: WALL.height, scheme }))
@@ -128,13 +130,29 @@ async function start(): Promise<UIRoot> {
 
   // The first frame is drawn here, not on the first animation frame: `ready` must not depend on rAF (a hidden or
   // occluded tab gets none), and it then resolves with shaders compiled and the first content passes drawn.
-  const step = (t: number): void => {
+  let lastInput = performance.now(), idleSince: number | null = null, lastPaced = -Infinity, pacedActive = false
+  const noteInput = (): void => { lastInput = performance.now(); idleSince = null; pacedActive = false }
+  if (mode === 'spatial') for (const type of ['pointermove', 'pointerdown', 'wheel', 'keydown'] as const) renderer.domElement.addEventListener(type, noteInput)
+  const step = (t: number): boolean => {
     if (controls) {
       controls.enableZoom = !root.pointer?.hovered   // a wheel over a Surface is the UI's
       controls.update()
     }
-    root.frame(t)                                  // ticks the UI, draws the host scene, then the UI
+    const idle = mode === 'spatial' && root.idle && t - lastInput >= 2000
+    if (idle) { idleSince ??= t } else idleSince = null
+    const paced = idle && idleSince !== null && t - idleSince >= 2000
+    if (paced && t - lastPaced < 1000 / 15) {
+      pacedActive = true
+      return false
+    }
+    const visualMode = motion === 'frozen' ? 'frozen' : root.anim.reducedMotion ? 'reduced' : 'live'
+    aurora?.update(renderer as unknown as import('three/webgpu').Renderer, t / 1000, visualMode)
+    if (paced) root.frame(t, { paced: true })
+    else root.frame(t)                               // ticks the UI, draws the host scene, then the UI
+    if (paced) { lastPaced = t; pacedActive = true }
+    else if (!idle) pacedActive = false
     sceneHarness?.focus()                          // retain Block focus while a screen Dialog owns the keys
+    return true
   }
   step(performance.now())
   frameStats.record(performance.now(), renderer.info.render.drawCalls)
@@ -151,13 +169,17 @@ async function start(): Promise<UIRoot> {
   document.addEventListener('visibilitychange', () => { frameStats.resetIntervals(); frames = 0; acc = 0; last = performance.now(); notePaused() })
   notePaused()
   void renderer.setAnimationLoop(t => {
-    try { step(t) } catch (e) { void renderer.setAnimationLoop(null); showError(e); return }
+    let drawn: boolean
+    try { drawn = step(t) } catch (e) { void renderer.setAnimationLoop(null); showError(e); return }
+    if (!drawn) return
     frameStats.record(t, renderer.info.render.drawCalls)
     const now = performance.now()
     frames++; acc += (now - last) / 1000; last = now
     if (acc > 0.5 && stats) {
       const fps = (frames / acc).toFixed(0), draws = renderer.info.render.drawCalls
-      stats.textContent = `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surface${root.surfaces.length === 1 ? '' : 's'}${orbit ? ' · drag to orbit' : ''}`
+      stats.textContent = pacedActive
+        ? `${root.backend} · idle 15 fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surfaces`
+        : `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surface${root.surfaces.length === 1 ? '' : 's'}${orbit ? ' · drag to orbit' : ''}`
       frames = 0; acc = 0
     }
   })
@@ -172,10 +194,6 @@ async function start(): Promise<UIRoot> {
  * (radius 10, four Blocks) that is −34° to 134°: an arc of about 41 units, its pastel repeating along it at one
  * density (createCurvedWall: u one every 32 units, seamless), so no view sees the colour run out.
  */
-function spatialWall(blocks: readonly Surface[]): Mesh {
-  return createCurvedWall({ center: [0, 0, GRID.radius], radius: GRID.radius + WALL.out, ...wallSpanOf(blocks.map(s => s.restPose)), height: WALL.height, scheme })
-}
-
 /** See `PlaygroundHandle.rectOf`: the node's Surface-pt rect (`absoluteRect`), its corners and centre projected (`screenFromPoint`). */
 function rectOf(id: string): NodeRect | null {
   const root = handle.root
