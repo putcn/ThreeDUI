@@ -740,7 +740,15 @@
               "info",
               "warning",
               "star",
-              "heart"
+              "heart",
+              "grid",
+              "chart",
+              "list",
+              "map",
+              "cube",
+              "inbox",
+              "refresh",
+              "logout"
             ]
           },
           "required": false,
@@ -773,7 +781,15 @@
               "info",
               "warning",
               "star",
-              "heart"
+              "heart",
+              "grid",
+              "chart",
+              "list",
+              "map",
+              "cube",
+              "inbox",
+              "refresh",
+              "logout"
             ]
           },
           "required": false,
@@ -1232,7 +1248,15 @@
               "info",
               "warning",
               "star",
-              "heart"
+              "heart",
+              "grid",
+              "chart",
+              "list",
+              "map",
+              "cube",
+              "inbox",
+              "refresh",
+              "logout"
             ],
             "description": "图标名（内置图标之一）"
           },
@@ -1402,7 +1426,15 @@
               "info",
               "warning",
               "star",
-              "heart"
+              "heart",
+              "grid",
+              "chart",
+              "list",
+              "map",
+              "cube",
+              "inbox",
+              "refresh",
+              "logout"
             ]
           },
           "required": false,

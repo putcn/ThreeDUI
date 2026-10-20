@@ -77,6 +77,8 @@ export interface Warehouse {
   binAt(id: number): Bin
   /** Yaws the model by `dx` radians about its floor's normal (eased), clamped to ±`YAW_LIMIT`. */
   rotateBy(dx: number): void
+  setView(preset: 'top' | 'angled' | 'front'): void
+  setLowOnly(on: boolean): void
   /** Frees every geometry and material (the model draws nothing after it). */
   dispose(): void
 }
@@ -210,7 +212,7 @@ export function createWarehouse(data: { bins: readonly Bin[] }): Warehouse {
   /** The hovered bin, and each bin's lift (pt) where it is not 0 or not at its target. */
   let hovered: number | null = null
   const lift = new Map<number, number>()
-  let yawNow = 0, yawTarget = 0, distance = 0
+  let yawNow = 0, yawTarget = 0, tiltNow = Math.PI / 2 - TILT, tiltTarget = tiltNow, distance = 0, lowOnly = false
   /** The box the model is fitted to: the Viewport3D's, from `update`. */
   let box = { width: 0, height: 0 }
   const pose = { x: 0, z: 0, heading: 0 }
@@ -284,11 +286,14 @@ export function createWarehouse(data: { bins: readonly Bin[] }): Warehouse {
       box = { width: ctx.width, height: ctx.height }
       // the yaw eases to its target (≈ 0.1 s), the lifts likewise (≈ 0.07 s); reduced motion: there at once
       const ease = (tau: number): number => ctx.reducedMotion ? 1 : 1 - Math.exp(-Math.max(0, dt) / tau)
-      if (yawNow !== yawTarget) {
+      if (yawNow !== yawTarget || tiltNow !== tiltTarget) {
         yawNow += (yawTarget - yawNow) * ease(0.1)
         if (Math.abs(yawTarget - yawNow) < 1e-4) yawNow = yawTarget
         else moving = true
-        yaw.rotation.y = yawNow; moved = true
+        tiltNow += (tiltTarget - tiltNow) * ease(0.1)
+        if (Math.abs(tiltTarget - tiltNow) < 1e-4) tiltNow = tiltTarget
+        else moving = true
+        yaw.rotation.y = yawNow; tilt.rotation.x = tiltNow; moved = true
       }
       if (moved) place(resized)
       for (const [i, l] of lift) {
@@ -318,6 +323,16 @@ export function createWarehouse(data: { bins: readonly Bin[] }): Warehouse {
     rotateBy(dx) {
       if (!Number.isFinite(dx)) return
       yawTarget = Math.max(-YAW_LIMIT, Math.min(YAW_LIMIT, yawTarget + dx))
+    },
+    setView(preset) {
+      const [yaw, pitch] = preset === 'top' ? [0, 1.25] : preset === 'angled' ? [-0.5, 0.75] : [0, 0.15]
+      yawTarget = yaw; tiltTarget = pitch
+    },
+    setLowOnly(on) {
+      if (lowOnly === on) return
+      lowOnly = on
+      list.forEach((bin, i) => { binMesh.setColorAt(i, on && bin.occupancy >= 0.3 ? base[i]!.clone().lerp(new Color('#ffffff'), 0.8) : (i === hovered ? lit[i]! : base[i]!)) })
+      binMesh.instanceColor!.needsUpdate = true
     },
     dispose() {
       group.traverse(o => { if (o instanceof InstancedMesh) o.dispose() })

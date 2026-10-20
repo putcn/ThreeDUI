@@ -94,7 +94,8 @@ it('Icon: an unknown colour token and a string size are readable errors', () => 
 })
 it('iconCanvas: every built-in icon draws something, centred on its 2× canvas; the cache is per name, size, colour, stroke and factory', () => {
   expect(ICON_NAMES).toEqual(['user', 'mail', 'lock', 'eye', 'check', 'x', 'arrow-right', 'apple', 'google',
-    'eye-slash', 'chevron-left', 'chevron-right', 'chevron-up', 'chevron-down', 'plus', 'minus', 'search', 'gear', 'info', 'warning', 'star', 'heart'])
+    'eye-slash', 'chevron-left', 'chevron-right', 'chevron-up', 'chevron-down', 'plus', 'minus', 'search', 'gear', 'info', 'warning', 'star', 'heart',
+    'grid', 'chart', 'list', 'map', 'cube', 'inbox', 'refresh', 'logout'])
   const black: [number, number, number, number] = [0, 0, 0, 1]
   for (const name of ICON_NAMES) {
     const cv = iconCanvas(name, 24, black, 0.1, napiCanvas)
@@ -225,7 +226,7 @@ it('Stack z: a v-if branch key and a v-for item key never collide; a keyed reord
   warn.mockRestore()
 })
 it('Icon: a name from another icon set suggests ours (C9)', () => {
-  expect(mountGlass(() => h(Icon, { name: 'close' })).errors[0]).toMatch(/\[Icon\.name\] 非法取值 "close"。允许值：user, mail,.*heart。你可能想要：x$/)
+  expect(mountGlass(() => h(Icon, { name: 'close' })).errors[0]).toMatch(/\[Icon\.name\] 非法取值 "close"。允许值：user, mail,.*logout。你可能想要：x$/)
   expect(mountGlass(() => h(Icon, { name: 'Settings' })).errors[0]).toMatch(/你可能想要：gear$/)
   expect(mountGlass(() => h(Icon, { name: 'constructor' })).errors[0]).toMatch(/\[Icon\.name\] 非法取值 "constructor"。允许值：[^。]*$/)   // own entries only
 })

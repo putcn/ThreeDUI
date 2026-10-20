@@ -6,6 +6,7 @@ import { cssColor as css } from './colors'
 export const ICON_NAMES = [
   'user', 'mail', 'lock', 'eye', 'check', 'x', 'arrow-right', 'apple', 'google',
   'eye-slash', 'chevron-left', 'chevron-right', 'chevron-up', 'chevron-down', 'plus', 'minus', 'search', 'gear', 'info', 'warning', 'star', 'heart',
+  'grid', 'chart', 'list', 'map', 'cube', 'inbox', 'refresh', 'logout',
 ] as const
 export type IconName = (typeof ICON_NAMES)[number]
 
@@ -18,6 +19,7 @@ export const ICON_ALIASES: Readonly<Record<string, IconName>> = {
   back: 'chevron-left', previous: 'chevron-left', prev: 'chevron-left', forward: 'chevron-right', next: 'chevron-right',
   add: 'plus', remove: 'minus', subtract: 'minus', person: 'user', profile: 'user', account: 'user', email: 'mail', envelope: 'mail',
   alert: 'warning', error: 'warning', favorite: 'heart', like: 'heart', hide: 'eye-slash', show: 'eye', password: 'lock', magnifier: 'search',
+  dashboard: 'grid', analytics: 'chart', inventory: 'cube', signout: 'logout',
 }
 
 /** The Canvas2D calls the icons use (a DOM canvas and `@napi-rs/canvas` both have them; `CanvasLike` types fewer). */
@@ -145,6 +147,16 @@ function draw(ctx: Ctx, name: IconName, color: string, lw: number): void {
       ctx.bezierCurveTo(20.2, 14.6, 12, 19.6, 12, 19.6)
       ctx.closePath(); ctx.stroke()
       break
+    case 'grid':
+      for (const x of [5, 12, 19]) for (const y of [5, 12, 19]) { ctx.beginPath(); ctx.roundRect(x - 2.1, y - 2.1, 4.2, 4.2, 0.8); ctx.stroke() }
+      break
+    case 'chart': line([4.8, 19], [4.8, 5]); line([4.8, 19], [20, 19]); line([7, 15], [10, 11], [13, 13], [18.5, 6]); break
+    case 'list': for (const y of [6, 12, 18]) { ring(5.5, y, 0.65); line([9, y], [19, y]) }; break
+    case 'map': shape([[4, 6], [10, 4], [15, 6], [20, 4], [20, 18], [14, 20], [9, 18], [4, 20]]); line([9, 5], [9, 18]); line([15, 6], [15, 20]); break
+    case 'cube': shape([[12, 3.8], [20, 8], [20, 16], [12, 20.2], [4, 16], [4, 8]]); line([4, 8], [12, 12.2], [20, 8]); line([12, 12.2], [12, 20]); break
+    case 'inbox': shape([[4, 6], [20, 6], [21, 18], [3, 18]]); line([4, 13], [9, 13], [10.5, 16], [13.5, 16], [15, 13], [20, 13]); break
+    case 'refresh': line([19, 9], [19, 4], [14, 4]); ctx.beginPath(); ctx.arc(12, 12, 7, -0.5, Math.PI * 1.15); ctx.stroke(); line([5, 15], [5, 20], [10, 20]); break
+    case 'logout': line([10, 5], [5, 5], [5, 19], [10, 19]); line([9, 12], [20, 12]); line([16, 8], [20, 12], [16, 16]); break
   }
 }
 

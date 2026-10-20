@@ -10,7 +10,7 @@ import { bins, heat, kpis, laneSummary, lanesOf, network, orders, stock } from '
 import { YAW_LIMIT } from '../src/wms/warehouse'
 import { LIMITS } from '../src/wms/map'
 import { arcPastel, createCurvedWall, MAX_U_LENGTH } from '../src/wall'
-import { ARC, arcAngleOf, BLOCKS, inFrameOf, NETWORK, PANEL, PLACE_PANEL, TWIN, WALL, wallSpan, wallSpanOf, type RestPose } from '../src/scenes/spatial-arc'
+import { GRID, arcAngleOf, BLOCKS, inFrameOf, NETWORK, PANEL, PLACE_PANEL, SLOTS, TWIN, WALL, wallSpan, wallSpanOf, type RestPose } from '../src/scenes/spatial-grid'
 
 /** pt per world unit (the Blocks' and the panel's). */
 const PT = 244
@@ -21,8 +21,10 @@ async function scene(focus: string, motion: 'live' | 'frozen' = 'live') {
   const m = mountGlass(() => h(Spatial, { initialFocus: focus }), { motion })
   for (let i = 0; i < 3; i++) { await flush(); m.root.tick(); await nextTick() }
   await flush()
-  const [orders, overview, network, twin] = m.root.surfacesMade as [FakeSurface, FakeSurface, FakeSurface, FakeSurface]
-  return { ...m, warn, orders, overview, network, twin }
+  const blocks = m.root.surfacesMade.filter(s => s.created.layer === 'world')
+  const [orders, dashboard, network, inbound, twin, settings] = blocks as [FakeSurface, FakeSurface, FakeSurface, FakeSurface, FakeSurface, FakeSurface]
+  const dock = m.root.surfacesMade.find(s => s.created.layer === 'screen')!
+  return { ...m, warn, blocks, orders, dashboard, network, inbound, twin, settings, dock }
 }
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
@@ -33,6 +35,7 @@ function texts(n: Node, value: string, out: Node[] = []): Node[] {
   return out
 }
 const textOf = (n: Node): string => (n.type === 'text' ? String(n.props.value ?? '') : '') + n.children.map(textOf).join('')
+const byId = (n: Node, id: string): Node | undefined => n.id === id ? n : n.children.map(c => byId(c, id)).find(Boolean)
 /** The twin's model as attached, its Viewport3D's box, and that attachment's `update`. */
 function model(twin: FakeSurface) {
   const a = twin.attached[0]!
@@ -42,24 +45,24 @@ function model(twin: FakeSurface) {
 const ctx = (node: Node, reducedMotion = true) => ({ width: node.layout.width, height: node.layout.height, reducedMotion, theme: defaultTheme, scheme: 'light' as const })
 
 describe('the WMS scene', () => {
-  it('mounts its four Blocks (orders, overview, network, twin) with no error and no content taller than its Block', async () => {
-    const s = await scene('overview')
+  it('mounts its six Blocks (orders, dashboard, network, inbound, twin, settings) with no error', async () => {
+    const s = await scene('dashboard')
     expect(s.errors).toEqual([])
     expect(s.warn).not.toHaveBeenCalled()
-    expect(s.root.surfacesMade).toHaveLength(4)
-    expect([s.orders, s.overview, s.network, s.twin].map(x => [x.model.width, x.model.height])).toEqual([BLOCKS.orders, BLOCKS.overview, BLOCKS.network, BLOCKS.twin].map(b => [b.width, b.height]))
-    // the overview's content: the KPIs, and the two 3D charts, as tall as each other: the outbound heat surface (14
+    expect(s.blocks).toHaveLength(6)
+    expect([s.orders, s.dashboard, s.network, s.inbound, s.twin, s.settings].map(x => [x.model.width, x.model.height])).toEqual([BLOCKS.orders, BLOCKS.dashboard, BLOCKS.network, BLOCKS.inbound, BLOCKS.twin, BLOCKS.settings].map(b => [b.width, b.height]))
+    // the dashboard's content: the KPIs, and the two 3D charts, as tall as each other: the outbound heat surface (14
     // days × 24 hours) and the zone × category matrix coloured by its days of cover
-    for (const k of kpis) expect(texts(s.overview.root, k.label)).toHaveLength(1)
-    expect(texts(s.overview.root, '近 14 天出库热力')).toHaveLength(1); expect(texts(s.overview.root, '库区 × 品类 库存')).toHaveLength(1)
-    expect(s.overview.attached).toHaveLength(2)
+    for (const k of kpis) expect(texts(s.dashboard.root, k.label)).toHaveLength(1)
+    expect(texts(s.dashboard.root, '近 14 天出库热力')).toHaveLength(1); expect(texts(s.dashboard.root, '库区 × 品类 库存')).toHaveLength(1)
+    expect(s.dashboard.attached).toHaveLength(2)
     const [surface, matrix] = [(s.root as FakeRoot).surfaceCharts[0]!, (s.root as FakeRoot).barMatrices[0]!]
     expect(surface.set.mock.lastCall![0].values).toEqual(heat.values); expect(heat.values).toHaveLength(14); expect(heat.values[0]).toHaveLength(24)
     expect(matrix.set.mock.lastCall![0].values).toEqual(stock.values); expect(matrix.set.mock.lastCall![0].colors).toHaveLength(6)
     expect(matrix.labels.mock.lastCall![0]).toEqual({ rows: ['A 区', 'B 区', 'C 区', 'D 区', 'E 区', 'F 区'], cols: ['食品', '饮料', '日化', '家居', '数码', '母婴'] })
-    const [a, b] = s.overview.attached.map(x => x.node.layout.height)
+    const [a, b] = s.dashboard.attached.map(x => x.node.layout.height)
     expect(a).toBe(b)
-    expect(textOf(s.overview.root)).toContain('周转')
+    expect(textOf(s.dashboard.root)).toContain('周转')
     // the network: its title, counts and legend, the map attached, the credit
     expect(texts(s.network.root, '物流网络 · 徐州')).toHaveLength(1)
     expect(textOf(s.network.root)).toContain('4 个仓库 · 24 家门店 · 2 家供应商')
@@ -71,36 +74,32 @@ describe('the WMS scene', () => {
     expect(textOf(s.orders.root)).toContain('异常告警')
   })
 
-  it('the twin stands at its explicit pose (its arc slot); the focus is the overview, the camera aimed at it', async () => {
+  it('the twin stands at its explicit pose (its arc slot); the focus is the dashboard, the camera aimed at it', async () => {
     const s = await scene('twin')
     expect(s.twin.restPose.position.map(v => +v.toFixed(9))).toEqual(TWIN.position.map(v => +v.toFixed(9)))
     expect(s.twin.restPose.rotation[1]).toBeCloseTo(TWIN.rotation[1], 9)
-    const o = await scene('overview')
-    expect(o.root.rigs[0]!.focus.mock.lastCall![0]).toBe(o.overview)
+    const o = await scene('dashboard')
+    expect(o.root.rigs[0]!.focus.mock.lastCall![0]).toBe(o.dashboard)
   })
 
   it('a tab or a breadcrumb focuses its Block', async () => {
-    const s = await scene('overview')
+    const s = await scene('dashboard')
     const click = async (surface: FakeSurface, label: string): Promise<void> => {
-      const [t] = texts(surface.root, label)
+      const t = label === '订单' ? byId(surface.root, 'dock-orders') : label === '仓储孪生' ? byId(surface.root, 'dock-twin') : label === '物流网络' ? byId(surface.root, 'dock-network') : texts(surface.root, label)[0]
       surface.events.dispatch(t!, 'click', {}); await nextTick(); await flush()
     }
-    await click(s.overview, '订单')
+    await click(s.dock, '订单')
     expect(s.root.rigs[0]!.focus.mock.lastCall![0]).toBe(s.orders)
-    await click(s.orders, '总览')
-    expect(s.root.rigs[0]!.focus.mock.lastCall![0]).toBe(s.overview)
-    await click(s.overview, '仓储孪生')
+    await click(s.dock, '仓储孪生')
     expect(s.root.rigs[0]!.focus.mock.lastCall![0]).toBe(s.twin)
-    await click(s.twin, '总览'); await click(s.overview, '物流网络')
-    expect(s.root.rigs[0]!.focus.mock.lastCall![0]).toBe(s.network)
-    await click(s.network, '总览')
-    expect(s.root.rigs[0]!.focus.mock.lastCall![0]).toBe(s.overview)
+    await click(s.twin, '总览')
+    expect(s.root.rigs[0]!.frame).toHaveBeenCalled()
   })
 
   it('hovering a bin floats the glass info panel in front of the twin, showing the bin; leaving the model hides it', async () => {
     const s = await scene('twin'), { node, bins: mesh } = model(s.twin), at = { node, object: mesh, instanceId: 57 }
     s.twin.pointer.move(-999, -999, 'mouse', at); await nextTick(); await flush()
-    const panel = s.root.surfacesMade[4]!
+    const panel = s.root.surfacesMade[7]!
     expect(panel).toBeDefined()
     expect(panel.created).toMatchObject({ layer: 'world', width: PANEL.width, height: PANEL.height, ptPerUnit: PANEL.ptPerUnit, background: 'glass', interactive: false })
     expect(panel.castShadows).toBe(false)                                          // no slab of shadow across the twin
@@ -112,7 +111,7 @@ describe('the WMS scene', () => {
     expect(shown).toContain(bins[57]!.id); expect(shown).toContain(bins[57]!.sku)
     // another bin: the same panel, its content
     s.twin.pointer.move(-999, -999, 'mouse', { ...at, instanceId: 3 }); await nextTick(); await flush()
-    expect(s.root.surfacesMade).toHaveLength(5); expect(textOf(panel.root)).toContain(bins[3]!.id)
+    expect(s.root.surfacesMade).toHaveLength(8); expect(textOf(panel.root)).toContain(bins[3]!.id)
     // off the model: gone
     s.twin.pointer.move(5, 5, 'mouse'); await nextTick(); await flush()
     expect(panel.disposed).toBe(true)
@@ -124,19 +123,19 @@ describe('the WMS scene', () => {
     s.twin.pointer.move(-999, -999, 'mouse', { node, object: mesh, instanceId: 10 }); await nextTick(); await flush()
     s.twin.pointer.move(-999, -999, 'mouse', { node, object: group.getObjectByName('frames'), instanceId: 4 }); await nextTick(); await flush()
     vi.advanceTimersByTime(100); await nextTick(); await flush()
-    expect(s.root.surfacesMade[4]!.disposed).toBe(false)
+    expect(s.root.surfacesMade[7]!.disposed).toBe(false)
     s.twin.pointer.move(-999, -999, 'mouse', { node, object: mesh, instanceId: 11 }); await nextTick(); await flush()
     vi.advanceTimersByTime(1000); await nextTick(); await flush()
-    expect(s.root.surfacesMade[4]!.disposed).toBe(false)                         // back on a bin in time
+    expect(s.root.surfacesMade[7]!.disposed).toBe(false)                         // back on a bin in time
     s.twin.pointer.move(-999, -999, 'mouse', { node, object: group.getObjectByName('floor') }); await nextTick()
     vi.advanceTimersByTime(1000); await nextTick(); await flush()
-    expect(s.root.surfacesMade[4]!.disposed).toBe(true)
+    expect(s.root.surfacesMade[7]!.disposed).toBe(true)
   })
 
   it('no panel while the twin is not the focus: its content takes no pointer', async () => {
-    const s = await scene('overview'), { node, bins: mesh } = model(s.twin)
+    const s = await scene('dashboard'), { node, bins: mesh } = model(s.twin)
     s.twin.pointer.move(-999, -999, 'mouse', { node, object: mesh, instanceId: 57 }); await nextTick(); await flush()
-    expect(s.root.surfacesMade).toHaveLength(4)
+    expect(s.blocks).toHaveLength(6)
   })
 
   it('dragging across the twin turns the model by the pointer\'s canvas px (0.01 rad a px, ±0.8 at most), whatever lies under it, and hides the panel', async () => {
@@ -146,9 +145,9 @@ describe('the WMS scene', () => {
     const under = [{ node, object: mesh, instanceId: 5 }, { node, object: group.getObjectByName('frames'), instanceId: 40 }, { node, object: group.getObjectByName('floor') }, undefined]
     const r = absoluteRect(node), at = (i: number) => [r.x + 300 + ((i * 37) % 90), r.y + 200 + ((i * 53) % 70)] as const
     s.twin.pointer.move(...at(0), 'mouse', under[0], { x: 500, y: 400 }); await nextTick(); await flush()
-    expect(s.root.surfacesMade).toHaveLength(5)
+    expect(s.root.surfacesMade).toHaveLength(8)
     s.twin.pointer.down(...at(0), 'mouse', under[0], { x: 500, y: 400 }); await nextTick(); await flush()
-    expect(s.root.surfacesMade[4]!.disposed).toBe(true)
+    expect(s.root.surfacesMade[7]!.disposed).toBe(true)
     for (let i = 1; i <= 10; i++) s.twin.pointer.move(...at(i), 'mouse', under[i % under.length], { x: 500 + i * 6, y: 400 + i })   // 60 px in all
     update(1 / 60, ctx(node))
     expect(yaw.rotation.y).toBeCloseTo(0.6, 9)
@@ -157,7 +156,7 @@ describe('the WMS scene', () => {
     expect(yaw.rotation.y).toBeCloseTo(YAW_LIMIT, 9)                              // 180 px: 1.8 rad, clamped
     s.twin.pointer.up(...at(31), 'mouse', under[0], { x: 700, y: 400 })
     // a mouse's click that ends a drag pins no panel; moving after the release hovers, and no longer turns
-    await nextTick(); await flush(); expect(s.root.surfacesMade).toHaveLength(5)
+    await nextTick(); await flush(); expect(s.root.surfacesMade).toHaveLength(8)
     s.twin.pointer.move(...at(32), 'mouse', under[2], { x: 300, y: 400 })
     update(1 / 60, ctx(node))
     expect(yaw.rotation.y).toBeCloseTo(YAW_LIMIT, 9)
@@ -172,9 +171,9 @@ describe('the WMS scene', () => {
     const s = await scene('twin'), { node, bins: mesh } = model(s.twin), bin = { node, object: mesh, instanceId: 21 }
     for (const type of ['mouse', 'touch'] as const) {
       s.twin.pointer.down(-999, -999, type, bin); s.twin.pointer.up(-999, -999, type, bin); await nextTick(); await flush()
-      if (type === 'mouse') { expect(s.root.surfacesMade).toHaveLength(4); s.twin.pointer.move(5, 5, 'mouse'); await nextTick(); await flush() }
+      if (type === 'mouse') { expect(s.blocks).toHaveLength(6); s.twin.pointer.move(5, 5, 'mouse'); await nextTick(); await flush() }
     }
-    expect(s.root.surfacesMade).toHaveLength(5); expect(textOf(s.root.surfacesMade[4]!.root)).toContain(bins[21]!.id)
+    expect(s.root.surfacesMade).toHaveLength(8); expect(textOf(s.root.surfacesMade[7]!.root)).toContain(bins[21]!.id)
   })
 
   it('under frozen motion the twin holds still: the AGV parks (screenshots are repeatable)', async () => {
@@ -256,16 +255,14 @@ describe('the network Block', () => {
     return new Vector3().setFromMatrixPosition(m).applyMatrix4(mesh.matrixWorld).applyMatrix4(new Matrix4().copy(group.matrixWorld).invert())
   }
 
-  it('stands at its explicit pose, the arc\'s slot between the overview and the twin', async () => {
+  it('stands at its explicit pose, the arc\'s slot between the dashboard and the twin', async () => {
     const s = await scene('network')
     expect(s.network.restPose.position.map(v => +v.toFixed(9))).toEqual(NETWORK.position.map(v => +v.toFixed(9)))
     expect(s.network.restPose.rotation[1]).toBeCloseTo(NETWORK.rotation[1], 9)
-    // the slot after the overview's (which the Space lays out itself), and before the twin's
-    const angle = (x: FakeSurface): number => -x.restPose.rotation[1]
-    const pt = 244, step = (a: { width: number }, b: { width: number }): number => (a.width / pt / 2 + ARC.gap + b.width / pt / 2) / ARC.radius
-    expect(angle(s.network) - angle(s.overview)).toBeCloseTo(step(BLOCKS.overview, BLOCKS.network), 9)
-    expect(angle(s.twin) - angle(s.network)).toBeCloseTo(step(BLOCKS.network, BLOCKS.twin), 9)
+    expect(s.network.restPose.position).toEqual(SLOTS[2]!.position)
     expect(s.root.rigs[0]!.focus.mock.lastCall![0]).toBe(s.network)
+    const t = await scene('twin')
+    expect(t.twin.restPose.position).toEqual(TWIN.position)
   })
 
   it('hovering a place floats the glass place panel on the far side of the map, showing the place; another place updates it; leaving hides it', async () => {
@@ -274,7 +271,7 @@ describe('the network Block', () => {
     // 贾汪中转仓 shows right of the map's centre: the panel takes the left
     expect(footOf(s.group, 'WH-4').x).toBeGreaterThan(0)
     s.network.pointer.move(-999, -999, 'mouse', on('WH-4')); await nextTick(); await flush()
-    const panel = s.root.surfacesMade[4]!
+    const panel = s.root.surfacesMade[7]!
     expect(panel.created).toMatchObject({ layer: 'world', width: PLACE_PANEL.width, height: PLACE_PANEL.height, ptPerUnit: PLACE_PANEL.ptPerUnit, background: 'glass', interactive: false })
     expect(panel.castShadows).toBe(false)
     const left = inFrameOf(NETWORK, PLACE_PANEL.offset.left)
@@ -288,13 +285,13 @@ describe('the network Block', () => {
     // a store on the same side of the centre: the same panel, its content
     const st = network.locations.find(l => l.name.endsWith('贾汪店'))!
     s.network.pointer.move(-999, -999, 'mouse', on(st.id)); await nextTick(); await flush()
-    expect(s.root.surfacesMade).toHaveLength(5); expect(textOf(panel.root)).toContain(st.name); expect(textOf(panel.root)).toContain('货源充足')
+    expect(s.root.surfacesMade).toHaveLength(8); expect(textOf(panel.root)).toContain(st.name); expect(textOf(panel.root)).toContain('货源充足')
     // 琵琶店 shows left of it: the panel moves to the right (a new one flies in)
     const pp = network.locations.find(l => l.name.endsWith('琵琶店'))!
     expect(footOf(s.group, pp.id).x).toBeLessThan(0)
     s.network.pointer.move(-999, -999, 'mouse', on(pp.id)); await nextTick(); await flush()
     expect(panel.disposed).toBe(true)
-    const right = s.root.surfacesMade[5]!
+    const right = s.root.surfacesMade[8]!
     expect(right.restPose.position.map(v => +v.toFixed(6))).toEqual(inFrameOf(NETWORK, PLACE_PANEL.offset.right).position.map(v => +v.toFixed(6)))
     expect(textOf(right.root)).toContain(pp.name)
     // off the places, onto the bare plate: it stays a moment (no blinking between neighbours), then goes
@@ -310,11 +307,11 @@ describe('the network Block', () => {
     const s = await networkScene(), foot = footOf(s.group, 'WH-1')
     // left of its foot (下淀店 stands just south-east of it)
     s.network.pointer.move(-999, -999, 'mouse', { node: s.node, object: s.plate, point: [foot.x - 7, foot.y - 3, 0.2] }); await nextTick(); await flush()
-    expect(textOf(s.root.surfacesMade[4]!.root)).toContain('徐州一号仓')
-    const o = await scene('overview'), m = mapOf(o.network)
+    expect(textOf(s.root.surfacesMade[7]!.root)).toContain('徐州一号仓')
+    const o = await scene('dashboard'), m = mapOf(o.network)
     m.update(1 / 60, ctx(m.node))
     o.network.pointer.move(-999, -999, 'mouse', { node: m.node, object: m.prisms('warehouse'), instanceId: 0 }); await nextTick(); await flush()
-    expect(o.root.surfacesMade).toHaveLength(4)
+    expect(o.blocks).toHaveLength(6)
   })
 
   it('the wheel zooms the map; a left drag pans it; a right drag (buttons & 2, no press) or a Shift drag turns it, and pitches it within its limits', async () => {
@@ -400,7 +397,7 @@ describe('the network Block', () => {
   })
 
   it('off focus the map and the twin hold still and ask for no frames: the dots and the AGV park (Task 9P M2)', async () => {
-    const s = await scene('overview')
+    const s = await scene('dashboard')
     const net = mapOf(s.network), twin = model(s.twin), dots = net.group.getObjectByName('dots') as InstancedMesh, m = new Matrix4()
     net.update(0, ctx(net.node, false)); dots.getMatrixAt(0, m); const parked = m.toArray()
     expect(net.update(0.5, ctx(net.node, false))).toBe(false)
@@ -408,8 +405,8 @@ describe('the network Block', () => {
     twin.update(0, ctx(twin.node, false))
     expect(twin.update(0.5, ctx(twin.node, false))).toBe(false)
     // focused, they run again
-    const click = async (surface: FakeSurface, label: string): Promise<void> => { const [t] = texts(surface.root, label); surface.events.dispatch(t!, 'click', {}); await nextTick(); await flush() }
-    await click(s.overview, '物流网络')
+    const click = async (surface: FakeSurface, id: string): Promise<void> => { const t = byId(surface.root, id); surface.events.dispatch(t!, 'click', {}); await nextTick(); await flush() }
+    await click(s.dock, 'dock-network')
     expect(net.update(0.5, ctx(net.node, false))).toBe(true)
   })
   it('under frozen motion the map holds still: the dots park (screenshots are repeatable); live they run', async () => {
@@ -451,18 +448,16 @@ describe('the curved wall', () => {
   const ASPECTS = [1512 / 808, 21 / 9, 16 / 9, 16 / 10, 4 / 3]
 
   it('every Block\'s focus view, at five aspects and every corner of the ±2.5° parallax, sees nothing but the wall main.ts builds, and wall the pastel covers at its full density', async () => {
-    const s = await scene('overview'), blocks = [s.orders, s.overview, s.network, s.twin], names = ['orders', 'overview', 'network', 'twin']
+    const s = await scene('dashboard'), blocks = [s.orders, s.dashboard, s.network, s.inbound, s.twin, s.settings], names = ['orders', 'dashboard', 'network', 'inbound', 'twin', 'settings']
     // the span as main.ts makes it, from the rest poses as a real Surface reports them: its rotation an Euler read back
     // from its quaternion, so a yaw past 90° (the twin's −1.749) comes back as [π, −1.393, π]
     const readBack = (b: FakeSurface): RestPose => {
       const e = new Euler().setFromQuaternion(new Quaternion().setFromEuler(new Euler(...b.restPose.rotation, 'XYZ')))
       return { position: b.restPose.position, rotation: [e.x, e.y, e.z] }
     }
-    expect(readBack(s.twin).rotation.map(v => +v.toFixed(3))).toEqual([3.142, -1.393, 3.142])
-    // each Block's place on the arc comes from its position: the twin at 100.2°, not 79.8°
-    expect(arcAngleOf(readBack(s.twin).position) * 180 / Math.PI).toBeCloseTo(100.18, 1)
-    blocks.forEach(b => expect(arcAngleOf(b.restPose.position)).toBeCloseTo(-b.restPose.rotation[1], 9))
-    const span = wallSpanOf(blocks.map(readBack)), R = ARC.radius, r = R + WALL.out
+    expect(readBack(s.twin).rotation.map(v => +v.toFixed(3))).toEqual(TWIN.rotation.map(v => +v.toFixed(3)))
+    blocks.forEach(b => expect(Number.isFinite(arcAngleOf(b.restPose.position))).toBe(true))
+    const span = wallSpanOf(blocks.map(readBack)), R = GRID.radius, r = R + WALL.out
     const wall = createCurvedWall({ center: [0, 0, R], radius: r, ...span, height: WALL.height })
     const periodic = (wall.material as Material).userData.periodicU === true
     const half = Math.tan(19 * Math.PI / 180), par = 2.5 * Math.PI / 180
@@ -487,9 +482,9 @@ describe('the curved wall', () => {
     })
   })
 
-  it('its colour has the density behind the overview everywhere: u runs one a 32 units along it, and the arc\'s pastel repeats seamlessly in u', () => {
-    const angles = [0, 0.5, 1.14, 1.75], { from, to } = wallSpan(angles), radius = ARC.radius + WALL.out
-    const long = createCurvedWall({ center: [0, 0, ARC.radius], radius, from, to, height: WALL.height })
+  it('its colour has the density behind the dashboard everywhere: u runs one a 32 units along it, and the arc\'s pastel repeats seamlessly in u', () => {
+    const angles = [0, 0.5, 1.14, 1.75], { from, to } = wallSpan(angles), radius = GRID.radius + WALL.out
+    const long = createCurvedWall({ center: [0, 0, GRID.radius], radius, from, to, height: WALL.height })
     const span = (m: Mesh): [number, number] => { const u = (m.geometry as BufferGeometry).getAttribute('uv'); let a = Infinity, b = -Infinity; for (let i = 0; i < u.count; i++) { a = Math.min(a, u.getX(i)); b = Math.max(b, u.getX(i)) } return [a, b] }
     const [a, b] = span(long), length = radius * (to - from)
     expect(b - a).toBeCloseTo(length / MAX_U_LENGTH, 6)

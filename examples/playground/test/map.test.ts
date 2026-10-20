@@ -113,6 +113,31 @@ describe('the Xuzhou extract', () => {
   })
 })
 
+describe('network map controls', () => {
+  it('zooms, resets its view and hides a layer with its labels and incident routes', () => {
+    const m = make()
+    m.update(0, ctx())
+    const before = m.view.zoom
+    const initial = m.view
+    m.zoomBy(1.2)
+    expect(m.view.zoom).toBeGreaterThan(before)
+    m.setLayer('store', false)
+    expect(prisms(m.group, 'store').visible).toBe(false)
+    expect(prisms(m.group, 'warehouse').visible).toBe(true)
+    m.update(0, ctx())
+    const ranges = (named(m.group, 'lanes') as Mesh).userData.ranges as Record<string, unknown>
+    expect(Object.keys(ranges).every(id => {
+      const lane = network.lanes.find(x => x.id === id)!
+      return ![lane.from, lane.to].some(end => network.locations.find(x => x.id === end)!.kind === 'store')
+    })).toBe(true)
+    m.resetView()
+    expect(m.view).toEqual(initial)
+    m.setLayer('store', true)
+    expect(prisms(m.group, 'store').visible).toBe(true)
+    m.dispose()
+  })
+})
+
 describe('the network map', () => {
   it('the projection round-trips the city centre and any point; 1° of latitude is about 111 km', () => {
     const p = createProjection(geo), [lon0, lat0] = p.centre

@@ -13,7 +13,7 @@ import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
 import Gallery from './gallery/Gallery.vue'
 import Spatial from './scenes/Spatial.vue'
-import { ARC, WALL, wallSpanOf } from './scenes/spatial-arc'
+import { GRID, WALL, wallSpanOf } from './scenes/spatial-grid'
 import { createCurvedWall, createHostLights, createWall } from './wall'
 import SignUp from './scenes/SignUp.vue'
 import World from './scenes/World.vue'
@@ -32,6 +32,7 @@ import { createFrameStats, createSceneHarness, imeFocused } from './harness'
 export interface NodeRect extends Rect { cx: number; cy: number }
 export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURenderer; root?: UIRoot; surfaces?: readonly Surface[]; rectOf(id: string): NodeRect | null; stats(): { frameMs: number; draws: number }; ime(): boolean; focus(): string | null; idle(): Promise<void> }
 declare global { interface Window { __glassui?: PlaygroundHandle } }
+declare global { interface Window { __glassuiSpatialFocus?: () => string | null } }
 
 const SCENES = ['signup', 'world', 'both', 'gallery', 'perf', 'spatial'] as const
 type SceneMode = (typeof SCENES)[number]
@@ -41,6 +42,8 @@ const forceWebGL = params.has('webgl')
 const sceneParam = params.get('scene')
 const mode: SceneMode = SCENES.find(s => s === sceneParam) ?? 'both'
 const motion = params.get('motion') === 'frozen' ? 'frozen' : 'live'
+const stageParam = params.get('stage'), initialStage = stageParam === 'login' || stageParam === 'overview' ? stageParam : undefined
+if (stageParam !== null && initialStage === undefined) console.warn(`[playground] unknown ?stage=${stageParam}; using the login flow`)
 const qualityParam = params.get('quality')
 const isTier = (q: string | null): q is QualityTier => q !== null && Object.hasOwn(QUALITY, q)
 const quality: QualityTier | 'auto' = isTier(qualityParam) ? qualityParam : 'auto'
@@ -90,7 +93,7 @@ const showError = (e: unknown): void => {
 // `handle` exists before `start()` runs, since `start()` writes `root` and `surfaces` into it; `ready` joins it after
 const frameStats = createFrameStats()
 let sceneHarness: ReturnType<typeof createSceneHarness> | undefined
-const handle: Omit<PlaygroundHandle, 'ready'> = { renderer, rectOf, stats: frameStats.read, ime: () => imeFocused(handle.root?.ime ?? null, document.activeElement), focus: () => sceneHarness?.focus() ?? null, idle: async () => { await ready; await sceneHarness?.idle() } }
+const handle: Omit<PlaygroundHandle, 'ready'> = { renderer, rectOf, stats: frameStats.read, ime: () => imeFocused(handle.root?.ime ?? null, document.activeElement), focus: () => mode === 'spatial' ? window.__glassuiSpatialFocus?.() ?? null : sceneHarness?.focus() ?? null, idle: async () => { await ready; await sceneHarness?.idle() } }
 const ready = start()
 window.__glassui = Object.assign(handle, { ready })
 ready.catch(showError)
@@ -107,7 +110,7 @@ async function start(): Promise<UIRoot> {
   root.setScheme(scheme)
   root.on('error', e => console.error('[glassui]', e.surface?.name ?? '(no Surface)', e.error))
   const scenes = { signup: SignUp, world: World, both: Both, gallery: Gallery, perf: Perf, spatial: Spatial }
-  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' || mode === 'spatial' ? { initialFocus: params.get('focus') ?? undefined } : undefined).mount()
+  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}) } : undefined).mount()
   // Vue's initial post-flush effects register Blocks and send the camera rig to the requested focus.
   await nextTick()
   if (mode === 'spatial') hostScene.add(spatialWall(root.surfaces))
@@ -118,7 +121,7 @@ async function start(): Promise<UIRoot> {
   handle.root = root
   // A live getter: opening a Dialog adds panel/scrim Surfaces after startup.
   Object.defineProperty(handle, 'surfaces', { get: () => root.surfaces })
-  const names = mode === 'spatial' ? ['orders', 'overview', 'network', 'twin'] : mode === 'gallery' ? ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers'] : []
+  const names = mode === 'spatial' ? ['orders', 'dashboard', 'network', 'inbound', 'twin', 'settings'] : mode === 'gallery' ? ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers'] : []
   sceneHarness = createSceneHarness(root, new Map(root.surfaces.flatMap((s, i) => names[i] ? [[s, names[i]!] as const] : [])))
   sceneHarness.focus()
   guardOrbit(root)
@@ -170,7 +173,7 @@ async function start(): Promise<UIRoot> {
  * density (createCurvedWall: u one every 32 units, seamless), so no view sees the colour run out.
  */
 function spatialWall(blocks: readonly Surface[]): Mesh {
-  return createCurvedWall({ center: [0, 0, ARC.radius], radius: ARC.radius + WALL.out, ...wallSpanOf(blocks.map(s => s.restPose)), height: WALL.height, scheme })
+  return createCurvedWall({ center: [0, 0, GRID.radius], radius: GRID.radius + WALL.out, ...wallSpanOf(blocks.map(s => s.restPose)), height: WALL.height, scheme })
 }
 
 /** See `PlaygroundHandle.rectOf`: the node's Surface-pt rect (`absoluteRect`), its corners and centre projected (`screenFromPoint`). */

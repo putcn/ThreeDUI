@@ -39,7 +39,7 @@ export interface Zone { label: string; value: number }
  */
 export interface Bin { id: string; row: number; bay: number; level: number; sku: string; name: string; qty: number; cap: number; occupancy: number }
 export type OrderStatus = '待拣货' | '拣货中' | '已发货' | '异常'
-export interface Order { no: string; customer: string; items: number; status: OrderStatus; time: string }
+export interface Order { no: string; customer: string; items: number; status: OrderStatus; time: string; overdue?: boolean; today?: boolean }
 export interface Alert { level: 'danger' | 'warning'; title: string; detail: string; time: string }
 
 /**
@@ -84,6 +84,7 @@ export interface WmsData {
   heat: Heat
   stock: StockMatrix
   network: Network
+  dashboardSeries: { today: number[]; week: number[]; month: number[]; summary: { today: number[]; week: number[]; month: number[] }; refreshSteps: number[] }
 }
 
 /** The bins' occupancy bands, lowest first: a bin is in the last band whose `min` its occupancy reaches. */
@@ -355,15 +356,28 @@ export function createWmsData(seed: number): WmsData {
     { label: '准时发货率', value: '98.6', unit: '%', delta: 0.3 },
     { label: '库位利用率', value: (utilisation * 100).toFixed(1), unit: '%', delta: -1.1 },
   ]
+  const sum = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0)
+  const heatTotal = (rows: readonly number[][]): number[] => {
+    const totals = rows.map(sum), peak = Math.max(...rows.flat()), working = totals.filter((_, i) => !isDayOff(heat.days[heat.values.length - rows.length + i]!)), off = totals.filter((_, i) => isDayOff(heat.days[heat.values.length - rows.length + i]!))
+    return [peak, Math.round(sum(working) / Math.max(1, working.length)), Math.round(sum(off) / Math.max(1, off.length))]
+  }
+  const base = kpis.map(k => Number(k.value.replaceAll(',', '')))
+  const dashboardSeries = {
+    today: base,
+    week: [base[0]! * 1.002, sum(flow30d.outbound.slice(-7)), 98.7, base[3]! - 0.4],
+    month: [base[0]! * 1.011, sum(flow30d.outbound), 98.5, base[3]! - 0.8],
+    summary: { today: heatTotal(heat.values.slice(-1)), week: heatTotal(heat.values.slice(-7)), month: heatTotal(heat.values) },
+    refreshSteps: Array.from({ length: 8 }, () => 3 + Math.floor(rand() * 14)),
+  }
   const fullC = bins.filter(b => b.row === 2 && b.occupancy >= 0.95).length
   // today's latest orders by their last update, numbered in the day's sequence: the newest is today's outbound count
   const no = (n: number): string => `SO261015-${String(n).padStart(4, '0')}`
   const orders: Order[] = [
-    { no: no(today), customer: '禾谷生鲜', items: 36, status: '待拣货', time: '14:32' },
-    { no: no(today - 2), customer: '星河超市·黄楼店', items: 124, status: '待拣货', time: '14:27' },
-    { no: no(today - 5), customer: '青禾母婴', items: 18, status: '拣货中', time: '14:19' },
+    { no: no(today), customer: '禾谷生鲜', items: 36, status: '待拣货', time: '14:32', today: true },
+    { no: no(today - 2), customer: '星河超市·黄楼店', items: 124, status: '待拣货', time: '14:27', overdue: true },
+    { no: no(today - 5), customer: '青禾母婴', items: 18, status: '拣货中', time: '14:19', overdue: true },
     { no: no(today - 9), customer: '优格家居旗舰店', items: 9, status: '拣货中', time: '14:05' },
-    { no: no(today - 13), customer: '蓝鲸日化', items: SHORT_PICK.wanted, status: '异常', time: '13:58' },
+    { no: no(today - 13), customer: '蓝鲸日化', items: SHORT_PICK.wanted, status: '异常', time: '13:58', overdue: true },
     { no: no(today - 19), customer: '鹿野咖啡', items: 48, status: '已发货', time: '13:41' },
     { no: no(today - 24), customer: '北辰数码', items: 6, status: '已发货', time: '13:26' },
     { no: no(today - 30), customer: '木子文具', items: 72, status: '已发货', time: '13:12' },
@@ -374,10 +388,10 @@ export function createWmsData(seed: number): WmsData {
     { level: 'warning', title: `订单 ${odd.no} 拣货异常`, detail: `库位 ${SHORT_PICK.bin} 实际 ${SHORT_PICK.qty} 件，少于应拣 ${SHORT_PICK.wanted} 件，已通知盘点`, time: '21 分钟前' },
     { level: 'warning', title: 'AGV-02 电量 18%', detail: '当前任务完成后自动返回充电位', time: '35 分钟前' },
   ]
-  return { kpis, outboundToday: today, utilisation, flow30d, zones, bins, orders, alerts, heat, stock, network }
+  return { kpis, outboundToday: today, utilisation, flow30d, zones, bins, orders, alerts, heat, stock, network, dashboardSeries }
 }
 
-export const { kpis, outboundToday, utilisation, flow30d, zones, bins, orders, alerts, heat, stock, network } = createWmsData(SEED)
+export const { kpis, outboundToday, utilisation, flow30d, zones, bins, orders, alerts, heat, stock, network, dashboardSeries } = createWmsData(SEED)
 
 /** The lanes into and out of `id`, and their pieces: what the place panel lists. */
 export function lanesOf(net: Network, id: string): { inbound: Lane[]; outbound: Lane[] } {

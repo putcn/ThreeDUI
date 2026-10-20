@@ -2,21 +2,25 @@
 // The twin Block's content (spatial spec §4 step 3): the title, the overview line and the occupancy legend, then the
 // warehouse model in a Viewport3D filling the rest. Drag across it to turn the model; hover a bin to raise it, which
 // `hover` reports so Spatial.vue can float the info panel in front of the twin.
-import { markRaw, onBeforeUnmount } from 'vue'
-import { Box, Icon, Stack, Text, useMotion, useSurfaceRef, Viewport3D } from '@glassui/vue'
+import { markRaw, onBeforeUnmount, ref } from 'vue'
+import { Box, Button, GlassContainer, Stack, Switch, Text, useMotion, useSurfaceRef, Viewport3D } from '@glassui/vue'
 import type { UIEvent } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
 import { BIN_LEVELS, binLevel, bins, RACKS, utilisation, type Bin } from './data'
 import { createWarehouse } from './warehouse'
+import Breadcrumb from './Breadcrumb.vue'
 
 /** `active`: this Block is the focus (Spatial.vue's); off it the model holds still (default true). */
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
-const emit = defineEmits<{ hover: [bin: Bin | null]; navigate: [name: string] }>()
+const emit = defineEmits<{ hover: [bin: Bin | null]; navigate: [name: string | null] }>()
 
 // the model, made once (raw: three objects must not become reactive proxies). Under frozen motion (screenshots), and
 // while the Block is not the focus, it is as under reduced motion: the AGV parks, the yaw and the lift are there at
 // once, so the model asks for no frames it does not need
 const warehouse = markRaw(createWarehouse({ bins }))
+const preset = ref<'top' | 'angled' | 'front'>('angled'), lowOnly = ref(false)
+function setPreset(value: 'top' | 'angled' | 'front'): void { preset.value = value; warehouse.setView(value) }
+function setLowOnly(value: boolean): void { lowOnly.value = value; warehouse.setLowOnly(value) }
 const frozen = useMotion() === 'frozen'
 const update = (dt: number, ctx: Viewport3DContext): boolean => warehouse.update(dt, frozen || !props.active ? { ...ctx, reducedMotion: true } : ctx)
 const percent = Math.round(utilisation * 100)
@@ -79,17 +83,15 @@ onBeforeUnmount(() => {
 <template>
   <Stack direction="horizontal" justify="between" align="end" :style="{ flexShrink: 0 }">
     <Stack :gap="4">
-      <Stack direction="horizontal" align="center" :gap="4">
-        <Box :style="{ flexDirection: 'row', alignItems: 'center', gap: 2, hover: { opacity: 0.7 } }" @click="emit('navigate', 'overview')">
-          <Icon name="chevron-left" :size="14" color="accent" :weight="0.14" />
-          <Text value="总览" :size="14" color="accent" :weight="600" />
-        </Box>
-        <Text value="/ 仓储孪生" :size="14" color="tertiaryLabel" />
-      </Stack>
+      <Breadcrumb title="仓储孪生" @navigate="emit('navigate', null)" />
       <Text value="仓储孪生 · 徐州一号仓" :size="24" :weight="700" />
       <Text :value="`${RACKS.rows} 排 · ${bins.length} 个库位 · 利用率 ${percent}%`" :size="14" color="secondaryLabel" />
     </Stack>
     <Stack direction="horizontal" :gap="8">
+      <GlassContainer>
+        <Button v-for="v in [{key:'top',label:'俯视'},{key:'angled',label:'斜视'},{key:'front',label:'正视'}] as const" :key="v.key" :label="v.label" size="small" :variant="preset === v.key ? 'glassProminent' : 'glass'" @press="setPreset(v.key)"/>
+      </GlassContainer>
+      <Switch :checked="lowOnly" label="只显示低库存" @update:checked="setLowOnly"/>
       <Stack
         v-for="l in counts" :key="l.key" direction="horizontal" align="center" :gap="6"
         :style="{ paddingX: 12, height: 30, radius: 'capsule', bg: '#ffffff73', border: { width: 1, color: 'separator' } }"

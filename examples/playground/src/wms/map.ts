@@ -174,6 +174,9 @@ export interface NetworkMap {
    * toward the city's centre, reaching it at zoom 1, so the whole city (the suppliers at its edge too) shows there.
    */
   zoom(factor: number): void
+  zoomBy(factor: number): void
+  resetView(): void
+  setLayer(kind: LocationKind, visible: boolean): void
   /** Frees every geometry, material and texture (the map draws nothing after it). */
   dispose(): void
 }
@@ -366,6 +369,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
   diamonds.material.depthTest = true
   const laneMesh = place(new Mesh(keep(new BufferGeometry()), basic({ opacity: 0.9, additive: true, vertexColors: true })), 'lanes', ORDER.lanes)
   const moving = network.lanes.filter(l => l.status !== 'planned')
+  let visibleMoving = moving
   const dots = place(new InstancedMesh(keep(new SphereGeometry(1, 10, 8)), basic({ additive: true }), Math.max(1, moving.length * DOTS.perLane)), 'dots', ORDER.dots)
   dots.count = moving.length * DOTS.perLane
   moving.forEach((l, i) => { for (let k = 0; k < DOTS.perLane; k++) dots.setColorAt(i * DOTS.perLane + k, new Color(l.status === 'overdue' ? COLORS.overdueDot : COLORS.dot)) })
@@ -408,6 +412,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
   let box = { width: 0, height: 0 }, fit = 1, hovered: string | null = null, time = 0, dotsPlaced = false, opened = false
   /** The scale the lanes were last built at (their group is scaled by the current one over it), and the hover they show. */
   let laneScale = -1, laneHover: string | null | undefined
+  const layerVisible: Record<LocationKind, boolean> = { store: true, warehouse: true, supplier: true }
   /** What the prisms, the parked dots and the labels were last placed for: the scale, the hover, the eye. */
   let placedHover: string | null | undefined, placedScale = -1, dotsScale = -1
   const labelEye = new Vector3(Number.NaN, 0, 0)
@@ -515,6 +520,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
     ranges = []
     let start = 0
     for (const lane of network.lanes) {
+      if (!layerVisible[byId.get(lane.from)!.kind] || !layerVisible[byId.get(lane.to)!.kind]) continue
       foot(byId.get(lane.from)!, s, a); foot(byId.get(lane.to)!, s, b)
       const len = a.distanceTo(b), mid = a.clone().add(b).multiplyScalar(0.5), h = clamp(len * LANES.arc.rise, LANES.arc.min, LANES.arc.max)
       const curve = new QuadraticBezierCurve3(a.clone(), mid.setZ(mid.z + 2 * h), b.clone())
@@ -527,7 +533,9 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
       tube.deleteAttribute('uv')
       parts.push(tube); ranges.push({ lane, start, count: n }); start += n
     }
-    curves = moving.map(lane => byLane.get(lane)!)
+    visibleMoving = moving.filter(lane => layerVisible[byId.get(lane.from)!.kind] && layerVisible[byId.get(lane.to)!.kind])
+    curves = visibleMoving.map(lane => byLane.get(lane)!).filter((c): c is { curve: QuadraticBezierCurve3; length: number } => c !== undefined)
+    dots.count = curves.length * DOTS.perLane
     const merged = parts.length ? mergeGeometries(parts) : null
     for (const p of parts) p.dispose()
     owned.geometries = owned.geometries.filter(g => g !== laneMesh.geometry)
@@ -549,6 +557,8 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
       const rate = clamp(DOTS.pace / Math.max(1, c.length), DOTS.rate[0], DOTS.rate[1])
       for (let k = 0; k < DOTS.perLane; k++) {
         const t = (((time * rate + k / DOTS.perLane + i * 0.137) % 1) + 1) % 1
+        const lane = visibleMoving[i]
+        if (lane) dots.setColorAt(i * DOTS.perLane + k, new Color(lane.status === 'overdue' ? COLORS.overdueDot : COLORS.dot))
         dots.setMatrixAt(i * DOTS.perLane + k, mtx.compose(c.curve.getPoint(t, v), q.identity(), size.set(across, across, r)))
       }
     })
@@ -566,6 +576,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
     const s = scale(), m = markScale(), withSub = now.zoom >= LABELS.subZoom
     let placed = 0
     for (const t of tagged) {
+      t.g.visible = layerVisible[t.l.kind]
       const block = withSub ? t.full : t.compact
       // the block's bottom `LABELS.lift` pt over the prism's top
       foot(t.l, s, t.g.position).setZ(Z.base + heightOf(t.l) * m).applyMatrix4(toPlate)
@@ -674,6 +685,18 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
         target.centre = [cx + (target.centre[0] - cx) * k, cy + (target.centre[1] - cy) * k]
       }
       target.zoom = next
+    },
+    zoomBy(factor) { this.zoom(factor) },
+    resetView() {
+      target.yaw = 0; target.pitch = PITCH0
+      if (opened) opening()
+      else { target.zoom = MARK_ZOOM; target.centre = [clamp(home[0], bx0, bx1), clamp(home[1], by0, by1)] }
+    },
+    setLayer(kind, visible) {
+      layerVisible[kind] = visible
+      prisms[kind].visible = visible
+      for (const t of tagged) if (t.l.kind === kind) t.g.visible = visible
+      laneScale = -1
     },
     dispose() {
       for (const mesh of [...Object.values(prisms), dots]) mesh.dispose()

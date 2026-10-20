@@ -4,22 +4,26 @@
 // today's runs as arcs); the controls' hint and the map data's credit under it. Wheel to zoom, drag to pan, right-drag
 // or Shift-drag to turn; hover a place to light it and its runs, which `hover` reports (with the side of the map it
 // shows on) so Spatial.vue can float the place panel on the other side.
-import { markRaw, onBeforeUnmount } from 'vue'
-import { Box, Icon, Stack, Text, useCanvasFactory, useMotion, useSurfaceRef, Viewport3D } from '@glassui/vue'
+import { markRaw, onBeforeUnmount, reactive } from 'vue'
+import { Box, Button, GlassContainer, Stack, Text, useCanvasFactory, useMotion, useSurfaceRef, Viewport3D } from '@glassui/vue'
 import type { UIEvent } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
 import geo from './geo/xuzhou.json'
 import { KINDS, network, STOCK_LEVELS, stockLevel } from './data'
 import { createNetworkMap, type GeoData, type PlaceHover } from './map'
+import Breadcrumb from './Breadcrumb.vue'
 
 /** `active`: this Block is the focus (Spatial.vue's); off it the map holds still (default true). */
 const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
-const emit = defineEmits<{ hover: [place: PlaceHover | null]; navigate: [name: string] }>()
+const emit = defineEmits<{ hover: [place: PlaceHover | null]; navigate: [name: string | null] }>()
 
 // the map, made once (raw: three objects must not become reactive proxies). Under frozen motion (screenshots), and
 // while the Block is not the focus, it is as under reduced motion: the view is where it is headed at once and the dots
 // park, so the map asks for no frames it does not need
 const map = markRaw(createNetworkMap(geo as GeoData, network, { createCanvas: useCanvasFactory() }))
+const layers = reactive({ store: true, warehouse: true, supplier: true })
+const layerKinds = ['store', 'warehouse', 'supplier'] as const
+const toggleLayer = (kind: keyof typeof layers) => { layers[kind] = !layers[kind]; map.setLayer(kind, layers[kind]) }
 const frozen = useMotion() === 'frozen'
 const update = (dt: number, ctx: Viewport3DContext): boolean => map.update(dt, frozen || !props.active ? { ...ctx, reducedMotion: true } : ctx)
 
@@ -116,13 +120,7 @@ onBeforeUnmount(() => {
 <template>
   <Stack direction="horizontal" justify="between" align="end" :style="{ flexShrink: 0 }">
     <Stack :gap="4">
-      <Stack direction="horizontal" align="center" :gap="4">
-        <Box :style="{ flexDirection: 'row', alignItems: 'center', gap: 2, hover: { opacity: 0.7 } }" @click="emit('navigate', 'overview')">
-          <Icon name="chevron-left" :size="14" color="accent" :weight="0.14" />
-          <Text value="总览" :size="14" color="accent" :weight="600" />
-        </Box>
-        <Text value="/ 物流网络" :size="14" color="tertiaryLabel" />
-      </Stack>
+      <Breadcrumb title="物流网络" @navigate="emit('navigate', null)" />
       <Text value="物流网络 · 徐州" :size="24" :weight="700" />
       <Text :value="stats" :size="14" color="secondaryLabel" :wrap="false" />
     </Stack>
@@ -137,6 +135,12 @@ onBeforeUnmount(() => {
     </Stack>
   </Stack>
 
+  <Stack direction="horizontal" justify="end" :style="{ flexShrink: 0 }">
+    <GlassContainer>
+      <Button shape="circle" leading-icon="plus" @press="map.zoomBy(1.25)"/><Button shape="circle" leading-icon="minus" @press="map.zoomBy(0.8)"/><Button shape="circle" leading-icon="refresh" @press="map.resetView()"/>
+      <Button v-for="kind in layerKinds" :key="kind" size="small" :label="{store:'门店',warehouse:'仓库',supplier:'供应商'}[kind]" :variant="layers[kind] ? 'tinted' : 'glass'" @press="toggleLayer(kind)"/>
+    </GlassContainer>
+  </Stack>
   <Viewport3D
     :object="map.group" :update="update" :depth="260" :style="{ flexGrow: 1, height: 'auto' }"
     @pointerdown="onPointerdown" @pointerup="onPointerup" @pointermove="onPointermove" @pointerleave="onPointerleave" @contextmenu="onContextmenu" @wheel="onWheel" @click="onClick"

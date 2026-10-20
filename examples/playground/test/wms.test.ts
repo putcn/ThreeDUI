@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { Box3, Color, InstancedMesh, Matrix4, Mesh, Vector3, type BufferGeometry, type Object3D } from 'three'
 import { defaultTheme } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
-import { alerts, binLevel, bins, CATEGORIES, createWmsData, flow30d, heat, HOLIDAY, holidayFactor, isDayOff, kpis, laneSummary, lanesOf, mulberry32, network, orders, outboundToday, SEED, SHORT_PICK, stock, stockLevel, utilisation, zones } from '../src/wms/data'
+import { alerts, binLevel, bins, CATEGORIES, createWmsData, dashboardSeries, flow30d, heat, HOLIDAY, holidayFactor, isDayOff, kpis, laneSummary, lanesOf, mulberry32, network, orders, outboundToday, SEED, SHORT_PICK, stock, stockLevel, utilisation, zones } from '../src/wms/data'
 import { AGV_SPEED, createWarehouse, HOVER_LIFT, YAW_LIMIT } from '../src/wms/warehouse'
 
 const ctx = (o: Partial<Viewport3DContext> = {}): Viewport3DContext => ({ width: 1200, height: 680, reducedMotion: false, theme: defaultTheme, scheme: 'light', ...o })
@@ -25,7 +25,7 @@ describe('wms data', () => {
     expect(Math.abs(xs.reduce((s, x) => s + x, 0) / xs.length - 0.5)).toBeLessThan(0.1)
   })
   it('is deterministic: the exports are the fixed seed\'s data, made again the same; another seed differs', () => {
-    expect(createWmsData(SEED)).toEqual({ kpis, outboundToday, utilisation, flow30d, zones, bins, orders, alerts, heat, stock, network })
+    expect(createWmsData(SEED)).toEqual({ kpis, outboundToday, utilisation, flow30d, zones, bins, orders, alerts, heat, stock, network, dashboardSeries })
     expect(createWmsData(SEED)).toEqual(createWmsData(SEED))
     expect(createWmsData(SEED + 1).bins).not.toEqual(bins)
   })
@@ -52,6 +52,16 @@ describe('wms data', () => {
     expect(zones.every(z => z.value >= 1000 && z.value < 5000)).toBe(true)
     const mean = bins.reduce((s, b) => s + b.occupancy, 0) / bins.length
     expect(utilisation).toBe(mean); expect(kpis[3]!.value).toBe((mean * 100).toFixed(1))
+  })
+  it('dashboard today, week and month KPI and chart summaries use deterministic seeded series', () => {
+    const a = createWmsData(SEED).dashboardSeries, b = createWmsData(SEED).dashboardSeries
+    expect(a).toEqual(b)
+    expect(a.today).toHaveLength(4); expect(a.week).toHaveLength(4); expect(a.month).toHaveLength(4)
+    expect(a.today[1]).toBe(outboundToday)
+    expect(a.week[1]).toBe(flow30d.outbound.slice(-7).reduce((x, y) => x + y, 0))
+    expect(a.month[1]).toBe(flow30d.outbound.reduce((x, y) => x + y, 0))
+    expect(a.summary.today).toHaveLength(3); expect(a.summary.week).toHaveLength(3); expect(a.summary.month).toHaveLength(3)
+    expect(a.refreshSteps).toHaveLength(8); expect(a.refreshSteps.every(x => x > 0)).toBe(true)
   })
   it('8 orders, newest first and numbered in the day (the newest is today\'s outbound count), every status shown', () => {
     expect(orders).toHaveLength(8)
