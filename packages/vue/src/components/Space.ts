@@ -101,7 +101,7 @@ export const Space = defineGlassComponent({
   provide(SPACE, ctx)
   let mounted = false, rig: CameraRig | null = null, first = true, aimed: Surface | null = null, active: Surface | null = null
   const syncRig = (): void => {
-    if (v.value.camera && !rig) { rig = root.createCameraRig(); first = true; aimed = null }
+    if (v.value.camera && !rig) { rig = root.createCameraRig(); first = true; aimed = null; aimedOverview = '' }
     else if (!v.value.camera && rig) { rig.dispose(); rig = null }
     if (rig) rig.parallax = v.value.parallax && motion === 'live'
   }
@@ -111,7 +111,10 @@ export const Space = defineGlassComponent({
       const targets = activeNames.value.map(n => blocks.get(n)?.surface.value).filter((s): s is Surface => !!s)
       if (rig && targets.length) {
         const immediate = first || motion === 'frozen'; first = false
-        const signature = targets.map(s => String((s as unknown as { uuid?: string }).uuid ?? activeNames.value.find(n => blocks.get(n)?.surface.value === s))).join('|') + `:${standby.value}`
+        const signature = targets.map(s => {
+          const surface = s as unknown as { uuid?: string; model: { id: string; width: number; height: number } }
+          return `${surface.uuid ?? surface.model.id}:${surface.model.width}x${surface.model.height}`
+        }).join('|') + `:${standby.value}`
         if (signature !== aimedOverview) {
           aimedOverview = signature
           void rig.frame(targets, { immediate, distanceScale: standby.value ? 1.25 : 1, parallax: 3 }).then(ok => { if (ok && aimedOverview === signature) emit('arrive', null) })

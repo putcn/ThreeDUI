@@ -21,6 +21,37 @@ it('overview frames every Block and standby uses distance 1.25 with opacity 0.35
   expect(root.rigs[0]!.frame).toHaveBeenLastCalledWith(root.surfacesMade, { immediate: false, distanceScale: 1.25, parallax: 3 })
   expect(root.surfacesMade.every(s => s.opacity === 0.35)).toBe(true)
 })
+it('overview reframes when a Block changes size and when its camera is recreated', async () => {
+  const root = createFakeRoot(), width = ref(488), camera = ref(true)
+  mountGlass(() => h(Space, { focus: null, overview: true, layout: 'grid', columns: 3, camera: camera.value }, () => [
+    h(Block, { name: names[0]!, width: width.value, height: 244 }), ...blocks().slice(1),
+  ]), { root }); await flush()
+  const firstRig = root.rigs[0]!, firstCount = firstRig.frame.mock.calls.length
+  width.value = 600; await nextTick(); await flush()
+  expect(firstRig.frame).toHaveBeenCalledTimes(firstCount + 1)
+
+  camera.value = false; await nextTick(); await flush()
+  camera.value = true; await nextTick(); await flush()
+  expect(root.rigs).toHaveLength(2)
+  expect(root.rigs[1]!.frame).toHaveBeenCalledTimes(1)
+})
+it('standby exit reveals grid rows with a 60 ms stagger', async () => {
+  vi.useFakeTimers()
+  try {
+    const root = createFakeRoot(), standby = ref(true)
+    mountGlass(() => h(Space, { focus: null, overview: true, layout: 'grid', columns: 3, standby: standby.value }, () => blocks()), { root }); await flush()
+    expect(root.surfacesMade.map(s => s.opacity)).toEqual([0.35, 0.35, 0.35, 0.35, 0.35, 0.35])
+
+    standby.value = false; await nextTick(); await flush()
+    expect(root.surfacesMade.slice(0, 3).map(s => s.opacity)).toEqual([1, 1, 1])
+    expect(root.surfacesMade.slice(3).map(s => s.opacity)).toEqual([0.35, 0.35, 0.35])
+
+    vi.advanceTimersByTime(59)
+    expect(root.surfacesMade.slice(3).map(s => s.opacity)).toEqual([0.35, 0.35, 0.35])
+    vi.advanceTimersByTime(1)
+    expect(root.surfacesMade.slice(3).map(s => s.opacity)).toEqual([1, 1, 1])
+  } finally { vi.useRealTimers() }
+})
 it('overview click requests focus and suppresses interaction with Block content', async () => {
   const root = createFakeRoot(), focus = ref<string | null>(null), onFocus = vi.fn()
   mountGlass(() => h(Space, { focus: focus.value, overview: true, 'onUpdate:focus': (n: string | null) => { onFocus(n); focus.value = n } }, () => blocks()), { root }); await flush()
@@ -46,6 +77,7 @@ it('overview Tab, grid arrows and Enter select Blocks; Escape is guarded in focu
   const root = createFakeRoot(), focus = ref<string | null>(null)
   mountGlass(() => h(Space, { focus: focus.value, overview: true, layout: 'grid', columns: 3, 'onUpdate:focus': (n: string | null) => { focus.value = n } }, () => blocks()), { root }); await flush()
   const keys = root.keyInterceptors[0]!, surface = root.surfacesMade[0]!
+  expect(keys(key('x', null))).toBe(true)
   expect(keys(key('Tab', null))).toBe(true)
   expect(root.surfacesMade[0]!.position.z).toBeGreaterThan(0)
   keys(key('ArrowRight', null)); keys(key('ArrowDown', null)); expect(root.surfacesMade[4]!.position.z).toBeGreaterThan(0)

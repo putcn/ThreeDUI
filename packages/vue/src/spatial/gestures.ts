@@ -35,7 +35,7 @@ export function createSpaceGestures(ctx: SpaceContext, opts: {
         else if (g.key === 'ArrowUp') i = Math.max(0, (row - 1) * columns + col)
         else if (g.key === 'ArrowDown') i = Math.min(names.length - 1, (row + 1) * columns + col)
         else if (g.key === 'Enter' || g.key === ' ') { if (i < 0) i = 0; ctx.requestFocus(names[i]!); return true }
-        else return false
+        else return true
         ctx.highlight(names[i]!, 'keys'); return true
       }
       if (g.key !== 'Escape' || !ctx.focused.value || g.surface !== opts.focusedSurface()) return false
