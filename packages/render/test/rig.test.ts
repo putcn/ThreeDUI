@@ -6,7 +6,7 @@ import { SystemFontEngine } from '@glassui/text'
 import { Surface, type SurfaceContext } from '../src/surface/surface'
 import { AtlasPages } from '../src/text/pages'
 import { createMeasureFn } from '../src/text/measure'
-import { CameraRig, fitDistance, focusPose } from '../src/rig'
+import { CameraRig, fitDistance, focusPose, framePose } from '../src/rig'
 import type { SurfacePose } from '../src/surface/motion'
 
 let ctx: SurfaceContext
@@ -42,6 +42,46 @@ const firstStep = (x: number, y: number, act: (r: CameraRig, a: Surface) => void
 }
 
 describe('CameraRig', () => {
+  it('framePose fits every rest corner and frame exposes a settled framing state', async () => {
+    const a = surface([-2.5, 0, 0]), b = surface([2.5, 0.25, -0.4], -0.2)
+    const out = { position: new Vector3(), quaternion: new Quaternion() }
+    const pivot = framePose([a, b], 40, 16 / 9, 0.08, 1, out)
+    const cam = new PerspectiveCamera(40, 16 / 9, 0.1, 100); cam.position.copy(out.position); cam.quaternion.copy(out.quaternion); cam.updateMatrixWorld(true)
+    for (const s of [a, b]) for (const x of [-2, 2]) for (const y of [-1.5, 1.5]) {
+      const point = new Vector3(x, y, s.contentPlaneZ).applyMatrix4(s.matrixWorld).project(cam)
+      expect(Math.abs(point.x)).toBeLessThanOrEqual(1 / 1.16 + 1e-6)
+      expect(Math.abs(point.y)).toBeLessThanOrEqual(1 / 1.16 + 1e-6)
+    }
+    const r = rig(), done = r.frame([a, b], { immediate: true })
+    r.update(1 / 60)
+    await expect(done).resolves.toBe(true)
+    expect(r.target).toBeNull(); expect(r.framing).toEqual([a, b]); expect(r.lightPose).not.toBeNull(); expect(r.settled).toBe(true)
+    expect(pivot.toArray()).toEqual([0, 0.125, -0.2])
+    r.dispose()
+  })
+  it('rejects an empty or screen frame and drops disposed frame targets', async () => {
+    const r = rig(), screen = new Surface({ width: 100, height: 100, placement: 'screen' }, ctx), a = surface()
+    expect(() => r.frame([])).toThrow(/至少要一个 Surface/)
+    expect(() => r.frame([screen])).toThrow(/只能框选世界层/)
+    const done = r.frame([a]); a.dispose(); r.update(1 / 60)
+    await expect(done).resolves.toBe(false); expect(r.framing).toBeNull(); r.dispose()
+  })
+  it('hops between focus targets, while frame-to-focus and hop zero stay direct', async () => {
+    const travel = (hop: number, framed = false): number => {
+      const r = new CameraRig({ camera, canvas, aspect: () => aspect, reducedMotion: () => reduced }, { hop })
+      const a = surface([-4, 0, 0]), b = surface([4, 0, 0])
+      if (framed) { void r.frame([a], { immediate: true }); r.update(1 / 60); void r.focus(b) }
+      else { void r.focus(a, { immediate: true }); r.update(1 / 60); void r.focus(b) }
+      const goal = { position: new Vector3(), quaternion: new Quaternion() }; focusPose(b, camera.getEffectiveFOV(), aspect, r.margin, goal)
+      let bulge = 0
+      for (let i = 0; i < 900; i++) { r.update(1 / 60); bulge = Math.max(bulge, camera.position.z - goal.position.z) }
+      expect(camera.position.distanceTo(goal.position)).toBeLessThan(1e-3)
+      r.dispose(); return bulge
+    }
+    expect(travel(0.35)).toBeGreaterThan(0.2)
+    expect(travel(0)).toBeLessThan(1e-3)
+    expect(travel(0.35, true)).toBeLessThan(1e-3)
+  })
   it('fitDistance fits the taller or the wider side with the margin', () => {
     expect(fitDistance(2, 4, 90, 1, 0)).toBeCloseTo(2)
     expect(fitDistance(8, 2, 90, 2, 0)).toBeCloseTo(2)

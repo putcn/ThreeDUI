@@ -258,6 +258,18 @@ describe('createUIRoot', () => {
       root.frame(6066); expect(sample).toHaveBeenLastCalledWith(50)       // > 1.5 × the 16 ms refresh: dropped
     } finally { restore() }
   })
+  it('idle reflects quiet surfaces and rig settling; paced frames reseed quality sampling', async () => {
+    const root = await createUIRoot({ ...base(), quality: 'auto' })
+    const s = root.createSurface({ width: 200, height: 100, layer: 'world' }); s.position.z = -5
+    for (let i = 0; i < 6; i++) root.tick(1 / 60)
+    expect(root.idle).toBe(true)
+    void s.animateTo({ position: [1, 0, -5] }); root.tick(1 / 60); expect(root.idle).toBe(false)
+    for (let i = 0; i < 300; i++) root.tick(1 / 60)
+    expect(root.idle).toBe(true)
+    const sample = vi.spyOn(root.quality, 'sample')
+    root.frame(1000); root.frame(1067, { paced: true }); root.frame(1134, { paced: true }); root.frame(1150)
+    expect(sample).toHaveBeenCalledTimes(1)
+  })
   it('auto quality holds its tier on a 30 Hz-capped loop whose frames are cheap', async () => {
     const { root, restore } = await timedRoot(2)
     try {
@@ -899,14 +911,14 @@ describe('the root API for the Vue layer', () => {
   })
   it('a moving light refits the shadow map', async () => {
     const { root } = await createRoot()
-    const rig = root.createCameraRig(), a = root.createSurface({ layer: 'world', width: 244, height: 244 }), b = root.createSurface({ layer: 'world', width: 244, height: 244 })
+    const rig = root.createCameraRig({ hop: 0 }), a = root.createSurface({ layer: 'world', width: 244, height: 244 }), b = root.createSurface({ layer: 'world', width: 244, height: 244 })
     b.position.set(3, 0, 0); void rig.focus(a, { immediate: true }); root.tick(1 / 60); root.tick(1 / 60)
     root.lights.key.shadow.needsUpdate = false
     void rig.focus(b); root.tick(1 / 60); expect(root.lights.key.shadow.needsUpdate).toBe(true)
   })
   it('the light alone moving (the camera at rest) refits the shadow map', async () => {
     const { root, camera } = await createRoot()
-    const rig = root.createCameraRig(), a = root.createSurface({ layer: 'world', width: 244, height: 244 }), b = root.createSurface({ layer: 'world', width: 244, height: 244 })
+    const rig = root.createCameraRig({ hop: 0 }), a = root.createSurface({ layer: 'world', width: 244, height: 244 }), b = root.createSurface({ layer: 'world', width: 244, height: 244 })
     b.position.set(3, 0, 0); void rig.focus(a, { immediate: true }); root.tick(1 / 60)
     let ok = false; void rig.focus(b).then(v => { ok = v })
     for (let i = 0; i < 300 && !ok; i++) { root.tick(1 / 60); await Promise.resolve() }

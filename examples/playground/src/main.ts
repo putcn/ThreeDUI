@@ -119,7 +119,7 @@ async function start(): Promise<UIRoot> {
   // A live getter: opening a Dialog adds panel/scrim Surfaces after startup.
   Object.defineProperty(handle, 'surfaces', { get: () => root.surfaces })
   const names = mode === 'spatial' ? ['orders', 'overview', 'network', 'twin'] : mode === 'gallery' ? ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers'] : []
-  sceneHarness = createSceneHarness(root, camera, new Map(root.surfaces.flatMap((s, i) => names[i] ? [[s, names[i]!] as const] : [])))
+  sceneHarness = createSceneHarness(root, new Map(root.surfaces.flatMap((s, i) => names[i] ? [[s, names[i]!] as const] : [])))
   sceneHarness.focus()
   guardOrbit(root)
 

@@ -15,6 +15,8 @@ export interface CameraRigOptions {
   parallaxResponse?: number
   /** Seconds (> 0): the period of the light pose's springs (`CameraRig.lightPose`), critically damped. Default 1.2. */
   lightResponse?: number
+  /** Outward travel on a focus change, as a fraction of the distance to the new pose. Default 0.35. */
+  hop?: number
 }
 
 /** What a rig drives and reads; the root hands it its camera, its canvas, its viewport's aspect and the reduced-motion flag. */
@@ -29,11 +31,11 @@ export interface RigEnvironment {
   reducedMotion: () => boolean
 }
 
-const DEFAULTS = { response: 0.8, margin: 0.08, parallax: 2.5, parallaxResponse: 0.4, lightResponse: 1.2 } as const
+const DEFAULTS = { response: 0.8, margin: 0.08, parallax: 2.5, parallaxResponse: 0.4, lightResponse: 1.2, hop: 0.35 } as const
 /** The rig's default `margin`: what a Surface's focus pose is framed with when no rig names one. */
 export const RIG_MARGIN = DEFAULTS.margin
 /** Each option's lower bound (`> 0` or `≥ 0`) and unit, for the error. */
-const LIMITS = [['response', true, '秒'], ['parallaxResponse', true, '秒'], ['lightResponse', true, '秒'], ['margin', false, '每边占 Surface 尺寸的比例'], ['parallax', false, '度']] as const
+const LIMITS = [['response', true, '秒'], ['parallaxResponse', true, '秒'], ['lightResponse', true, '秒'], ['margin', false, '每边占 Surface 尺寸的比例'], ['parallax', false, '度'], ['hop', false, '比例']] as const
 
 /** Throws a readable `GlassUIError` (scope `CameraRig.<option>`) unless every option given is a finite number in range. */
 function checkOptions(o: CameraRigOptions): void {
@@ -86,6 +88,47 @@ function restFrame(target: Surface, fovDeg: number, aspect: number, margin: numb
 export function focusPose(target: Surface, fovDeg: number, aspect: number, margin: number, out: { position: Vector3; quaternion: Quaternion }): void {
   const d = restFrame(target, fovDeg, aspect, margin, out.position, out.quaternion)
   out.position.addScaledVector(normal.set(0, 0, 1).applyQuaternion(out.quaternion), d)
+}
+
+export interface FrameOptions { immediate?: boolean; distanceScale?: number; pivot?: [number, number, number]; parallax?: number }
+const frameNormal = new Vector3(), frameUp = new Vector3(), frameRight = new Vector3(), framePivot = new Vector3(), explicitFramePivot = new Vector3(), frameCentre = new Vector3(), frameQ = new Quaternion(), frameScale = new Vector3(), frameLocal = new Matrix4(), frameWorld = new Matrix4(), frameP = new Vector3(), frameS = new Vector3(), frameR = new Quaternion(), frameE = new Euler(), frameCorner = new Vector3(), framePos = new Vector3(), frameM = new Matrix4()
+/** Fits all four rest content-plane corners of every world Surface into a perspective view. */
+export function framePose(targets: readonly Surface[], fovDeg: number, aspect: number, margin: number, distanceScale: number, out: Pose, pivot?: Vector3): Vector3 {
+  frameNormal.set(0, 0, 0); framePivot.set(0, 0, 0)
+  for (const target of targets) {
+    const rest = target.restPose
+    frameLocal.compose(frameP.fromArray(rest.position), frameR.setFromEuler(frameE.set(...rest.rotation, 'XYZ')), frameS.fromArray(rest.scale))
+    if (target.parent) { target.parent.updateWorldMatrix(true, false); frameWorld.multiplyMatrices(target.parent.matrixWorld, frameLocal) } else frameWorld.copy(frameLocal)
+    frameWorld.decompose(frameCentre, frameQ, frameScale)
+    frameCentre.set(0, 0, target.contentPlaneZ).applyMatrix4(frameWorld)
+    framePivot.add(frameCentre)
+    frameNormal.add(frameCorner.set(0, 0, 1).applyQuaternion(frameQ))
+  }
+  if (frameNormal.length() < 1e-6) frameNormal.set(0, 0, 1); else frameNormal.normalize()
+  frameUp.set(0, 1, 0).addScaledVector(frameNormal, -frameNormal.y)
+  if (frameUp.lengthSq() < 1e-12) frameUp.set(1, 0, 0).addScaledVector(frameNormal, -frameNormal.x)
+  frameUp.normalize()
+  frameRight.crossVectors(frameUp, frameNormal).normalize()
+  const P = pivot ?? framePivot.multiplyScalar(1 / targets.length)
+  framePos.copy(P).add(frameNormal)
+  frameM.lookAt(framePos, P, frameUp); out.quaternion.setFromRotationMatrix(frameM)
+  const t = Math.tan(MathUtils.degToRad(fovDeg) / 2), k = 1 + 2 * margin
+  let D = 0
+  for (const target of targets) {
+    const rest = target.restPose
+    frameLocal.compose(frameP.fromArray(rest.position), frameR.setFromEuler(frameE.set(...rest.rotation, 'XYZ')), frameS.fromArray(rest.scale))
+    if (target.parent) frameWorld.multiplyMatrices(target.parent.matrixWorld, frameLocal); else frameWorld.copy(frameLocal)
+    frameWorld.decompose(frameCentre, frameQ, frameScale)
+    const w = target.model.width / target.model.ptPerUnit * Math.abs(frameScale.x), h = target.model.height / target.model.ptPerUnit * Math.abs(frameScale.y)
+    for (const x of [-w / 2, w / 2]) for (const y of [-h / 2, h / 2]) {
+      frameCorner.set(x, y, target.contentPlaneZ).applyMatrix4(frameWorld).sub(P)
+      const cx = frameCorner.dot(frameRight), cy = frameCorner.dot(frameUp), cz = frameCorner.dot(frameNormal)
+      D = Math.max(D, cz + Math.max(Math.abs(cy) * k / t, Math.abs(cx) * k / (t * aspect)))
+    }
+  }
+  D = Math.max(D, 1e-4)
+  out.position.copy(P).addScaledVector(frameNormal, D * distanceScale)
+  return P.clone()
 }
 
 /** A client coordinate as a position in [−1, 1] across `[start, start + size]`; 0 when it is not a finite number (or the size is 0). */
@@ -194,6 +237,12 @@ export class CameraRig {
   private readonly px: Spring
   private readonly py: Spring
   private current: Surface | null = null
+  private framed: readonly Surface[] | null = null
+  private frameOptions: FrameOptions | null = null
+  private hop: number = DEFAULTS.hop
+  private amplitudeForMode = MathUtils.degToRad(DEFAULTS.parallax)
+  private hopping = false
+  private cameraGoal = { position: new Vector3(), quaternion: new Quaternion() }
   /** The pending `focus` promise's resolver. */
   private settle: ((ok: boolean) => void) | null = null
   /** The next `update` puts the camera on its goal (`immediate`, or reduced motion at `focus`). */
@@ -206,13 +255,14 @@ export class CameraRig {
   private readonly unturn = new Quaternion()
   /** The centre and orientation the camera was last orbited about (`update` rebases the plain pose when they change). */
   private readonly pivot = new Vector3()
-  private readonly frame = new Quaternion()
+  private readonly frameOrientation = new Quaternion()
   private readonly rebased = { position: new Vector3(), quaternion: new Quaternion() }
 
   /** Reads `opts` (a readable `GlassUIError` for one out of range), then listens on the canvas. */
   constructor(env: RigEnvironment, opts: CameraRigOptions = {}) {
     checkOptions(opts)
     this.env = env
+    this.hop = opts.hop ?? DEFAULTS.hop
     this.margin = opts.margin ?? DEFAULTS.margin
     this.amplitude = MathUtils.degToRad(opts.parallax ?? DEFAULTS.parallax)
     this.plain = new Follower(springFromResponse(opts.response ?? DEFAULTS.response, 1))
@@ -224,7 +274,9 @@ export class CameraRig {
   }
 
   /** The Surface the camera faces (or is on its way to); null before the first `focus`, after its target went away, after `dispose`. */
-  get target(): Surface | null { return this.current }
+  get target(): Surface | null { return this.framed ? null : this.current }
+  get framing(): readonly Surface[] | null { return this.framed }
+  get settled(): boolean { return this.plain.settled && this.light.settled && this.px.done && this.py.done }
   /** `dispose` has run: the rig no longer writes the camera or listens to the canvas. */
   get disposed(): boolean { return this.isDisposed }
   /**
@@ -233,7 +285,7 @@ export class CameraRig {
    * first `focus`, after its target went away, after `dispose`): the lights then follow the camera. The rig owns these
    * objects and rewrites them every `update`: copy them, do not keep or change them.
    */
-  get lightPose(): { position: Vector3; quaternion: Quaternion } | null { return this.current ? this.light.pose : null }
+  get lightPose(): { position: Vector3; quaternion: Quaternion } | null { return this.current || this.framed ? this.light.pose : null }
 
   /**
    * Turns the camera to face `target` (a world Surface; a screen one, which follows the camera, throws a readable
@@ -247,19 +299,39 @@ export class CameraRig {
   focus(target: Surface, opts: { immediate?: boolean } = {}): Promise<boolean> {
     if (this.isDisposed) return Promise.resolve(false)
     if (target.model.placement === 'screen') throw new GlassUIError('CameraRig.focus', '只能对焦世界层 Surface：屏幕层 Surface 跟着相机走')
-    this.end(false)
+    const wasFocused = this.current !== null && this.framed === null
+    const wasFraming = this.framed !== null
+    this.end(false); this.framed = null; this.frameOptions = null
     if (target.disposed || target.error) { this.current = null; return Promise.resolve(false) }
     // driving: the springs carry on, velocity and all; idle: they start at rest where the camera (and so the lights)
     // is, and with no parallax the camera stays put on the first step
-    if (!this.current) {
+    if (!this.current && !wasFraming) {
       const cam = this.env.camera
       this.plain.place(cam.position, cam.quaternion); this.light.place(cam.position, cam.quaternion)
       this.px.jump(0); this.py.jump(0)
     }
     this.plain.retarget(); this.light.retarget()
     this.current = target
+    this.hopping = wasFocused && !opts.immediate && !this.env.reducedMotion() && this.hop > 0
     this.snap = opts.immediate === true || this.env.reducedMotion()
     return new Promise<boolean>(resolve => { this.settle = resolve })
+  }
+
+  frame(targets: readonly Surface[], opts: FrameOptions = {}): Promise<boolean> {
+    if (!targets.length) throw new GlassUIError('CameraRig.frame', '至少要一个 Surface')
+    if (targets.some(t => t.model.placement === 'screen')) throw new GlassUIError('CameraRig.frame', '只能框选世界层 Surface：屏幕层 Surface 跟着相机走')
+    if (opts.distanceScale !== undefined && !(Number.isFinite(opts.distanceScale) && opts.distanceScale > 0)) throw new GlassUIError('CameraRig.frame', 'distanceScale 必须是大于 0 的有限数')
+    if (opts.parallax !== undefined && !(Number.isFinite(opts.parallax) && opts.parallax >= 0)) throw new GlassUIError('CameraRig.frame', 'parallax 必须是不小于 0 的有限数')
+    if (opts.pivot && opts.pivot.some(n => !Number.isFinite(n))) throw new GlassUIError('CameraRig.frame', 'pivot 的坐标必须是有限数')
+    if (this.isDisposed) return Promise.resolve(false)
+    this.end(false)
+    const usable = targets.filter(t => !t.disposed && !t.error)
+    if (!usable.length) { this.current = null; this.framed = null; return Promise.resolve(false) }
+    if (!this.current && !this.framed) { this.plain.place(this.env.camera.position, this.env.camera.quaternion); this.light.place(this.env.camera.position, this.env.camera.quaternion); this.px.jump(0); this.py.jump(0) }
+    this.plain.retarget(); this.light.retarget(); this.current = null; this.framed = [...usable]
+    this.frameOptions = { ...opts }; this.hopping = false
+    this.snap = opts.immediate === true || this.env.reducedMotion()
+    return new Promise(resolve => { this.settle = resolve })
   }
 
   /**
@@ -268,16 +340,30 @@ export class CameraRig {
    * or failed is dropped (its focus resolves `false`) and the camera left as it is.
    */
   update(dt: number): void {
-    const t = this.current
-    if (this.isDisposed || !t) return
-    if (t.disposed || t.error) { this.current = null; this.end(false); return }
+    if (this.isDisposed || (!this.current && !this.framed)) return
+    if (this.framed) {
+      this.framed = this.framed.filter(t => !t.disposed && !t.error)
+      if (!this.framed.length) { this.framed = null; this.frameOptions = null; this.end(false); return }
+    } else if (this.current!.disposed || this.current!.error) { this.current = null; this.end(false); return }
     const aspect = this.env.aspect()
     if (!(aspect > 0 && aspect < Infinity)) return
     const cam = this.env.camera, reduced = this.env.reducedMotion()
     // the goal: the plain focus pose, which the camera's plain pose and the light follow, each on its own springs
-    const d = restFrame(t, cam.getEffectiveFOV(), aspect, this.margin, this.centre, this.goal.quaternion)
-    this.goal.position.set(0, 0, d).applyQuaternion(this.goal.quaternion).add(this.centre)
-    const g = this.goal.quaternion, turned = !this.frame.equals(g)
+    const framed = this.framed
+    let d: number
+    if (framed) {
+      const opt = this.frameOptions ?? {}
+      const P = opt.pivot ? explicitFramePivot.set(...opt.pivot) : undefined
+      const pivot = framePose(framed, cam.getEffectiveFOV(), aspect, this.margin, opt.distanceScale ?? 1, this.goal, P)
+      this.centre.copy(pivot)
+      d = this.goal.position.distanceTo(pivot)
+      this.amplitudeForMode = MathUtils.degToRad(opt.parallax ?? 3)
+    } else {
+      d = restFrame(this.current!, cam.getEffectiveFOV(), aspect, this.margin, this.centre, this.goal.quaternion)
+      this.goal.position.set(0, 0, d).applyQuaternion(this.goal.quaternion).add(this.centre)
+      this.amplitudeForMode = this.amplitude
+    }
+    const g = this.goal.quaternion, turned = !this.frameOrientation.equals(g)
     if (turned || !this.pivot.equals(this.centre)) {
       // a new pivot or frame: the plain pose the camera is, orbited about the new one with the parallax it was drawn
       // with — P' = c + M⁻¹(camera − c), its quaternion M⁻¹·camera — so the camera does not jump. An unturned frame
@@ -287,20 +373,29 @@ export class CameraRig {
       r.position.copy(cam.position).sub(this.centre).applyQuaternion(this.orbit).add(this.centre)
       this.plain.rebase(r.position, turned ? r.quaternion.multiplyQuaternions(this.orbit, cam.quaternion) : null)
       if (turned) this.light.retarget()
-      this.pivot.copy(this.centre); this.frame.copy(g)
+      this.pivot.copy(this.centre); this.frameOrientation.copy(g)
     }
     // the parallax angles: toward the pointer's aim, or back toward 0 with parallax off; reduced motion holds them at 0
     if (reduced) { this.px.jump(0); this.py.jump(0) }
     else { this.px.set(this.parallax ? this.aim.x : 0); this.py.set(this.parallax ? this.aim.y : 0); this.px.step(dt); this.py.step(dt) }
     const snap = this.snap || reduced
     this.snap = false
-    this.plain.step(this.goal, snap, dt); this.light.step(this.goal, snap, dt)
+    this.cameraGoal.position.copy(this.goal.position); this.cameraGoal.quaternion.copy(this.goal.quaternion)
+    if (this.hopping && !snap) {
+      const goalNormal = normal.set(0, 0, 1).applyQuaternion(this.goal.quaternion)
+      const push = Math.min(this.hop * this.plain.pose.position.distanceTo(this.goal.position), 0.4 * d)
+      this.cameraGoal.position.addScaledVector(goalNormal, push)
+    }
+    this.plain.step(this.cameraGoal, snap, dt); this.light.step(this.goal, snap, dt)
     // the camera: the plain pose orbited about the target's centre
     this.orbitIn(g)
     cam.position.copy(this.plain.pose.position).sub(this.centre).applyQuaternion(this.orbit).add(this.centre)
     cam.quaternion.multiplyQuaternions(this.orbit, this.plain.pose.quaternion)
     cam.updateMatrixWorld()
-    if (this.plain.settled) this.end(true)
+    if (this.plain.settled) {
+      if (this.hopping) this.hopping = false   // now spring the final, un-pushed pose before resolving focus
+      else this.end(true)
+    }
   }
 
   /** Stops writing the camera (it stays where it is) and listening to the canvas; a pending focus resolves `false`. Idempotent. */
@@ -318,7 +413,7 @@ export class CameraRig {
    * one — the rotation R in the frame, G·R·G⁻¹ in the world. Returns `orbit`.
    */
   private orbitIn(g: Quaternion): Quaternion {
-    const r = orbitEuler.set(-this.py.value * this.amplitude, this.px.value * this.amplitude, 0, 'YXZ')
+    const r = orbitEuler.set(-this.py.value * this.amplitudeForMode, this.px.value * this.amplitudeForMode, 0, 'YXZ')
     return this.orbit.setFromEuler(r).premultiply(g).multiply(this.unturn.copy(g).invert())
   }
 
@@ -326,6 +421,7 @@ export class CameraRig {
   private end(ok: boolean): void {
     const settle = this.settle
     this.settle = null
+    this.hopping = false
     settle?.(ok)
   }
 

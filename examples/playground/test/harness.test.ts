@@ -1,6 +1,4 @@
 import { expect, it } from 'vitest'
-import { Node } from '@glassui/core'
-import { PerspectiveCamera } from 'three'
 import type { Surface, UIRoot } from '@glassui/render'
 import { createFakeRoot, flush } from '../../../packages/vue/test/fixtures/fake-root'
 import { createFrameStats, createSceneHarness, imeFocused } from '../src/harness'
@@ -20,24 +18,22 @@ it('requires an active field and the actually focused IME proxy', () => {
 })
 it('retains Block focus while a Dialog owns the pointer bridge', () => {
   const root = createFakeRoot(), block = root.createSurface({ width: 200, height: 200, layer: 'world' }), dialog = root.createSurface({ width: 100, height: 100 })
-  const harness = createSceneHarness(root as unknown as UIRoot, new PerspectiveCamera(), new Map<Surface, string>([[block, 'inputs']]))
+  const harness = createSceneHarness(root as unknown as UIRoot, new Map<Surface, string>([[block, 'inputs']]))
   root.pointer!.setActive(block)
   expect(harness.focus()).toBe('inputs')
   root.pointer!.setActive(dialog)
   expect(harness.focus()).toBe('inputs')
 })
-it('defers idle to later ticks, waiting through movement, animation and focus changes', async () => {
-  const root = createFakeRoot(), camera = new PerspectiveCamera(), block = root.createSurface({ width: 200, height: 200, layer: 'world' }), next = root.createSurface({ width: 200, height: 200, layer: 'world' })
+it('waits for the root idle flag and preserves the remembered focus', async () => {
+  const root = createFakeRoot(), block = root.createSurface({ width: 200, height: 200, layer: 'world' }), next = root.createSurface({ width: 200, height: 200, layer: 'world' })
   root.pointer!.setActive(block)
-  const harness = createSceneHarness(root as unknown as UIRoot, camera, new Map([[block, 'inputs'], [next, 'buttons']]))
+  const harness = createSceneHarness(root as unknown as UIRoot, new Map([[block, 'inputs'], [next, 'buttons']]))
+  ;(root as { idle: boolean }).idle = false
   let done = false
   const idle = harness.idle().then(() => { done = true })
   await flush(); expect(done).toBe(false)
-  camera.position.x = 1; root.tick(); await flush(); expect(done).toBe(false)
-  root.pointer!.setActive(next); root.tick(); await flush(); expect(done).toBe(false)
-  camera.position.x = 2; root.tick(); await flush(); expect(done).toBe(false)
-  root.tick(); await flush(); expect(done).toBe(false)
-  root.tick(); await idle; expect(done).toBe(true)
+  root.pointer!.setActive(next); (root as { idle: boolean }).idle = true; root.tick(); await idle
+  expect(done).toBe(true); expect(harness.focus()).toBe('buttons')
 })
 
 it('keeps dark wall gradients below 0.04 linear RGB for readable light controls', async () => {
@@ -49,21 +45,9 @@ it('keeps dark wall gradients below 0.04 linear RGB for readable light controls'
   }
 })
 
-it('keeps idle pending while a Surface requests another frame or a node spring is active', async () => {
-  const root = createFakeRoot(), camera = new PerspectiveCamera(), surface = root.createSurface({ width: 200, height: 200 })
-  const node = new Node('box'); node.setStyle({ width: 50, height: 50, opacity: 1, transition: { opacity: 'smooth' } }); surface.root.appendChild(node)
-  root.tick()
-  const harness = createSceneHarness(root as unknown as UIRoot, camera, new Map())
-  let done = false
-  const idle = harness.idle().then(() => { done = true })
-  surface.needsFrame = true
-  root.tick(); await flush(); root.tick(); await flush(); expect(done).toBe(false)
-  surface.needsFrame = false
-  node.setStyle({ opacity: 0 }); root.tick(); await flush()
-  expect(root.anim.active).toBeGreaterThan(0)
-  root.tick(); await flush(); expect(done).toBe(false)
-  for (let i = 0; i < 240 && !done; i++) { root.tick(); await flush() }
-  await idle; expect(done).toBe(true)
+it('resolves immediately when the root already reports idle', async () => {
+  const root = createFakeRoot(), harness = createSceneHarness(root as unknown as UIRoot, new Map())
+  await harness.idle()
 })
 
 it('uses brighter dark caption tokens for glass backplates while preserving every light token', async () => {

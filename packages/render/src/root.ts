@@ -105,6 +105,8 @@ export interface UIRoot {
    */
   readonly ime: ImeBridge | null
   readonly backend: 'webgpu' | 'webgl2' | 'unknown'
+  /** True after a tick with no visible Surface work, camera movement, or unsettled rig springs. */
+  readonly idle: boolean
   /**
    * `layer: 'screen'` (default): pt = CSS px, `fill`, `center` or at `left/top` (`CreateSurfaceOptions`); `'world'`: a
    * child of `world` (`ptPerUnit` default 244; `billboard` faces the camera). `Surface.dispose` on it also removes it
@@ -204,7 +206,7 @@ export interface UIRoot {
    * `'auto'` assumes a continuous loop — `autoTick(true)` or a host rAF loop calling `frame` every refresh. An explicit
    * tier never samples. A no-op after `dispose`.
    */
-  frame(nowMs?: number): void
+  frame(nowMs?: number, opts?: { paced?: boolean }): void
   /**
    * `true`: `renderer.setAnimationLoop(t => root.frame(t))`; `false`: clears the loop if (and only if) this installed it.
    * A no-op after `dispose` (which cleared a loop it installed).
@@ -446,6 +448,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
   /** The view a rig frames a world Surface with (`Surface.focusView`): one object, its values rewritten each tick. */
   const focusView: { fovDeg: number; aspect: number; margin: number } = { fovDeg: 38, aspect: 1, margin: RIG_MARGIN }
   const scheduler = new FrameScheduler(), frames = new FrameSampler()
+  let idle = false
 
   /**
    * CSS px the Surface covers: screen ones their scaled size; world ones the bounds of their projected content quad
@@ -493,6 +496,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
     get theme() { return theme },
     get scheme() { return scheme },
     get contrast() { return contrast },
+    get idle() { return idle },
     get ime() {
       if (disposed) return null
       if (!ime && (opts.ime || typeof document !== 'undefined')) {
@@ -611,6 +615,7 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
         try { bridge.reposition() } catch (e) { reportError(field.surface, toError(e)); bridge.blur(field) }
       }
       settleAfterTick(dt)
+      idle = !changed && !cameraMoved && (!rig || rig.disposed || rig.settled)
     },
     setTheme(t) { if (disposed) return; checkTheme('UIRoot.setTheme', t); theme = t; restyleAll() },
     setScheme(sc) { if (disposed) return; checkScheme('UIRoot.setScheme', sc); if (sc !== scheme) { scheme = sc; restyleAll() } },
@@ -643,13 +648,14 @@ export async function createUIRoot(opts: UIRootOptions): Promise<UIRoot> {
       renderer.autoClear = false   // over the host's colour and depth
       try { draw(uiScene) } finally { renderer.autoClear = hostAutoClear }
     },
-    frame(nowMs) {
+    frame(nowMs, frameOpts) {
       if (disposed) return
       const now = nowMs ?? performance.now()
       const t0 = performance.now()
       root.tick(scheduler.dt(now))
       root.render()
       if (!adaptive) return
+      if (frameOpts?.paced) { frames.reseed(now); return }
       const sample = frames.sample(now, performance.now() - t0)   // refresh-relative: see FrameSampler
       if (sample !== null) quality.sample(sample)
     },

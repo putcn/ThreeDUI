@@ -190,6 +190,23 @@ describe('applyWheel', () => {
 })
 
 describe('PointerBridge.handle', () => {
+  it('wheel interceptors run after hover and can consume ctrl-wheel before dispatch', () => {
+    const { btn, bridge } = scene(), dispatched = vi.fn(), seen: unknown[] = [], ev = { clientX: 200, clientY: 140, deltaY: 50, ctrlKey: true, preventDefault: vi.fn() }
+    btn.setHandler('wheel', dispatched)
+    const off = bridge.addWheelInterceptor(g => { seen.push(g); return g.ctrlKey })
+    bridge.handle('wheel', ev)
+    expect(seen[0]).toMatchObject({ deltaY: 50, ctrlKey: true, metaKey: false, surface: expect.anything() })
+    expect(ev.preventDefault).toHaveBeenCalledOnce(); expect(dispatched).not.toHaveBeenCalled()
+    off(); bridge.handle('wheel', { clientX: 200, clientY: 140, deltaY: 1 }); expect(dispatched).toHaveBeenCalledOnce()
+  })
+  it('key interceptors receive the adopted Surface and focused node and can consume a key', () => {
+    const { btn, bridge } = scene(), dispatched = vi.fn(), seen: unknown[] = []
+    btn.setHandler('keydown', dispatched)
+    const off = bridge.addKeyInterceptor(g => { seen.push(g); return g.key === 'Escape' })
+    const ev = { key: 'Escape', preventDefault: vi.fn() }; bridge.handle('keydown', ev)
+    expect(seen[0]).toMatchObject({ key: 'Escape', type: 'keydown', surface: expect.anything(), focused: null })
+    expect(ev.preventDefault).toHaveBeenCalledOnce(); expect(dispatched).not.toHaveBeenCalled(); off()
+  })
   it('every pointer event it dispatches carries the pointer\'s canvas px (screenX, screenY), the canvas offset taken off', () => {
     const { btn, bridge, canvas } = scene(), got: unknown[] = []
     canvas.getBoundingClientRect = () => ({ left: 10, top: 20, width: 800, height: 600 })

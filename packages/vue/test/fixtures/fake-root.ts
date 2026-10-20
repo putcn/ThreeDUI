@@ -279,6 +279,7 @@ export function createFakeRoot(opts: { theme?: Theme; scheme?: ColorScheme } = {
     get theme() { return theme },
     get scheme() { return scheme },
     contrast: false,
+    idle: true,
     anim, text,
     surfaces: surfaces as unknown as readonly Surface[],
     pointer: bridge as unknown as GlassRoot['pointer'],

@@ -126,7 +126,8 @@ export class ImeBridge {
   private field: ImeField | null = null
   private proxy: TextareaLike | null = null
   private tag: 'textarea' | 'input' = 'textarea'
-  private composing = false
+  private isComposing = false
+  get composing(): boolean { return this.isComposing }
   /** The proxy has held the page focus since the active field's `focus` (only then can losing it be leaving). */
   private held = false
   private compStart = 0
@@ -147,9 +148,9 @@ export class ImeBridge {
   private readonly onCanvasDown = (e: { preventDefault?(): void }): void => { if (this.field) e.preventDefault?.() }
   private readonly handlers: readonly (readonly [string, (e: ProxyEvent) => void])[] = [
     ['input', this.report], ['select', this.report], ['keyup', this.report],
-    ['compositionstart', () => { if (!this.field || !this.proxy) return; this.composing = true; this.compStart = this.compEnd = this.proxy.selectionStart }],
+    ['compositionstart', () => { if (!this.field || !this.proxy) return; this.isComposing = true; this.compStart = this.compEnd = this.proxy.selectionStart }],
     ['compositionupdate', e => { if (!this.field) return; this.compEnd = this.compStart + (e.data ?? '').length; this.report() }],
-    ['compositionend', () => { if (!this.field) return; this.composing = false; this.report() }],
+    ['compositionend', () => { if (!this.field) return; this.isComposing = false; this.report() }],
     ['keydown', e => this.keydown(e)],
     ['blur', () => {
       // still the page's focused element: the window or tab lost focus, and the proxy gets it back on return
@@ -177,7 +178,7 @@ export class ImeBridge {
     if (this.disposed) return
     const tag = field.kind === 'password' ? 'input' : 'textarea'
     // focused again mid-composition, in the same element: the IME keeps its text. Otherwise a composition ends here
-    const keep = this.field === field && this.composing && this.proxy !== null && this.tag === tag
+    const keep = this.field === field && this.isComposing && this.proxy !== null && this.tag === tag
     const left = this.field, cut = keep ? null : this.cutComposition()
     if (field !== this.field) this.goodHeight = Number.NaN   // a new caret: no height of another's to fall back on
     this.field = null                                         // what the swap below fires belongs to no field
@@ -209,7 +210,7 @@ export class ImeBridge {
 
   /** The app changed the field's value or selection (v-model, click): push it to the proxy (outside a composition). */
   sync(field: ImeField): void {
-    if (field !== this.field || this.composing || !this.proxy) return
+    if (field !== this.field || this.isComposing || !this.proxy) return
     this.write(this.proxy, field)
   }
 
@@ -265,13 +266,13 @@ export class ImeBridge {
       f.surface.focus.key(e.shiftKey ? 'Shift+Tab' : 'Tab')
       return
     }
-    if (this.composing) return
+    if (this.isComposing) return
     if (f.onKey({ key: e.key, shiftKey: !!e.shiftKey, ctrlKey: !!e.ctrlKey, metaKey: !!e.metaKey, altKey: !!e.altKey })) e.preventDefault?.()
   }
 
   private read(el: TextareaLike): ImeState {
     const n = el.value.length
-    const composition = this.composing ? { start: Math.min(this.compStart, n), end: Math.min(this.compEnd, n) } : null
+    const composition = this.isComposing ? { start: Math.min(this.compStart, n), end: Math.min(this.compEnd, n) } : null
     return { value: el.value, selectionStart: el.selectionStart, selectionEnd: el.selectionEnd, composition }
   }
 
@@ -285,8 +286,8 @@ export class ImeBridge {
    * the bridge's own state is settled; null when nothing was being composed.
    */
   private cutComposition(): ImeState | null {
-    if (!this.composing) return null
-    this.composing = false
+    if (!this.isComposing) return null
+    this.isComposing = false
     return this.field && this.proxy ? this.read(this.proxy) : null
   }
 
@@ -300,7 +301,7 @@ export class ImeBridge {
   /** No field is active: nothing the proxy fires reaches one, and nothing typed stays in the page. */
   private detach(): void {
     this.field = null
-    this.composing = false
+    this.isComposing = false
     if (this.proxy) this.proxy.value = ''
   }
 
@@ -312,7 +313,7 @@ export class ImeBridge {
     for (const [t, fn] of this.handlers) el.addEventListener(t, fn)
     this.doc.body.appendChild(el)
     this.proxy = el; this.tag = tag
-    this.composing = false   // a fresh element composes nothing
+    this.isComposing = false   // a fresh element composes nothing
     this.styleLeft = this.styleTop = this.styleHeight = Number.NaN
     return el
   }

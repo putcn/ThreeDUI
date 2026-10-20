@@ -34,6 +34,8 @@ export class FrameSampler {
 
   /** The refresh period estimate (ms). */
   get period(): number { return Math.min(40, Math.max(4, Math.min(...this.intervals))) }
+  /** Establishes a fresh clock after intentionally paced frames. */
+  reseed(nowMs: number): void { this.last = Number.isFinite(nowMs) ? nowMs : null }
 
   /**
    * The sample for a frame at `nowMs` that cost `cpuMs`, or null: on the first frame, for the same stamp twice, a

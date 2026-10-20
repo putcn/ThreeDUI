@@ -41,6 +41,8 @@ export interface UIEvent {
   buttons?: number
   /** Whether Shift was held, on pointer events whose DOM event said (by the renderer's bridge); absent otherwise. */
   shiftKey?: boolean
+  ctrlKey?: boolean
+  metaKey?: boolean
   propagationStopped: boolean
   /** Lets the remaining listeners on the current node run, then stops bubbling (DOM semantics). */
   stopPropagation(): void
@@ -83,6 +85,8 @@ export class EventDispatcher {
       ...(init.screenY !== undefined ? { screenY: init.screenY } : {}),
       ...(init.buttons !== undefined ? { buttons: init.buttons } : {}),
       ...(init.shiftKey !== undefined ? { shiftKey: init.shiftKey } : {}),
+      ...(init.ctrlKey !== undefined ? { ctrlKey: init.ctrlKey } : {}),
+      ...(init.metaKey !== undefined ? { metaKey: init.metaKey } : {}),
       propagationStopped: false,
       stopPropagation: () => { e.propagationStopped = true },   // a closure, so it also works destructured
     }
@@ -115,7 +119,7 @@ export interface PointerTarget { node: Node; object: unknown; instanceId?: numbe
 export interface ScreenPoint { x: number; y: number }
 
 /** The buttons and the Shift key held with a pointer event (`UIEvent.buttons` / `shiftKey`), each when known. */
-export interface PointerKeys { buttons?: number; shiftKey?: boolean }
+export interface PointerKeys { buttons?: number; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean }
 
 /** A second `click` this soon (ms) after the first, this close (pt), on the same node, also fires `dblclick`. */
 const DBLCLICK = { ms: 500, pt: 4 } as const
@@ -147,7 +151,7 @@ export class PointerTracker {
    * The last position, the 3D object (its instance, the point on it) it was on, its place on the canvas and the buttons
    * and Shift held (each absent when none): the init of every event dispatched.
    */
-  private last: Pick<UIEvent, 'x' | 'y' | 'pointerType' | 'object' | 'instanceId' | 'point' | 'screenX' | 'screenY' | 'buttons' | 'shiftKey'> = { x: 0, y: 0, pointerType: 'mouse' }
+  private last: Pick<UIEvent, 'x' | 'y' | 'pointerType' | 'object' | 'instanceId' | 'point' | 'screenX' | 'screenY' | 'buttons' | 'shiftKey' | 'ctrlKey' | 'metaKey'> = { x: 0, y: 0, pointerType: 'mouse' }
   private lastClick: { node: Node; t: number; x: number; y: number } | null = null
   private readonly now: () => number
 
@@ -216,6 +220,8 @@ export class PointerTracker {
       ...(screen ? { screenX: screen.x, screenY: screen.y } : {}),
       ...(keys?.buttons !== undefined ? { buttons: keys.buttons } : {}),
       ...(keys?.shiftKey !== undefined ? { shiftKey: keys.shiftKey } : {}),
+      ...(keys?.ctrlKey !== undefined ? { ctrlKey: keys.ctrlKey } : {}),
+      ...(keys?.metaKey !== undefined ? { metaKey: keys.metaKey } : {}),
     }
     if (target && pointerReachable(target.node, this.root)) {
       this.last = {

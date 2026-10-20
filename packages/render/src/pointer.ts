@@ -136,8 +136,10 @@ export interface CanvasLike {
 /** The fields of a DOM PointerEvent / WheelEvent / KeyboardEvent the bridge reads. */
 export interface BridgeEvent {
   clientX?: number; clientY?: number; pointerType?: string; pointerId?: number; isPrimary?: boolean; button?: number; buttons?: number
-  deltaX?: number; deltaY?: number; key?: string; shiftKey?: boolean; preventDefault?(): void
+  deltaX?: number; deltaY?: number; key?: string; shiftKey?: boolean; ctrlKey?: boolean; metaKey?: boolean; preventDefault?(): void
 }
+export interface WheelGesture { deltaX: number; deltaY: number; ctrlKey: boolean; metaKey: boolean; surface: Surface | null; screenX: number; screenY: number }
+export interface KeyGesture { key: string; type: 'keydown' | 'keyup'; shiftKey: boolean; surface: Surface | null; focused: Node | null }
 export type BridgeEventType = 'pointermove' | 'pointerdown' | 'pointerup' | 'pointercancel' | 'pointerleave' | 'wheel' | 'keydown' | 'keyup'
 const POINTER_TYPES: readonly BridgeEventType[] = ['pointermove', 'pointerdown', 'pointerup', 'pointercancel', 'pointerleave', 'wheel']
 const KEY_TYPES: readonly BridgeEventType[] = ['keydown', 'keyup']
@@ -185,8 +187,13 @@ export class PointerBridge {
   private readonly ndc = new Vector2()
   private readonly listeners = new Map<BridgeEventType, (e: BridgeEvent) => void>()
   private savedTabIndex: number | undefined
+  private readonly wheelInterceptors: ((g: WheelGesture) => boolean)[] = []
+  private readonly keyInterceptors: ((g: KeyGesture) => boolean)[] = []
 
   constructor(private readonly opts: { canvas: CanvasLike; camera: Camera; surfaces: () => readonly Surface[]; keyboard?: boolean }) {}
+
+  addWheelInterceptor(fn: (g: WheelGesture) => boolean): () => void { this.wheelInterceptors.push(fn); return () => { const i = this.wheelInterceptors.indexOf(fn); if (i >= 0) this.wheelInterceptors.splice(i, 1) } }
+  addKeyInterceptor(fn: (g: KeyGesture) => boolean): () => void { this.keyInterceptors.push(fn); return () => { const i = this.keyInterceptors.indexOf(fn); if (i >= 0) this.keyInterceptors.splice(i, 1) } }
 
   /** Listens on the canvas (once); with `keyboard` (default on) also to keys, making the canvas focusable (`tabIndex = 0`). */
   attach(): void {
@@ -289,7 +296,7 @@ export class PointerBridge {
     // the pointer's place on the canvas, and the buttons and Shift held, as the DOM event has them (keys have none:
     // their cases never read them)
     const at = KEY_TYPES.includes(type) ? { x: 0, y: 0 } : this.screenOf(e)
-    const keys: PointerKeys = { ...(e.buttons !== undefined ? { buttons: e.buttons } : {}), ...(e.shiftKey !== undefined ? { shiftKey: e.shiftKey } : {}) }
+    const keys: PointerKeys = { ...(e.buttons !== undefined ? { buttons: e.buttons } : {}), ...(e.shiftKey !== undefined ? { shiftKey: e.shiftKey } : {}), ...(e.ctrlKey !== undefined ? { ctrlKey: e.ctrlKey } : {}), ...(e.metaKey !== undefined ? { metaKey: e.metaKey } : {}) }
     switch (type) {
       case 'pointermove': {
         const hit = this.cast(e)
@@ -358,6 +365,10 @@ export class PointerBridge {
           const pt = s && this.pointOn(s, hit)
           if (s && pt) { s.setPointer(pt); s.pointer.move(pt[0], pt[1], ptype, this.targetOn(s, hit), at, keys) }
         }
+        const gesture: WheelGesture = { deltaX: finite(e.deltaX), deltaY: finite(e.deltaY), ctrlKey: !!e.ctrlKey, metaKey: !!e.metaKey, surface: s, screenX: at.x, screenY: at.y }
+        let consumed = false
+        for (const fn of [...this.wheelInterceptors]) { try { if (fn(gesture)) { consumed = true; break } } catch (err) { console.error('[glassui] a wheel interceptor threw:', err) } }
+        if (consumed) { e.preventDefault?.(); break }
         const target = s && (s.pointer.hovered ?? s.root)
         if (!s || !target) break
         const scrolled = applyWheel(target, finite(e.deltaX), finite(e.deltaY))
@@ -371,6 +382,10 @@ export class PointerBridge {
         const s = this.active ?? this.adopt()
         if (!s) break
         this.active = s
+        const gesture: KeyGesture = { key: e.key, type, shiftKey: !!e.shiftKey, surface: s, focused: s.focus.current }
+        let consumed = false
+        for (const fn of [...this.keyInterceptors]) { try { if (fn(gesture)) { consumed = true; break } } catch (err) { console.error('[glassui] a key interceptor threw:', err) } }
+        if (consumed) { e.preventDefault?.(); break }
         const tab = e.key === 'Tab', down = type === 'keydown'
         if (tab && down) {
           // the way out: Tab past the last focusable (Shift+Tab before the first) blurs, and the browser moves focus on;
