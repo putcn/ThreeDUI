@@ -34,7 +34,10 @@ const errorStyle = { position: 'absolute' as const, top: 85, left: 26, height: 2
     <Box :style="{ height: 42, flexShrink: 0 }" />
     <Stack direction="horizontal" align="center" justify="between" :style="{ height: 62, flexShrink: 0 }">
       <Checkbox v-if="props.mode !== 'login'" id="terms" v-model:checked="terms"><Text value="I agree to the Terms & Privacy" :size="21" :weight="500" :color="body" /></Checkbox>
-      <Stack direction="horizontal" :gap="16" align="center" :style="{ width: 302 }">
+      <Checkbox v-if="props.mode === 'login'" id="remember" v-model:checked="remember">
+        <Text id="remember-label" value="记住我" :size="20" :weight="500" :color="body" />
+      </Checkbox>
+      <Stack v-else direction="horizontal" :gap="16" align="center" :style="{ width: 302 }">
         <Text id="remember-label" value="Remember me" :size="20" :weight="500" :color="body" align="right" :style="{ width: 150 }" @click="remember = !remember" />
         <Switch id="remember" v-model:checked="remember" />
       </Stack>

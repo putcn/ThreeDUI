@@ -8,7 +8,7 @@ import { dashboardSeries, grouped, heat, isDayOff, kpis, stock, TODAY } from './
 import Breadcrumb from './Breadcrumb.vue'
 import { computed, onBeforeUnmount, ref } from 'vue'
 
-const emit = defineEmits<{ navigate: [name: string] }>()
+const emit = defineEmits<{ navigate: [name: string | null] }>()
 const range = ref<'今日' | '本周' | '本月'>('今日'), auto = ref(false), tick = ref(0)
 let timer: ReturnType<typeof setInterval> | undefined
 const setAuto = (on: boolean) => { auto.value = on; clearInterval(timer); if (on) timer = setInterval(() => { tick.value++ }, 5000) }
@@ -48,7 +48,7 @@ const figure = (k: (typeof kpis)[number], index: number) => [
 
 <template>
   <Stack direction="horizontal" align="center" justify="between" :style="{ height: 44, flexShrink: 0 }">
-    <Stack :gap="5"><Breadcrumb title="运营看板" @navigate="emit('navigate', 'overview')"/><Text value="云仓 WMS · 徐州一号仓" :size="23" :weight="700"/></Stack>
+    <Stack :gap="5"><Breadcrumb id="crumb-overview-dashboard" title="运营看板" @navigate="emit('navigate', $event)"/><Text value="云仓 WMS · 徐州一号仓" :size="23" :weight="700"/></Stack>
     <Stack direction="horizontal" align="center" :gap="14"><Text :value="TODAY.label" :size="14" color="secondaryLabel"/><Switch :checked="auto" label="自动刷新" @update:checked="setAuto"/></Stack>
   </Stack>
   <GlassContainer>

@@ -10,7 +10,7 @@ onMounted(() => { if (root.quality && root.on) stopQuality = root.on('quality', 
 </script>
 <template>
   <Stack :gap="24">
-    <Stack :gap="8"><Breadcrumb title="设置" @navigate="emit('navigate', null)"/><Text value="设置" :size="28" :weight="700"/></Stack>
+    <Stack :gap="8"><Breadcrumb id="crumb-overview-settings" title="设置" @navigate="emit('navigate', null)"/><Text value="设置" :size="28" :weight="700"/></Stack>
     <Stack :gap="12"><Text value="通知" :weight="600"/><Switch v-model:checked="alerts[0]" label="逾期提醒"/><Switch v-model:checked="alerts[1]" label="低库存预警"/><Switch v-model:checked="alerts[2]" label="每日报表邮件"/></Stack>
     <Stack :gap="12"><Text value="显示" :weight="600"/><Switch v-model:checked="reduced" label="减少动态效果" @update:checked="root.anim && (root.anim.reducedMotion = $event)"/><Text :value="`画质：${tier}`"/><GlassContainer><Button v-for="q in ['high','medium','low'] as const" :key="q" :label="{high:'高',medium:'中',low:'低'}[q]" :variant="tier === q ? 'glassProminent' : 'glass'" @press="root.quality?.set(q)"/></GlassContainer></Stack>
     <Stack :gap="12"><Text value="账户" :weight="600"/><Input v-model="displayName" placeholder="显示名"/><Button label="修改密码" @press="password = true"/><Button id="settings-logout" variant="glass" leading-icon="logout" label="退出登录" @press="logout = true"/></Stack>

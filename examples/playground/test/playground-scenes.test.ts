@@ -39,6 +39,16 @@ describe('Vue playground scenes', () => {
     m.app.unmount()
   })
 
+  it('login HUD omits sign-up fields and uses a checkbox for remember me', () => {
+    const m = mountInSurface(() => h(SignUpForm, { mode: 'login', submitId: 'login-submit' }), { motion: 'frozen' })
+    expect(() => find(m.c, 'name')).toThrow(/missing name/)
+    expect(() => find(m.c, 'terms')).toThrow(/missing terms/)
+    expect(absoluteRect(find(m.c, 'remember'))).toMatchObject({ width: 96, height: 44 })
+    expect(find(m.c, 'login-submit')).toBeDefined()
+    expect(m.errors).toEqual([])
+    m.app.unmount()
+  })
+
   it('keeps the remember ID on an actionable 136 × 62 target and its separate label toggles too', async () => {
     const submit = vi.fn()
     const m = mountInSurface(() => h(SignUpForm, { onSubmit: submit }), { motion: 'frozen' })

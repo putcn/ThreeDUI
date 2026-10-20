@@ -120,7 +120,7 @@ onBeforeUnmount(() => {
 <template>
   <Stack direction="horizontal" justify="between" align="end" :style="{ flexShrink: 0 }">
     <Stack :gap="4">
-      <Breadcrumb title="物流网络" @navigate="emit('navigate', null)" />
+      <Breadcrumb id="crumb-overview-network" title="物流网络" @navigate="emit('navigate', null)" />
       <Text value="物流网络 · 徐州" :size="24" :weight="700" />
       <Text :value="stats" :size="14" color="secondaryLabel" :wrap="false" />
     </Stack>

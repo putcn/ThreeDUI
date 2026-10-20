@@ -31,7 +31,7 @@ onBeforeUnmount(() => { clearTimeout(exportTimer); clearTimeout(exportedTimer) }
 
 <template>
   <Stack :gap="2" :style="{ flexShrink: 0 }">
-    <Breadcrumb title="订单" @navigate="emit('navigate', null)" />
+    <Breadcrumb id="crumb-overview-orders" title="订单" @navigate="emit('navigate', null)" />
     <Stack direction="horizontal" justify="between" align="end">
       <Text value="最近订单" :size="24" :weight="700" />
       <Text :value="[{ text: `今日 ${today} 单` }, { text: `  ·  待处理 ${pending}`, color: 'accent', weight: 600 }]" :size="14" color="secondaryLabel" :wrap="false" />
