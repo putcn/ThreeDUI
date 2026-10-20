@@ -22,6 +22,7 @@ import Both from './scenes/Both.vue'
 import Perf from './scenes/Perf.vue'
 import { playgroundTheme } from './theme'
 import { createFrameStats, createSceneHarness, imeFocused } from './harness'
+import { idlePacing } from './idle-pacing'
 
 /**
  * What the visual harness reads: `ready` resolves to the root once the first frame has been drawn; `rectOf(id)` is the
@@ -138,9 +139,10 @@ async function start(): Promise<UIRoot> {
       controls.enableZoom = !root.pointer?.hovered   // a wheel over a Surface is the UI's
       controls.update()
     }
-    const idle = mode === 'spatial' && root.idle && t - lastInput >= 2000
-    if (idle) { idleSince ??= t } else idleSince = null
-    const paced = idle && idleSince !== null && t - idleSince >= 2000
+    const idle = mode === 'spatial' && root.idle
+    const pacing = idlePacing(t, idle, lastInput, idleSince)
+    idleSince = pacing.idleSince
+    const paced = pacing.paced
     if (paced && t - lastPaced < 1000 / 15) {
       pacedActive = true
       return false
