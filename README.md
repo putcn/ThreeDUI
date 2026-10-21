@@ -1,81 +1,95 @@
-# ThreeDUI
+# ThreeDUI / GlassUI
 
-**A 3D UI component library for three.js — rendered and interacted with entirely inside the canvas, styled after Apple's Liquid Glass, written in Vue syntax, designed to be used by AI coding agents.**
+**Build useful interfaces in three-dimensional space with Vue.** GlassUI is an experimental open-source component library for three.js: familiar Vue components become interactive surfaces in a real 3D scene. Ordinary controls, charts, maps, and application-specific 3D content can share one scene and camera.
 
-[中文说明](./README.zh-CN.md) · [Live demo](https://fortbrain.ai/concepts/glassui-signup/) · [Why we are building this (blog)](https://fortbrain.ai/blogs/glassui-liquid-glass/) · [Design spec](./docs/superpowers/specs/2026-10-07-glassui-core-design.md)
+[简体中文](./README.zh-CN.md) · [Get started](./docs/getting-started.md) · [Components](./docs/components.md) · [Spatial UI](./docs/spatial-ui.md) · [Agent skill](./.agents/skills/build-glassui/SKILL.md)
 
-![A sign-up form drawn inside a three.js canvas: transparent glass blocks with real thickness, colour glowing from inside the glass, shadows on the panel](docs/images/signup-depth.jpg)
+![Six application views arranged in a 3D workspace](./docs/images/spatial-overview.jpg)
 
-Everything above is three.js geometry: the inputs and buttons are transparent glass blocks with real thickness, the colour of the primary button glows from *inside* the glass, shadows fall on the panel, and the panel reflects the controls. No DOM element is involved. Drag the live demo to see the depth.
+The spatial operations demo combines six views—orders, dashboard, network, warehouse twin, inventory, and settings. Its charts, map, and warehouse content share the scene and camera with the UI. It uses local sample data, not a live backend.
 
-## Why
+## Explore the demos
 
-1. **UI is now mostly written by AI.** Coding agents carry the complexity, so the API can be explicit and powerful instead of terse — as long as the documentation is clear enough for an agent to use it without a human in the loop.
-2. **Expressiveness.** The DOM can only *simulate* thickness, light and material on a plane. In a 3D engine they are real, and they share one light with everything else in the scene.
-3. **GPUs keep getting stronger.** three.js's `WebGPURenderer` with automatic WebGL2 fallback runs this on today's phones.
-4. **Cross-platform.** A canvas looks and behaves the same in browsers, Electron, Tauri, webviews and XR headsets.
-
-## What it is
-
-- **Vue 3 syntax** (`.vue` SFCs, `v-if`/`v-for`/slots/events) through a custom Vue renderer; the core underneath is framework-agnostic.
-- **Containers (`Surface`) live in 3D**: place one anywhere in a scene with position/rotation/scale, or pin it to a camera-facing screen layer — same code.
-- **Liquid Glass by default**: real beveled glass geometry, a PBR node material whose transmitted term samples the backdrop, native coloured transmitted shadows, planar reflections, and a "glow layer + glass shell + decoration layer" model for controls.
-- **Tailwind-class coverage**: buttons, inputs, checkbox, switch, tabs, dialogs, menus, tables… with a `tw="…"` utility string on every element.
-- **Chinese text and IME input** are first-class: on-demand glyph atlases with system-font fallback, and a caret-positioned IME proxy.
-- **Built for agents**: strict, typed props; every error names the allowed values and the nearest match; every component ships a machine-readable manifest.
-
-## Status
-
-Early, in the open. The rendering approach was validated in a series of spikes (see `spikes/` and `docs/superpowers/spikes/`); the live demo is the current spike build. Implementation follows the plans in `docs/superpowers/plans/`:
-
-| Plan | Scope | Status |
-|---|---|---|
-| 1 — Foundation | monorepo, `@glassui/core` (node tree, style/theme/tw, Yoga layout, events, focus, scroll, springs, render lists), `@glassui/text` (CJK-aware system-font engine) | done |
-| 2 — Render | `@glassui/render`: three.js WebGPU/TSL glass, panels, text, shadows, surfaces, quality tiers | done |
-| 3 — Vue + components | Vue custom renderer, first component set, IME bridge, manifests | planned |
-
-![Front view of the sign-up form](docs/images/signup-front.jpg)
-
-![Detail: the glow layer under a thin transparent glass shell](docs/images/signup-detail.png)
-
-## Try it
+Requires Node.js 22.12+ and pnpm 11. From a clone of this repository:
 
 ```bash
 pnpm install
-pnpm playground         # http://127.0.0.1:5176  — the sign-up form and a world-layer scene on @glassui/core + @glassui/render
-pnpm test:visual        # Playwright visual regression of the playground: WebGL2 (SwiftShader) and WebGPU in headless Chromium
+pnpm playground
 ```
 
-Query parameters: `?scene=signup|world|both` (default `both`), `?quality=high|medium|low|minimal` (default: adaptive), `?webgl` to force the WebGL2 backend. Drag the background to orbit (the form stays put; the world-layer panel moves with the scene). The HUD shows the backend, fps, draw calls per frame (the whole frame: content passes, shadow map, host scene and UI), quality tier and Surface count. `pnpm playground:build` writes a static build to `examples/playground/dist`.
+Open **[the demo index](http://127.0.0.1:5176/demos.html)**. It links to:
 
-`pnpm test:visual` compares the `signup` and `world` scenes (1280 × 900, `high` tier) and `signup` at the `medium` and `minimal` tiers on both backends with the baselines in `examples/visual/tests/visual.spec.ts-snapshots/`. Baselines are machine-specific (system-font rasterisation, GPU driver): on another machine install Playwright's Chromium once (`pnpm --filter visual exec playwright install chromium`) and generate your own with `pnpm test:visual:update` — see `examples/visual/README.md`.
+| Demo | What to look for | Direct URL |
+| --- | --- | --- |
+| Spatial application | Login, six connected views, camera focus, 3D charts/map/twin, contextual panels | [Open](http://127.0.0.1:5176/?scene=spatial) |
+| Component gallery | Interactive primitives, buttons, toggles, inputs, dialogs, and glass containers | [Open](http://127.0.0.1:5176/?scene=gallery) |
+| Sign-up form | Glass geometry, depth, input/IME, and lighting; left pan, right rotate, wheel zoom | [Open](http://127.0.0.1:5176/?scene=signup) |
 
-The original spike is still there for comparison:
+![Interactive GlassUI component gallery](./docs/images/gallery.jpg)
+
+For a quick view of all six application blocks, use [the spatial overview](http://127.0.0.1:5176/?scene=spatial&stage=overview). Add `&focus=inventory` (or `orders`, `dashboard`, `network`, `twin`, `settings`) to jump into a view. Gallery sections use `?scene=gallery&focus=buttons` and the other names shown in the gallery. [The demo guide](./docs/demos.md) lists every entry point and option.
+
+![Sign-up form with real glass depth](./docs/images/signup-depth.jpg)
+
+## Use the library
+
+The repository currently provides **workspace packages, not published npm releases**. Clone it and develop against the packages in this pnpm workspace. Start with [the runnable setup](./docs/getting-started.md), then use [the component guide](./docs/components.md) and generated [component manifest](./packages/vue/manifest.json) for exact props, events, slots, and examples. The [agent skill](./.agents/skills/build-glassui/SKILL.md) gives coding agents a short, source-backed workflow for building GlassUI apps.
+
+Agents working in this repository can discover the skill through [`AGENTS.md`](./AGENTS.md). For an agent that does not load repository skills, point it directly at the skill file.
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import { Space, Block, Card, Text, Button, BarChart3D } from '@glassui/vue'
+const focus = ref<string | null>(null)
+const visits = [{ label: 'Mon', value: 120 }, { label: 'Tue', value: 160 }]
+</script>
+
+<template>
+  <Space v-model:focus="focus" overview>
+    <Block name="home" :width="560" :height="420">
+      <Text value="Workspace" size="2xl" />
+      <Button label="Analytics" @press="focus = 'analytics'" />
+    </Block>
+    <Block name="analytics" :width="720" :height="560">
+      <Card title="Visits"><BarChart3D :data="visits" /></Card>
+    </Block>
+  </Space>
+</template>
+```
+
+`Space` lays out and focuses `Block`s in world space; each `Block` owns a 3D surface. A `Surface` can also be placed directly in the world or on a camera-facing screen layer. The host owns the three.js renderer, camera, canvas, and frame loop. [See the complete setup](./docs/getting-started.md).
+
+## What is implemented
+
+- Vue 3 custom renderer, layout, themes, utilities, input and IME bridge.
+- Screen and world surfaces, `Space`/`Block` composition, focus and camera motion.
+- Glass controls: `Button`, `Input`, `Switch`, `Checkbox`, `Dialog`, `GlassContainer`, plus layout and text primitives.
+- Scene-native visuals: `Viewport3D`, `BarChart3D`, `SurfaceChart3D`, `BarMatrix3D`, and `LineChart`.
+- WebGPU rendering with WebGL2 fallback and selectable quality tiers.
+
+This is an early-stage project. Package exports point to TypeScript source for workspace development. Browser/GPU support and performance vary by device. The [core design](./docs/superpowers/specs/2026-10-07-glassui-core-design.md) explains the rendering model and the [spatial design](./docs/superpowers/specs/2026-10-15-glassui-spatial-ui-design.md) explains the application direction.
+
+## Repository
+
+| Path | Purpose |
+| --- | --- |
+| [`packages/core`](./packages/core) | UI tree, layout, styles, events, focus |
+| [`packages/text`](./packages/text) | Text and glyph infrastructure |
+| [`packages/render`](./packages/render) | three.js renderer, materials, surfaces, camera rig |
+| [`packages/vue`](./packages/vue) | Vue renderer and components; [machine-readable manifest](./packages/vue/manifest.json) |
+| [`examples/playground`](./examples/playground) | Comprehensive app, gallery, and focused demos |
+| [`examples/visual`](./examples/visual) | Playwright screenshot regression harness |
+| [`docs`](./docs) | User guides and design history |
 
 ```bash
-pnpm spike:glass3d      # http://127.0.0.1:5174  — add ?webgl to force the WebGL2 backend
+pnpm typecheck
+pnpm test
+pnpm playground:build
 ```
 
-## Repository layout
-
-```
-docs/superpowers/specs/   design spec (the authority for all decisions)
-docs/superpowers/plans/   implementation plans, one per subsystem
-docs/superpowers/spikes/  what each spike found, with the reasoning
-spikes/glass3d/           the current demo: real-3D Liquid Glass sign-up form
-spikes/glass/             the first (rejected) flat-SDF approach, kept for comparison
-packages/                 @glassui/core, @glassui/text, @glassui/render, … (filled in by the plans)
-packages/render/          @glassui/render: the three.js WebGPU/TSL renderer — glass, panels, text, shadows, Surfaces, quality tiers
-examples/playground/      the sign-up form and a world-layer scene built on the packages (`pnpm playground`)
-examples/visual/          Playwright visual regression of the playground on both backends (`pnpm test:visual`)
-```
-
-## How the glass works, in one paragraph
-
-Each control is an extruded superellipse with a straight side wall and a small round-over on the top and bottom edges. The material is three.js's `MeshPhysicalNodeMaterial`; its `backdropNode` hook replaces the diffuse term with a refracted sample of what is behind the glass (Snell's law on the real normal, through the real thickness, per-channel IOR for dispersion), while specular, Fresnel, iridescence and environment reflections come from the engine. Coloured controls do not absorb — they *emit* from inside the glass, weighted by Fresnel so edges glow. Shadows are variance shadow maps with `shadowMap.transmitted` so coloured glass casts coloured shadows. The "crystal" cues that a rasteriser cannot produce physically — the outline highlight, the lower-edge band, the light pool beneath — are thin decoration layers on top of the geometry. The full reasoning, with the dead ends, is in the blog post linked above.
-
-**Sharing a renderer.** `createUIRoot` switches the renderer's shadow map to VSM with transmitted shadows (`shadowMap.enabled = true`, `type = VSMShadowMap`, `transmitted = true`). three keeps these per renderer, not per scene, so a host app's own shadows are affected too; saving and restoring the host's settings is planned. In the default overlay mode the UI's own lights live in the UI scene and light only the UI; with `mode: 'shared'` they are added to the host scene and light it too.
+See [Contributing](./CONTRIBUTING.md) for development and test guidance. Visual baselines are machine-specific; follow [the visual-test guide](./examples/visual/README.md) before updating them.
 
 ## License
 
-Apache-2.0 — see [LICENSE](./LICENSE).
+Apache-2.0. See [LICENSE](./LICENSE).

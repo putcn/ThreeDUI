@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import { fileURLToPath } from 'node:url'
 
-// The GlassUI playground: the sign-up form and a world-layer scene on @glassui/core + @glassui/render, and the Vue
-// component gallery (`?scene=gallery`) on @glassui/vue.
+// The GlassUI playground: a demo index, spatial application, component gallery, and focused scenes.
 // Relative base so the static build (`pnpm playground:build` → examples/playground/dist) can live under any path.
 export default defineConfig({
   base: './',
@@ -21,6 +21,12 @@ export default defineConfig({
     outDir: process.env.GLASSUI_OUT ?? 'dist',
     emptyOutDir: true,
     target: 'es2022',
+    rollupOptions: {
+      input: {
+        playground: fileURLToPath(new URL('./index.html', import.meta.url)),
+        demos: fileURLToPath(new URL('./demos.html', import.meta.url)),
+      },
+    },
     // one bundle: three/webgpu + yoga (inlined wasm) + zod + vue ≈ 1.3 MB, and the network map's Xuzhou extract
     // (src/wms/geo, ≈ 0.4 MB): expected for a demo
     chunkSizeWarningLimit: 2600,

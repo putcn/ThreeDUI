@@ -9,6 +9,8 @@ Screenshots of the playground compared against committed baselines:
 | `signup-medium` | `/?scene=signup&quality=medium[&webgl]&hud=0` | `webgl2`, `webgpu` |
 | `signup-minimal` | `/?scene=signup&quality=minimal[&webgl]&hud=0` | `webgl2`, `webgpu` |
 
+The standalone sign-up scene now places its form in world space so the camera can inspect its thickness. The screenshots capture its initial front view; `tests/signup-navigation.spec.ts` checks left-drag pan, right-drag rotation, wheel zoom, and that text entry still receives focus.
+
 `signup-medium` is the touch default (refraction, mip blur; at DPR 1 the content RT keeps one texel per CSS px) and
 `signup-minimal` the reduced-transparency tier (a near-opaque frosted fill instead of refraction, no screen copy).
 

@@ -1,80 +1,94 @@
-# ThreeDUI
+# ThreeDUI / GlassUI
 
-**一套 three.js 的 3D UI 组件库：渲染和交互全部在 canvas 内完成，视觉按苹果 Liquid Glass，用 Vue 语法编写，面向 AI coding agent 设计。**
+**像写 Vue 一样，在三维空间里搭建日常界面。** GlassUI 是基于 three.js 的实验性开源组件库：熟悉的 Vue 组件成为真实 3D 场景中的可交互界面。普通控件、图表、地图和业务 3D 内容可以共享同一个场景与镜头。
 
-[English](./README.md) · [在线 Demo](https://fortbrain.ai/concepts/glassui-signup/) · [为什么要做它（博客）](https://fortbrain.ai/blogs/glassui-liquid-glass/) · [设计文档](./docs/superpowers/specs/2026-10-07-glassui-core-design.md)
+[English](./README.md) · [中文使用文档](./docs/zh-CN.md) · [完整接入示例](./docs/getting-started.md) · [组件指南](./docs/components.md) · [Agent skill](./.agents/skills/build-glassui/SKILL.md)
 
-![画在 three.js canvas 里的注册表单：有厚度的透明玻璃块、从玻璃内部发出的颜色、投在面板上的影子](docs/images/signup-depth.jpg)
+![六个业务视图组成的三维工作空间](./docs/images/spatial-overview.jpg)
 
-上图全部是 three.js 几何体：输入框和按钮是有厚度的透明玻璃块，主按钮的颜色从玻璃**内部**发出来，影子投在面板上，面板倒映着控件。没有一个 DOM 元素。在线 Demo 里拖动一下就能看到厚度。
+综合演示包含订单、Dashboard、网络、仓储孪生、库存、设置六个视图。图表、地图与仓储内容和界面共享场景及相机。演示使用本地示例数据，没有连接线上业务后端。
 
-## 为什么
+## 体验演示
 
-1. **写 UI 的主体变成了 AI。** 复杂度由 coding agent 承担，所以 API 可以做得显式、强大，而不必简短——只要文档对 agent 足够清楚。
-2. **表现力。** DOM 只能在平面上*模拟*厚度、光影和材质；在 3D 引擎里它们是真的，而且和场景里其它东西共享同一套光。
-3. **GPU 越来越强。** three.js 的 `WebGPURenderer` 在 WebGPU 不可用时自动回落 WebGL2，今天的手机就能跑。
-4. **跨平台。** 画在 canvas 里的东西，在浏览器、Electron、Tauri、webview 和 XR 头显里长得一样、交互一样。
-
-## 它是什么
-
-- **Vue 3 语法**（`.vue` 单文件组件、`v-if`/`v-for`/插槽/事件），通过自定义 Vue 渲染器实现；底层内核与框架无关。
-- **容器（`Surface`）活在 3D 里**：可以用位置/旋转/缩放放进任意场景，也可以钉在面向相机的屏幕层——同一套代码。
-- **默认 Liquid Glass**：真实的倒角玻璃几何、透射项采样 backdrop 的 PBR 节点材质、原生彩色透射阴影、平面反射，控件采用"发光层 + 玻璃壳 + 装饰层"三层结构。
-- **覆盖 Tailwind 的组件集**：按钮、输入框、复选框、开关、标签页、对话框、菜单、表格……每个元素都支持 `tw="…"` 工具类字符串。
-- **中文显示与输入法输入是一等公民**：按需生成的字形 atlas + 系统字体回退，输入法代理定位到光标处。
-- **为 agent 而设计**：严格的强类型 props；每个错误都列出允许值和最接近的候选；每个组件附带机器可读的 manifest。
-
-## 状态
-
-早期，公开开发中。渲染方案已经通过一系列 spike 验证（见 `spikes/` 与 `docs/superpowers/spikes/`），在线 Demo 就是当前 spike 的构建。实现按 `docs/superpowers/plans/` 里的计划推进：
-
-| 计划 | 范围 | 状态 |
-|---|---|---|
-| 1 — 基础 | monorepo、`@glassui/core`（节点树、样式/主题/tw、Yoga 布局、事件、焦点、滚动、弹簧、渲染列表）、`@glassui/text`（支持中文换行的系统字体引擎） | 已完成 |
-| 2 — 渲染 | `@glassui/render`：three.js WebGPU/TSL 玻璃、面板、文字、阴影、Surface、质量分级 | 已完成 |
-| 3 — Vue 与组件 | Vue 自定义渲染器、第一批组件、IME 桥、manifest | 计划中 |
-
-![注册表单正视图](docs/images/signup-front.jpg)
-
-![细节：超薄透明玻璃壳下面的发光层](docs/images/signup-detail.png)
-
-## 试一试
+需要 Node.js 22.12+、pnpm 11。在仓库根目录运行：
 
 ```bash
 pnpm install
-pnpm playground         # http://127.0.0.1:5176 ，基于 @glassui/core + @glassui/render 的注册表单和世界层场景
-pnpm test:visual        # playground 的 Playwright 视觉回归：无头 Chromium 里的 WebGL2（SwiftShader）与 WebGPU
+pnpm playground
 ```
 
-查询参数：`?scene=signup|world|both`（默认 `both`）、`?quality=high|medium|low|minimal`（默认自适应）、`?webgl` 强制 WebGL2 后端。拖动背景可环绕观察（表单固定在屏幕上，世界层面板随场景移动）。HUD 显示后端、帧率、每帧 draw call 总数（整帧：内容 pass、阴影贴图、宿主场景和 UI）、质量档位和 Surface 数。`pnpm playground:build` 把静态构建输出到 `examples/playground/dist`。
+打开 **[演示导航页](http://127.0.0.1:5176/demos.html)**：
 
-`pnpm test:visual` 在两个后端上把 `signup` 和 `world` 场景（1280 × 900，`high` 档）以及 `medium`、`minimal` 档的 `signup` 与 `examples/visual/tests/visual.spec.ts-snapshots/` 里的基线比对。基线与机器绑定（系统字体栅格化、GPU 驱动）：换一台机器时，先装一次 Playwright 的 Chromium（`pnpm --filter visual exec playwright install chromium`），再用 `pnpm test:visual:update` 生成自己的基线，详见 `examples/visual/README.md`。
+| 演示 | 内容 | 直接打开 |
+| --- | --- | --- |
+| 空间业务系统 | 登录、六个关联视图、镜头聚焦、3D 图表/地图/仓储和上下文面板 | [打开](http://127.0.0.1:5176/?scene=spatial) |
+| 组件库 Gallery | 基础元件、按钮、开关、输入框、对话框、玻璃容器的可交互示例 | [打开](http://127.0.0.1:5176/?scene=gallery) |
+| 注册表单 | 观察玻璃厚度、输入和光照；左键拖动平移、右键拖动旋转、滚轮缩放 | [打开](http://127.0.0.1:5176/?scene=signup) |
 
-原来的 spike 仍保留作对比：
+![可交互的 GlassUI 组件 Gallery](./docs/images/gallery.jpg)
 
-```bash
-pnpm spike:glass3d      # http://127.0.0.1:5174 ，加 ?webgl 强制 WebGL2 后端
+想先看六视图总览，可打开[空间总览](http://127.0.0.1:5176/?scene=spatial&stage=overview)。加上 `&focus=inventory` 可以跳到库存视图；其他名称为 `orders`、`dashboard`、`network`、`twin`、`settings`。组件库可以用 `?scene=gallery&focus=buttons` 跳转到指定分区。[演示指南](./docs/demos.md)列出了全部入口和参数。
+
+![有真实厚度的玻璃注册表单](./docs/images/signup-depth.jpg)
+
+## 开始开发
+
+目前提供的是**仓库内 workspace 包，尚未发布 npm 正式版本**。请克隆仓库，在 pnpm workspace 中使用这些包。[快速开始](./docs/getting-started.md)有完整的宿主渲染器与 Vue 示例；[组件指南](./docs/components.md)介绍组合方式；[组件 manifest](./packages/vue/manifest.json)提供完整的 props、事件、插槽和示例。仓库还附带 [Agent skill](./.agents/skills/build-glassui/SKILL.md)，方便 coding agent 依照实际 API 搭建界面。
+
+在本仓库工作的 agent 可通过 [`AGENTS.md`](./AGENTS.md) 找到 skill；其他 agent 也可以直接读取该 skill 文件。
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import { Space, Block, Card, Text, Button, BarChart3D } from '@glassui/vue'
+const focus = ref<string | null>(null)
+const visits = [{ label: '周一', value: 120 }, { label: '周二', value: 160 }]
+</script>
+
+<template>
+  <Space v-model:focus="focus" overview>
+    <Block name="home" :width="560" :height="420">
+      <Text value="工作空间" size="2xl" />
+      <Button label="查看分析" @press="focus = 'analytics'" />
+    </Block>
+    <Block name="analytics" :width="720" :height="560">
+      <Card title="访问量"><BarChart3D :data="visits" /></Card>
+    </Block>
+  </Space>
+</template>
 ```
+
+`Space` 在世界空间中排列、聚焦 `Block`；每个 `Block` 都有自己的 3D Surface。也可以直接创建世界层或屏幕层 `Surface`。宿主应用负责 three.js 渲染器、相机、canvas 和帧循环，详见[完整接入示例](./docs/getting-started.md)。
+
+## 当前能力与状态
+
+- Vue 3 自定义渲染器、布局、主题、工具类、输入与输入法桥接。
+- 屏幕层及世界层 Surface，`Space`/`Block` 空间组合、聚焦与镜头运动。
+- `Button`、`Input`、`Switch`、`Checkbox`、`Dialog`、`GlassContainer` 等控件和基础布局/文字组件。
+- `Viewport3D`、`BarChart3D`、`SurfaceChart3D`、`BarMatrix3D`、`LineChart` 等与场景结合的可视化组件。
+- WebGPU 渲染并可回退 WebGL2；Playground 支持指定质量档位。
+
+项目仍处于早期阶段。包的导出目前指向 TypeScript 源码，适合在本 workspace 内开发；不同设备的浏览器/GPU 支持与性能可能不同。渲染思路见[核心设计文档](./docs/superpowers/specs/2026-10-07-glassui-core-design.md)，空间界面方向见[空间设计文档](./docs/superpowers/specs/2026-10-15-glassui-spatial-ui-design.md)。
 
 ## 仓库结构
 
+| 目录 | 内容 |
+| --- | --- |
+| [`packages/core`](./packages/core) | UI 树、布局、样式、事件和焦点 |
+| [`packages/text`](./packages/text) | 文字与字形基础设施 |
+| [`packages/render`](./packages/render) | three.js 渲染器、材质、Surface 和镜头控制 |
+| [`packages/vue`](./packages/vue) | Vue 渲染器及组件、[机器可读 manifest](./packages/vue/manifest.json) |
+| [`examples/playground`](./examples/playground) | 综合演示、组件 Gallery、独立示例 |
+| [`examples/visual`](./examples/visual) | Playwright 截图回归 |
+| [`docs`](./docs) | 入门、组件、空间界面指南和设计过程 |
+
+```bash
+pnpm typecheck
+pnpm test
+pnpm playground:build
 ```
-docs/superpowers/specs/   设计文档（所有决策的依据）
-docs/superpowers/plans/   实现计划，每个子系统一份
-docs/superpowers/spikes/  每个 spike 的发现与推理
-spikes/glass3d/           当前 Demo：真 3D 的 Liquid Glass 注册表单
-spikes/glass/             第一版（被否掉的）平面 SDF 方案，留作对比
-packages/                 @glassui/core、@glassui/text、@glassui/render……（由各计划逐步填入）
-packages/render/          @glassui/render：three.js WebGPU/TSL 渲染器，包括玻璃、面板、文字、阴影、Surface、质量分级
-examples/playground/      基于这些包搭的注册表单和世界层场景（`pnpm playground`）
-examples/visual/          playground 在两个后端上的 Playwright 视觉回归（`pnpm test:visual`）
-```
 
-## 玻璃是怎么做的（一段话）
-
-每个控件是一块拉伸出厚度的超椭圆：竖直侧壁，顶边和底边各有一圈小圆角。材质是 three.js 的 `MeshPhysicalNodeMaterial`，用它的 `backdropNode` 钩子把 diffuse 项替换成"透过玻璃看到的像"（用真实法线做 Snell 折射、穿过真实厚度、三通道不同 IOR 做色散），高光、Fresnel、薄膜干涉和环境反射都由引擎提供。有颜色的控件不是吸收色，而是从玻璃内部*发光*，按 Fresnel 加权所以边缘更亮。阴影是方差阴影贴图并开启 `shadowMap.transmitted`，彩色玻璃投出彩色影子。光栅化做不出来的那几样"晶莹"特征——轮廓亮线、底边亮带、下方的光晕——作为薄薄的装饰层叠在几何上。完整的推理过程（包括走过的弯路）见上面的博客。
-
-**共用渲染器。** `createUIRoot` 会把渲染器的阴影贴图切换为 VSM 并开启透射阴影（`shadowMap.enabled = true`、`type = VSMShadowMap`、`transmitted = true`）。three 按渲染器而不是按场景保存这些设置，所以宿主应用自己的阴影也会受影响；保存并恢复宿主原有设置计划后续实现。默认的 overlay 模式下，UI 自己的灯光在 UI 场景里，只照亮 UI；`mode: 'shared'` 时灯光会加进宿主场景，也照亮宿主。
+参与开发请看 [Contributing](./CONTRIBUTING.md)。视觉基线依赖机器环境，更新前请阅读[视觉测试说明](./examples/visual/README.md)。
 
 ## 许可证
 

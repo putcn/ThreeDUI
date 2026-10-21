@@ -1,8 +1,8 @@
 # @glassui/vue
 
-Vue components rendered into GlassUI Surfaces over a three.js scene. Read [manifest.json](./manifest.json) for every component, prop, event, slot, model, example, style key, theme token and renderer rule. Regenerate it with `pnpm manifest` after metadata changes.
+Vue components rendered into GlassUI Surfaces over a three.js scene. Start with the repository [getting-started guide](../../docs/getting-started.md), [component guide](../../docs/components.md), and [interactive gallery](http://127.0.0.1:5176/?scene=gallery). Read [manifest.json](./manifest.json) for exact props, events, slots, models, examples, styles, theme tokens, and renderer rules. Regenerate it with `pnpm manifest` after metadata changes.
 
-Start with a Vite TypeScript project. Install `pnpm add @glassui/vue @glassui/render three vue@3.5.44` and `pnpm add -D vite @vitejs/plugin-vue typescript @types/three`. Pin Vue to 3.5.44 so its runtime matches GlassUI. Enable `vue()` from `@vitejs/plugin-vue` in `vite.config.ts`, set `build.target: 'es2022'` for top-level await, and load `/src/main.ts` from an `index.html` module script. Raw host tags additionally need `vue({ template: { compilerOptions: { isCustomElement: tag => HOST_TAGS.includes(tag) } } })` (`HOST_TAGS` from `@glassui/vue`; in TypeScript cast it to `readonly string[]`).
+These packages currently export TypeScript source from the pnpm workspace and are not published to npm. Build a Vite TypeScript app inside this repository or use the included playground as a starting point. Pin Vue to 3.5.44 so its runtime matches GlassUI. Enable `vue()` from `@vitejs/plugin-vue` in `vite.config.ts`, set `build.target: 'es2022'` for top-level await, and load `/src/main.ts` from an `index.html` module script. Raw host tags additionally need `vue({ template: { compilerOptions: { isCustomElement: tag => HOST_TAGS.includes(tag) } } })` (`HOST_TAGS` from `@glassui/vue`; in TypeScript cast it to `readonly string[]`).
 
 The following quickstart is 30 lines across the two source files. Run `pnpm vite`.
 
