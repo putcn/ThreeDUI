@@ -20,6 +20,7 @@ const SpaceProps = z.object({
   overview: z.boolean().default(false).describe('启用总览：focus 为 null 时框住全部 Block，支持鼠标悬停、点击与键盘选择'),
   standby: z.boolean().default(false).describe('待机总览：镜头后退 25%，Block 不透明度降至 0.35'),
   camera: z.boolean().default(true).describe('由 Space 驱动相机；宿主不能同时开 OrbitControls。false 时只排布与管理焦点'),
+  cameraMargin: z.number().min(0).max(1).default(0.08).describe('镜头框住 Block 或总览时，每边预留的 Block 尺寸比例；默认 0.08'),
   parallax: z.boolean().default(true).describe('闲置时镜头随指针轻微视差（减少动态效果或 motion 为 frozen 时关闭）'),
 }).superRefine((p, c) => {
   if (p.layout === 'grid' && p.columns === undefined) c.addIssue({ code: 'custom', path: ['columns'], message: 'layout 为 grid 时必须给 columns（正整数）' })
@@ -99,10 +100,11 @@ export const Space = defineGlassComponent({
     requestFocus(name: string | null) { pressed.value = name; emit('update:focus', name) },
   }
   provide(SPACE, ctx)
-  let mounted = false, rig: CameraRig | null = null, first = true, aimed: Surface | null = null, active: Surface | null = null
+  let mounted = false, rig: CameraRig | null = null, rigMargin: number | null = null, first = true, aimed: Surface | null = null, active: Surface | null = null
   const syncRig = (): void => {
-    if (v.value.camera && !rig) { rig = root.createCameraRig(); first = true; aimed = null; aimedOverview = '' }
-    else if (!v.value.camera && rig) { rig.dispose(); rig = null }
+    if (rig && rigMargin !== v.value.cameraMargin) { rig.dispose(); rig = null; rigMargin = null }
+    if (v.value.camera && !rig) { rig = root.createCameraRig({ margin: v.value.cameraMargin }); rigMargin = v.value.cameraMargin; first = true; aimed = null; aimedOverview = '' }
+    else if (!v.value.camera && rig) { rig.dispose(); rig = null; rigMargin = null }
     if (rig) rig.parallax = v.value.parallax && motion === 'live'
   }
   const apply = (): void => {
@@ -155,7 +157,7 @@ export const Space = defineGlassComponent({
     offKey = root.pointer.addKeyInterceptor(g => gestures.key(g))
   }
   watch([focused, focusedSurface, () => [...blocks.keys()].join('\n'), () => [...blocks.values()].map(b => `${b.width.value}:${b.height.value}:${b.surface.value?.model.id ?? ''}`).join('|'), standby], apply, { flush: 'post' })
-  watch([() => v.value.camera, () => v.value.parallax], () => { if (mounted) { syncRig(); apply() } }, { flush: 'post' })
+  watch([() => v.value.camera, () => v.value.cameraMargin, () => v.value.parallax], () => { if (mounted) { syncRig(); apply() } }, { flush: 'post' })
   watch(() => v.value.overview, () => { syncGestures(); if (mounted) apply() }, { flush: 'post' })
   watch(standby, () => { if (mounted) apply() }, { flush: 'post' })
   onMounted(() => { mounted = true; syncRig(); syncGestures(); apply() })

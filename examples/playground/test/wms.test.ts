@@ -166,7 +166,7 @@ describe('warehouse model', () => {
     // instanced frames and lines too: a handful of draw calls, not hundreds
     let draws = 0
     w.group.traverse(o => { if (o instanceof Mesh) draws++ })
-    expect(draws).toBeLessThanOrEqual(9)
+    expect(draws).toBeLessThanOrEqual(11)
     expect(named(w.group, 'frames')).toBeInstanceOf(InstancedMesh)
   })
   it('hover lightens exactly one bin at once and raises it 6 pt; hover(null) puts it back', () => {
@@ -184,6 +184,23 @@ describe('warehouse model', () => {
     w.hover(null); w.update(1 / 60, ctx({ reducedMotion: true }))
     expect(colours()).toEqual(before); expect(y(57)).toBeCloseTo(rest, 6)
     expect(() => w.hover(240)).toThrow(/240/)
+  })
+  it('pins the investigated bin in red and lifted while other hover comes and goes', () => {
+    const w = createWarehouse({ bins }), index = bins.findIndex(bin => bin.id === SHORT_PICK.bin), c = new Color(), m = new Matrix4()
+    const y = (): number => { w.bins.getMatrixAt(index, m); return new Vector3().setFromMatrixPosition(m).y }
+    const rest = y()
+    w.trace(index); w.update(1 / 60, ctx({ reducedMotion: true }))
+    const beacon = named(w.group, 'trace-beacon')
+    expect(beacon.visible).toBe(true)
+    expect(beacon.position.x).not.toBe(0)
+    expect(w.bins.getColorAt(index, c).getHexString()).toBe(new Color('#ff3b30').getHexString())
+    expect(y()).toBeCloseTo(rest + HOVER_LIFT * 1.8, 5)
+    w.hover(index + 1); w.hover(null); w.update(1 / 60, ctx({ reducedMotion: true }))
+    expect(w.bins.getColorAt(index, c).getHexString()).toBe(new Color('#ff3b30').getHexString())
+    w.trace(null); w.update(1 / 60, ctx({ reducedMotion: true }))
+    expect(beacon.visible).toBe(false)
+    expect(w.bins.getColorAt(index, c).getHexString()).toBe(new Color(binLevel(bins[index]!.occupancy).color).getHexString())
+    expect(y()).toBeCloseTo(rest, 6)
   })
   it('fits its box, stands on the glass and never behind it, at every yaw; rotateBy clamps to ±0.8', () => {
     const w = createWarehouse({ bins }), c = ctx({ reducedMotion: true }), yaw = named(w.group, 'yaw')

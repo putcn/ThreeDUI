@@ -395,6 +395,19 @@
           "description": "每个世界单位多少 pt（默认 244）：越大，同样 pt 尺寸的 Block 在场景里越小"
         },
         {
+          "name": "unfocusedOpacity",
+          "type": {
+            "default": 1,
+            "description": "聚焦别的 Block 时的透明度；默认 1",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "required": false,
+          "default": 1,
+          "description": "聚焦别的 Block 时的透明度；默认 1"
+        },
+        {
           "name": "enterFrom",
           "type": {
             "default": {
@@ -1739,6 +1752,19 @@
           "required": false,
           "default": true,
           "description": "由 Space 驱动相机；宿主不能同时开 OrbitControls。false 时只排布与管理焦点"
+        },
+        {
+          "name": "cameraMargin",
+          "type": {
+            "default": 0.08,
+            "description": "镜头框住 Block 或总览时，每边预留的 Block 尺寸比例；默认 0.08",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "required": false,
+          "default": 0.08,
+          "description": "镜头框住 Block 或总览时，每边预留的 Block 尺寸比例；默认 0.08"
         },
         {
           "name": "parallax",

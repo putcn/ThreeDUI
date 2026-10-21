@@ -4,7 +4,7 @@
 // today's runs as arcs); the controls' hint and the map data's credit under it. Wheel to zoom, drag to pan, right-drag
 // or Shift-drag to turn; hover a place to light it and its runs, which `hover` reports (with the side of the map it
 // shows on) so Spatial.vue can float the place panel on the other side.
-import { markRaw, onBeforeUnmount, reactive } from 'vue'
+import { markRaw, onBeforeUnmount, reactive, watch } from 'vue'
 import { Box, Button, GlassContainer, Stack, Text, useCanvasFactory, useMotion, useSurfaceRef, Viewport3D } from '@glassui/vue'
 import type { UIEvent } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
@@ -14,13 +14,15 @@ import { createNetworkMap, type GeoData, type PlaceHover } from './map'
 import Breadcrumb from './Breadcrumb.vue'
 
 /** `active`: this Block is the focus (Spatial.vue's); off it the map holds still (default true). */
-const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
+const props = withDefaults(defineProps<{ active?: boolean; traceWarehouseId?: string | null; traceLaneId?: string | null }>(), { active: true, traceWarehouseId: null, traceLaneId: null })
 const emit = defineEmits<{ hover: [place: PlaceHover | null]; navigate: [name: string | null] }>()
 
 // the map, made once (raw: three objects must not become reactive proxies). Under frozen motion (screenshots), and
 // while the Block is not the focus, it is as under reduced motion: the view is where it is headed at once and the dots
 // park, so the map asks for no frames it does not need
 const map = markRaw(createNetworkMap(geo as GeoData, network, { createCanvas: useCanvasFactory() }))
+watch(() => props.traceWarehouseId, id => map.hover(id), { immediate: true })
+watch(() => props.traceLaneId, id => map.highlightLane(id), { immediate: true })
 const layers = reactive({ store: true, warehouse: true, supplier: true })
 const layerKinds = ['store', 'warehouse', 'supplier'] as const
 const toggleLayer = (kind: keyof typeof layers) => { layers[kind] = !layers[kind]; map.setLayer(kind, layers[kind]) }
@@ -62,7 +64,7 @@ const report = (id: string | null): void => {
 }
 /** Lights `id` on the map at once; the panel follows at once for a place, after `GRACE` for none. */
 const hover = (id: string | null, now = false): void => {
-  map.hover(id)
+  map.hover(id ?? props.traceWarehouseId)
   if (id !== null || now) report(id)
   else if (shown !== null && later === undefined) later = setTimeout(() => report(null), GRACE)
 }

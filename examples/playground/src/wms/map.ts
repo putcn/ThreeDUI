@@ -15,11 +15,11 @@ import { createWindow } from './window'
 
 /**
  * The logistics network map (spatial spec §12.4): Xuzhou's districts, roads and water (`geo`, the committed extract of
- * DataV and OpenStreetMap) as a dark control-room map, with the network's places standing on it as prisms and today's
+ * DataV and OpenStreetMap) as a pale relief map, with the network's places standing on it as prisms and today's
  * runs arching between them, made to be attached with `<Viewport3D :object="map.group" :update="map.update">`. Local
  * units are pt (the Viewport3D's): the group's origin is the box centre on the glass, x right, y up, z out of it.
  *
- * The map is seen as through a window (window.ts): a dark navy plate fills the box (`plate`), and everything else is
+ * The map is seen as through a window (window.ts): a muted pearl plate fills the box (`plate`), and everything else is
  * drawn only where the line of sight from the camera through it meets the plate inside the box's rounded rectangle, so
  * a zoomed or panned map never spills over the Block. Inside, the ground lies in its own frame (x east, y north, z up)
  * and is seen pitched: turned back `pitch` from the plate and then flattened toward the plate (`SQUASH`), so it reads
@@ -35,7 +35,7 @@ import { createWindow } from './window'
  * Draw calls (33, at most 40): the plate, the districts (one extruded mesh), their outlines, the lakes, the rivers, the
  * roads by class (secondary and primary 1-px lines; trunk and motorway flat ribbons), the places by kind (3
  * instanced), their diamond tops, the lanes (one merged mesh), the moving dots (instanced), and for each warehouse and
- * supplier a dark backdrop and two text planes (name, second line). Nothing casts a shadow, and only the plate and the
+ * supplier a light backdrop and two text planes (name, second line). Nothing casts a shadow, and only the plate and the
  * places take the pointer.
  */
 
@@ -82,9 +82,9 @@ export const ROADS = [
   { cls: 'trunk', alpha: 0.4, width: 0.8 }, { cls: 'motorway', alpha: 0.55, width: 1.2 },
 ] as const
 const COLORS = {
-  plate: '#121a33', plateEdge: '#080c18', district: '#2a3a63', districtSide: '#1a2545', edge: '#6f89cc', road: '#5fd3ff', water: '#3d7bd9',
-  transfer: '#ffffff', purchase: '#eaf4ff', planned: '#46618f', overdue: '#ff5d73', dot: '#ffffff', overdueDot: '#ffb0ba', diamond: '#ffffff',
-  label: [0.93, 0.95, 1, 1] as RGBA, sublabel: [0.62, 0.7, 0.85, 1] as RGBA, backdrop: '#0b1226',
+  plate: '#e8ebf4', plateEdge: '#dfe4ef', district: '#c9d2e6', districtSide: '#aebcd7', edge: '#8495bf', road: '#687cab', water: '#80bbc9',
+  transfer: '#7167d9', purchase: '#a28de5', planned: '#b8afd7', overdue: '#db7484', dot: '#6b63f5', overdueDot: '#dc6d80', diamond: '#ffffff',
+  label: [0.11, 0.12, 0.19, 1] as RGBA, sublabel: [0.34, 0.37, 0.48, 1] as RGBA, backdrop: '#f8f9fc',
 } as const
 /**
  * The lanes, what the map is about (they stand out over the roads' lace): a city run's tube (a transfer, white) is
@@ -95,7 +95,7 @@ const COLORS = {
  */
 export const LANES = { floor: 0.45, base: 0.65, extra: 0.7, dim: { purchase: 0.62, others: 0.28 }, arc: { rise: 0.22, min: 8, max: 100 } } as const
 /**
- * The labels: a dark `backdrop` behind each (so a lane or prism behind does not cross it), `pad` pt round its text;
+ * The labels: a light `backdrop` behind each (so a lane or prism behind does not cross it), `pad` pt round its text;
  * the second lines only from zoom `subZoom`; a label whose box would overlap one already placed is left out (warehouses
  * first, the most stock first, then the suppliers), with `gap` pt between boxes.
  */
@@ -156,6 +156,8 @@ export interface NetworkMap {
   update(dt: number, ctx: Viewport3DContext): boolean
   /** Highlights the place `id` (its prism lit, its lanes bright, the others dimmed); null: none. */
   hover(id: string | null): void
+  /** Pins one run for an investigation; null restores the normal hover colouring. */
+  highlightLane(id: string | null): void
   /**
    * The place a pointer event names: an instance of a kind's prisms (`object`, `instanceId`: the pointer's raycast hits
    * a prism only where the window shows it), or, on the plate, the nearest place in the window whose prism (from its
@@ -288,7 +290,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
     return o
   }
 
-  // ---- the plate: dark navy, a soft vignette, the box's size (made in `update`) ----------------------------------------
+  // ---- the plate: muted pearl, a soft vignette, the box's size (made in `update`) ---------------------------------------
   const plateMaterial = new MeshBasicNodeMaterial({ transparent: true, depthWrite: true })
   plateMaterial.toneMapped = false
   plateMaterial.colorNode = mix(color(COLORS.plate), color(COLORS.plateEdge), smoothstep(0.45, 1.3, length(positionLocal.xy.div(win.half))))
@@ -320,11 +322,11 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
   ROADS.forEach((r, i) => {
     const lines = geo.roads.filter(x => x.cls === r.cls).map(x => x.c)
     if (!('width' in r)) {
-      ground.add(place(new LineSegments(keep(segments(lines, proj, Z.road)), lineMaterial(COLORS.road, r.alpha, true)), `roads-${r.cls}`, ORDER.roads + i))
+      ground.add(place(new LineSegments(keep(segments(lines, proj, Z.road)), lineMaterial(COLORS.road, r.alpha)), `roads-${r.cls}`, ORDER.roads + i))
       return
     }
     // a flat ribbon: its vertices moved out along `side` by its half width in km (pt / scale), so it keeps its pt width
-    const km = kmUniform(0.01), m = basic({ color: COLORS.road, opacity: r.alpha, additive: true, depthTest: false })
+    const km = kmUniform(0.01), m = basic({ color: COLORS.road, opacity: r.alpha, depthTest: false })
     m.side = DoubleSide
     m.positionNode = positionLocal.add(vec3(attribute<'vec2'>('side', 'vec2').mul(km), float(0)))
     halfWidths.push({ width: r.width, km })
@@ -367,16 +369,16 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
   const diamondGeometry = keep(new BufferGeometry()).setAttribute('position', new Float32BufferAttribute(new Float32Array(locations.length * 8 * 3), 3))
   const diamonds = place(new LineSegments(diamondGeometry, lineMaterial(COLORS.diamond, 0.9)), 'diamonds', ORDER.diamonds)
   diamonds.material.depthTest = true
-  const laneMesh = place(new Mesh(keep(new BufferGeometry()), basic({ opacity: 0.9, additive: true, vertexColors: true })), 'lanes', ORDER.lanes)
+  const laneMesh = place(new Mesh(keep(new BufferGeometry()), basic({ opacity: 0.9, vertexColors: true })), 'lanes', ORDER.lanes)
   const moving = network.lanes.filter(l => l.status !== 'planned')
   let visibleMoving = moving
-  const dots = place(new InstancedMesh(keep(new SphereGeometry(1, 10, 8)), basic({ additive: true }), Math.max(1, moving.length * DOTS.perLane)), 'dots', ORDER.dots)
+  const dots = place(new InstancedMesh(keep(new SphereGeometry(1, 10, 8)), basic({}), Math.max(1, moving.length * DOTS.perLane)), 'dots', ORDER.dots)
   dots.count = moving.length * DOTS.perLane
   moving.forEach((l, i) => { for (let k = 0; k < DOTS.perLane; k++) dots.setColorAt(i * DOTS.perLane + k, new Color(l.status === 'overdue' ? COLORS.overdueDot : COLORS.dot)) })
   marks.add(prisms.warehouse, prisms.store, prisms.supplier, diamonds)
   lanesGroup.add(laneMesh, dots)
 
-  // ---- labels: each warehouse's and supplier's name and a second line on a dark backdrop, facing the camera -----------
+  // ---- labels: each warehouse's and supplier's name and a second line on a light backdrop, facing the camera ----------
   const sublabel = (l: Location): string => (l.kind === 'warehouse' ? `${l.district} · 在库 ${(l.onhand / 10_000).toFixed(1)} 万件` : `${l.district} · ${KINDS.supplier.label}`)
   const backdropMaterial = basic({ color: COLORS.backdrop, opacity: LABELS.backdropAlpha, depthTest: false })
   const widthOf = (p: TextPlane): number => { p.geometry.computeBoundingBox(); const b = p.geometry.boundingBox!; return b.max.x - b.min.x }
@@ -411,7 +413,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
   const now: MapView = { ...target, centre: [target.centre[0], target.centre[1]] }
   let box = { width: 0, height: 0 }, fit = 1, hovered: string | null = null, time = 0, dotsPlaced = false, opened = false
   /** The scale the lanes were last built at (their group is scaled by the current one over it), and the hover they show. */
-  let laneScale = -1, laneHover: string | null | undefined
+  let laneScale = -1, laneHover: string | null | undefined, highlightedLane: string | null = null, paintedLane: string | null | undefined
   const layerVisible: Record<LocationKind, boolean> = { store: true, warehouse: true, supplier: true }
   /** What the prisms, the parked dots and the labels were last placed for: the scale, the hover, the eye. */
   let placedHover: string | null | undefined, placedScale = -1, dotsScale = -1
@@ -497,6 +499,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
   /** A lane's colour for the current hover: full for the hovered place's lanes, a purchase a little dimmer, the rest dimmed. */
   const laneColor = (lane: Lane, out: Color): Color => {
     const hex = lane.status === 'overdue' ? COLORS.overdue : lane.status === 'planned' ? COLORS.planned : lane.kind === 'purchase' ? COLORS.purchase : COLORS.transfer
+    if (highlightedLane !== null) return out.set(hex).multiplyScalar(lane.id === highlightedLane ? 1.35 : 0.22)
     const mine = hovered !== null && (lane.from === hovered || lane.to === hovered)
     return out.set(hex).multiplyScalar(mine ? 1 : hovered !== null ? LANES.dim.others : lane.kind === 'purchase' ? LANES.dim.purchase : 1)
   }
@@ -511,6 +514,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
     }
     col.needsUpdate = true
     laneHover = hovered
+    paintedLane = highlightedLane
   }
 
   /** The lanes' tubes at the current scale (one merged mesh, a vertex range a lane) and the moving lanes' curves. */
@@ -628,7 +632,7 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
       // scaled to it (their feet stay on the places); a new hover repaints them in place
       if (laneScale < 0 || Math.abs(s / laneScale - 1) > REBUILD || (!busy && s !== laneScale)) buildLanes()
       else if (s !== laneScale) lanesGroup.scale.set(s / laneScale, s / laneScale, 1)
-      if (laneHover !== hovered) paintLanes()
+      if (laneHover !== hovered || paintedLane !== highlightedLane) paintLanes()
       // the prisms and diamonds stand in the marks frame (km × scale): a pan or a turn moves the frame, not them
       if (s !== placedScale || hovered !== placedHover) { placePlaces(); placedScale = s; placedHover = hovered }
       if (!ctx.reducedMotion && dt > 0 && moving.length) { time += dt; placeDots(); busy = true }
@@ -641,6 +645,10 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
     hover(id) {
       if (id !== null && !byId.has(id)) throw new GlassUIError('networkMap.hover', `没有 id 为 "${id}" 的地点`, { allowed: [...byId.keys()], got: id })
       hovered = id
+    },
+    highlightLane(id) {
+      if (id !== null && !network.lanes.some(lane => lane.id === id)) throw new GlassUIError('networkMap.highlightLane', `没有 id 为 "${id}" 的线路`)
+      highlightedLane = id
     },
     pick(object, instanceId, point) {
       const k = kindOf.get(object)

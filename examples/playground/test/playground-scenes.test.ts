@@ -9,6 +9,8 @@ import SignUp from '../src/scenes/SignUp.vue'
 import Both from '../src/scenes/Both.vue'
 import Perf from '../src/scenes/Perf.vue'
 import Gallery from '../src/gallery/Gallery.vue'
+import Orders from '../src/wms/Orders.vue'
+import { loginScale, loginTilt } from '../src/wms/login-motion'
 
 function find(root: Node, id: string): Node {
   let hit: Node | undefined
@@ -22,6 +24,27 @@ const settle = async (m: ReturnType<typeof mountGlass>) => {
 }
 
 describe('Vue playground scenes', () => {
+  it('keeps the spatial login near a normal web form size and tilts it gently with the pointer', () => {
+    expect(loginScale(1280, 900)).toBeCloseTo(0.52)
+    expect(loginScale(390, 844)).toBeGreaterThan(0.39)
+    expect(loginScale(390, 844)).toBeLessThan(0.42)
+    expect(loginTilt(1, -1)).toEqual([-0.035, -0.035, 0])
+    expect(loginTilt(0, 0)).toEqual([0, 0, 0])
+  })
+
+  it('opens the inbound form from the orders list action instead of showing it as a permanent panel', async () => {
+    const m = mountInSurface(() => h(Orders), { motion: 'frozen' })
+    await settle(m)
+    expect(m.root.surfacesMade).toHaveLength(1)
+    expect(() => find(m.c, 'inbound-qty-0')).toThrow(/missing inbound-qty-0/)
+    fire(find(m.c, 'orders-new-inbound'), 'click')
+    await settle(m)
+    expect(m.root.surfacesMade.length).toBeGreaterThan(1)
+    expect(m.root.surfacesMade.some(s => { let found = false; s.root.walk(n => { if (n.id === 'inbound-qty-0') found = true }); return found })).toBe(true)
+    expect(m.errors).toEqual([])
+    m.app.unmount()
+  })
+
   it('binds real sign-up fields and toggle actions to the submitted payload', async () => {
     const submit = vi.fn()
     const m = mountInSurface(() => h(SignUpForm, { onSubmit: submit }), { motion: 'frozen' })
@@ -44,7 +67,9 @@ describe('Vue playground scenes', () => {
     expect(() => find(m.c, 'name')).toThrow(/missing name/)
     expect(() => find(m.c, 'terms')).toThrow(/missing terms/)
     expect(absoluteRect(find(m.c, 'remember'))).toMatchObject({ width: 96, height: 44 })
-    expect(find(m.c, 'login-submit')).toBeDefined()
+    const form = find(m.c, 'signup-form'), submit = absoluteRect(find(m.c, 'login-submit'))
+    expect(form.layout.height).toBe(560)
+    expect(submit.y + submit.height).toBeLessThanOrEqual(form.layout.height)
     expect(m.errors).toEqual([])
     m.app.unmount()
   })
@@ -88,6 +113,23 @@ describe('Vue playground scenes', () => {
     expect(absoluteRect(find(s.root, 'signin').parent!)).toMatchObject({ x: 0, width: 885, y: 937, height: 30 })
     expect(m.errors).toEqual([])
     m.app.unmount()
+  })
+
+  it('places the inspectable sign-up form in world space while preserving its responsive front size', async () => {
+    const desktop = mountGlass(() => h(SignUp, { inspect: true, viewport: { width: 1280, height: 900 } }), { motion: 'frozen' })
+    await settle(desktop)
+    const panel = desktop.root.surfacesMade[0]!
+    expect(panel.created).toMatchObject({ layer: 'world', width: 885, height: 1045, background: 'glass' })
+    expect(panel.created.ptPerUnit).toBeGreaterThan(200)
+    expect(panel.created.ptPerUnit).toBeLessThan(230)
+    expect(panel.restPose.position).toEqual([0, -0.05, 0])
+    expect(find(panel.root, 'submit')).toBeDefined()
+    desktop.app.unmount()
+
+    const narrow = mountGlass(() => h(SignUp, { inspect: true, viewport: { width: 390, height: 844 } }), { motion: 'frozen' })
+    await settle(narrow)
+    expect(narrow.root.surfacesMade[0]!.created.ptPerUnit).toBeGreaterThan(panel.created.ptPerUnit!)
+    narrow.app.unmount()
   })
 
   it('combines the screen form with the original world card pose and working controls', async () => {

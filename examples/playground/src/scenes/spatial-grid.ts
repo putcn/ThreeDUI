@@ -4,21 +4,31 @@ import { framePose } from '@glassui/render'
 import { focusPose } from '@glassui/render/internal'
 import type { ArcSlot } from '@glassui/vue'
 
-export const GRID = { columns: 3, radius: 24, gap: 0.4 } as const
+export const GRID = { columns: 3, radius: 24, gap: 1.5, cameraMargin: 0.19 } as const
+/** The six-Block overview remains in the camera's frustum on a tall viewport. */
+export const SPATIAL_CAMERA_FAR = 200
 const PT = 244
 export const BLOCKS = {
-  orders: { width: 880, height: 900 }, dashboard: { width: 1440, height: 900 }, network: { width: 1600, height: 1000 },
-  inbound: { width: 1100, height: 900 }, twin: { width: 1280, height: 900 }, settings: { width: 1000, height: 900 },
+  orders: { width: 1100, height: 960 }, dashboard: { width: 1440, height: 900 }, network: { width: 1350, height: 950 },
+  twin: { width: 1280, height: 900 }, inventory: { width: 1280, height: 900 }, settings: { width: 1000, height: 1000 },
 } as const
-export const BLOCK_NAMES = ['orders', 'dashboard', 'network', 'inbound', 'twin', 'settings'] as const
+export const BLOCK_NAMES = ['orders', 'dashboard', 'network', 'twin', 'inventory', 'settings'] as const
 const slotSizes = BLOCK_NAMES.map(name => ({ width: BLOCKS[name].width / PT, height: BLOCKS[name].height / PT }))
-export const SLOTS: ArcSlot[] = gridSlots(slotSizes, GRID.columns, GRID.radius, GRID.gap)
+// Keep the grid's reading order, but give the dashboard the nearest plane and let
+// the supporting views recede. The offset is real world depth, not a 2D shadow.
+export const DEPTH_BY_NAME = { orders: 0.35, dashboard: 1.55, network: 0.1, twin: -0.45, inventory: -0.15, settings: -0.8 } as const
+export const BLOCK_SCALE = { orders: 1, dashboard: 1.16, network: 1, twin: 1, inventory: 1, settings: 1 } as const
+export const SLOTS: ArcSlot[] = gridSlots(slotSizes, GRID.columns, GRID.radius, GRID.gap).map((slot, i) => {
+  const name = BLOCK_NAMES[i]!
+  return { ...slot, position: [slot.position[0], slot.position[1], slot.position[2] + DEPTH_BY_NAME[name]] }
+})
 export const SLOT_BY_NAME = Object.fromEntries(BLOCK_NAMES.map((name, i) => [name, SLOTS[i]!])) as Record<(typeof BLOCK_NAMES)[number], ArcSlot>
 export const NETWORK = SLOT_BY_NAME.network
 export const TWIN = SLOT_BY_NAME.twin
 export const PANEL = { width: 300, height: 170, ptPerUnit: 360, offset: [1.15, -0.74, 2.05] as [number, number, number] }
 export const PLACE_PANEL = { width: 320, height: 216, ptPerUnit: 360, offset: { right: [1.35, 0.45, 1.25], left: [-1.35, 0.45, 1.25] } as Record<'left' | 'right', [number, number, number]> }
-export const WALL = { out: 4, height: 16, margin: 34 * Math.PI / 180 } as const
+export const TRACE_PANEL = { width: 460, height: 236, ptPerUnit: 300, offset: [-1.36, -1.4, 2.15] as [number, number, number] }
+export const WALL = { out: 4, height: 20, margin: 34 * Math.PI / 180 } as const
 export const DOME = { out: 8, yawMargin: 6 * Math.PI / 180, pitchMargin: 6 * Math.PI / 180 } as const
 export interface RestPose { position: readonly [number, number, number]; rotation: readonly [number, number, number] }
 export function inFrameOf(pose: ArcSlot, offset: readonly [number, number, number]): ArcSlot {
@@ -41,17 +51,17 @@ export function domeSpan(): { yaw: [number, number]; pitch: [number, number] } {
   for (const aspect of aspects) {
     const targets = SLOTS.map((slot, i) => {
       const name = BLOCK_NAMES[i]!
-      return { restPose: { position: [...slot.position], rotation: [...slot.rotation], scale: [1, 1, 1] }, parent: null, contentPlaneZ: 0, model: { width: BLOCKS[name].width, height: BLOCKS[name].height, ptPerUnit: PT } }
+      return { restPose: { position: [...slot.position], rotation: [...slot.rotation], scale: [BLOCK_SCALE[name], BLOCK_SCALE[name], BLOCK_SCALE[name]] }, parent: null, contentPlaneZ: 0, model: { width: BLOCKS[name].width, height: BLOCKS[name].height, ptPerUnit: PT } }
     })
     const poses: { position: Vector3; quaternion: Quaternion }[] = []
     for (const scale of [1, 1.25]) {
       const pose = { position: new Vector3(), quaternion: new Quaternion() }
-      framePose(targets as never, 38, aspect, 0.08, scale, pose)
+      framePose(targets as never, 38, aspect, GRID.cameraMargin, scale, pose)
       poses.push(pose)
     }
     for (const target of targets) {
       const pose = { position: new Vector3(), quaternion: new Quaternion() }
-      focusPose(target as never, 38, aspect, 0.08, pose)
+      focusPose(target as never, 38, aspect, GRID.cameraMargin, pose)
       poses.push(pose)
     }
     for (const pose of poses) for (const x of [-1, 1]) for (const y of [-1, 1]) for (const px of [-3, 3]) for (const py of [-3, 3]) {

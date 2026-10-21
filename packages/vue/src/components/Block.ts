@@ -28,6 +28,7 @@ const BlockProps = z.object({
   radius: z.number().min(0).default(48).describe('圆角，pt：背板和内容盒的圆角；内容盒里写 radius: concentric 的子项按它减去 40 pt 内边距取圆角（Card 默认 24 pt，不随它变）'),
   background: z.string().default('glass').describe('背景：glass（玻璃背板，默认）、none（透明）或颜色 token / #hex（不透明底色）'),
   ptPerUnit: z.number().positive().optional().describe('每个世界单位多少 pt（默认 244）：越大，同样 pt 尺寸的 Block 在场景里越小'),
+  unfocusedOpacity: z.number().min(0).max(1).default(1).describe('聚焦别的 Block 时的透明度；默认 1'),
   enterFrom: Offset.default({ position: [0, 0, -1.2], scale: 0.92, opacity: 0 }).describe(
     '进场起点 { position?, rotation?, scale?, opacity? }：相对原位的偏移，在 Block 自己的坐标系里（−z 是远离观众）；position 与 rotation 相加，scale 与 opacity 相乘。整个替换默认值，省略的字段不偏移（opacity 省略即 1）。默认 { position: [0, 0, -1.2], scale: 0.92, opacity: 0 }：从后方淡入'),
   leaveTo: Offset.default({ position: [0, 0, -1.5], scale: 0.9, opacity: 0 }).describe(
@@ -114,7 +115,7 @@ export const Block = defineGlassComponent({
     if (space.mode.value === 'overview') return space.highlighted.value === name.value ? place(own, LIFT) : own
     return focused.value ? own : place(own, RECEDE)
   })
-  const opacity = computed(() => space.standby.value ? 0.35 : 1)
+  const opacity = computed(() => space.standby.value ? Math.min(0.35, v.value.unfocusedOpacity) : space.mode.value === 'focus' && !focused.value ? v.value.unfocusedOpacity : 1)
   const { surface } = useRenderSurface(() => {
     const s = state.value
     if ('error' in s) return null

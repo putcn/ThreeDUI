@@ -1,4 +1,4 @@
-import { BoxGeometry, CircleGeometry, Color, ExtrudeGeometry, Group, InstancedMesh, Matrix4, Mesh, Quaternion, Shape, Vector3, type BufferGeometry, type Material } from 'three'
+import { BoxGeometry, CircleGeometry, Color, CylinderGeometry, ExtrudeGeometry, Group, InstancedMesh, Matrix4, Mesh, Quaternion, Shape, SphereGeometry, Vector3, type BufferGeometry, type Material } from 'three'
 import { MeshBasicNodeMaterial, MeshStandardNodeMaterial } from 'three/webgpu'
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js'
 import { GlassUIError } from '@glassui/core'
@@ -73,6 +73,8 @@ export interface Warehouse {
   update(dt: number, ctx: Viewport3DContext): boolean
   /** Highlights bin `id` (an instance of `bins`): its colour lightened at once, raised `HOVER_LIFT` pt; null: none. */
   hover(id: number | null): void
+  /** Keeps one investigated bin visibly marked while other bins can still be hovered. */
+  trace(id: number | null): void
   /** The bin instance `id` draws. */
   binAt(id: number): Bin
   /** Yaws the model by `dx` radians about its floor's normal (eased), clamped to ±`YAW_LIMIT`. */
@@ -204,13 +206,24 @@ export function createWarehouse(data: { bins: readonly Bin[] }): Warehouse {
   const binMesh = new InstancedMesh(keep(owned, new RoundedBoxGeometry(M.bin.w, M.bin.h, M.bin.d, 2, M.bin.r)), standard(owned, '#ffffff', { roughness: 0.55 }), list.length)
   binMesh.name = 'bins'
   const base = list.map(b => new Color(binLevel(b.occupancy).color)), lit = base.map(c => c.clone().lerp(new Color('#ffffff'), 0.4))
+  const traceColor = new Color('#ff3b30')
   const centres = list.map(binCentre)
+  const traceBeacon = new Group()
+  traceBeacon.name = 'trace-beacon'
+  traceBeacon.visible = false
+  const beaconMaterial = new MeshBasicNodeMaterial({ color: '#ff3b30' })
+  owned.materials.push(beaconMaterial)
+  const stem = new Mesh(keep(owned, new CylinderGeometry(1.25, 1.25, 38, 8)), beaconMaterial)
+  stem.position.y = 19
+  const head = new Mesh(keep(owned, new SphereGeometry(6, 12, 8)), beaconMaterial)
+  head.position.y = 40
+  traceBeacon.add(stem, head)
   list.forEach((_, i) => { binMesh.setMatrixAt(i, boxAt(centres[i]!.toArray(), [1, 1, 1])); binMesh.setColorAt(i, base[i]!) })
   const vehicle = agv(owned)
-  yaw.add(floorMesh(owned), lines(owned), frames(owned), binMesh, pallets(owned), vehicle)
+  yaw.add(floorMesh(owned), lines(owned), frames(owned), binMesh, pallets(owned), vehicle, traceBeacon)
 
   /** The hovered bin, and each bin's lift (pt) where it is not 0 or not at its target. */
-  let hovered: number | null = null
+  let hovered: number | null = null, traced: number | null = null
   const lift = new Map<number, number>()
   let yawNow = 0, yawTarget = 0, tiltNow = Math.PI / 2 - TILT, tiltTarget = tiltNow, distance = 0, lowOnly = false
   /** The box the model is fitted to: the Viewport3D's, from `update`. */
@@ -297,7 +310,7 @@ export function createWarehouse(data: { bins: readonly Bin[] }): Warehouse {
       }
       if (moved) place(resized)
       for (const [i, l] of lift) {
-        const target = i === hovered ? HOVER_LIFT : 0
+        const target = i === traced ? HOVER_LIFT * 1.8 : i === hovered ? HOVER_LIFT : 0
         let next = l + (target - l) * ease(0.07)
         if (Math.abs(target - next) < 0.05) next = target
         if (next === 0) lift.delete(i); else lift.set(i, next)
@@ -310,9 +323,21 @@ export function createWarehouse(data: { bins: readonly Bin[] }): Warehouse {
     hover(id) {
       if (id === hovered) return
       if (id !== null && !(Number.isInteger(id) && id >= 0 && id < list.length)) throw new GlassUIError('warehouse.hover', `没有第 ${id} 个库位（共 ${list.length} 个）`)
-      if (hovered !== null) { binMesh.setColorAt(hovered, base[hovered]!); if (!lift.has(hovered)) lift.set(hovered, 0) }
+      if (hovered !== null) { binMesh.setColorAt(hovered, hovered === traced ? traceColor : base[hovered]!); if (!lift.has(hovered)) lift.set(hovered, 0) }
       hovered = id
-      if (id !== null) { binMesh.setColorAt(id, lit[id]!); if (!lift.has(id)) lift.set(id, 0) }
+      if (id !== null) { binMesh.setColorAt(id, id === traced ? traceColor : lit[id]!); if (!lift.has(id)) lift.set(id, 0) }
+      binMesh.instanceColor!.needsUpdate = true
+    },
+    trace(id) {
+      if (id === traced) return
+      if (id !== null && !(Number.isInteger(id) && id >= 0 && id < list.length)) throw new GlassUIError('warehouse.trace', `没有第 ${id} 个库位（共 ${list.length} 个）`)
+      if (traced !== null) { binMesh.setColorAt(traced, traced === hovered ? lit[traced]! : base[traced]!); if (!lift.has(traced)) lift.set(traced, 0) }
+      traced = id
+      traceBeacon.visible = id !== null
+      if (id !== null) {
+        binMesh.setColorAt(id, traceColor); if (!lift.has(id)) lift.set(id, 0)
+        traceBeacon.position.set(centres[id]!.x, RACK_TOP + 2, centres[id]!.z)
+      }
       binMesh.instanceColor!.needsUpdate = true
     },
     binAt(id) {
@@ -331,7 +356,7 @@ export function createWarehouse(data: { bins: readonly Bin[] }): Warehouse {
     setLowOnly(on) {
       if (lowOnly === on) return
       lowOnly = on
-      list.forEach((bin, i) => { binMesh.setColorAt(i, on && bin.occupancy >= 0.3 ? base[i]!.clone().lerp(new Color('#ffffff'), 0.8) : (i === hovered ? lit[i]! : base[i]!)) })
+      list.forEach((bin, i) => { binMesh.setColorAt(i, i === traced ? traceColor : on && bin.occupancy >= 0.3 ? base[i]!.clone().lerp(new Color('#ffffff'), 0.8) : (i === hovered ? lit[i]! : base[i]!)) })
       binMesh.instanceColor!.needsUpdate = true
     },
     dispose() {

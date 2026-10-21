@@ -329,10 +329,25 @@ describe('the network map', () => {
     expect(() => m.hover('ST-99')).toThrow(/ST-99/)
   })
 
+  it('pins one overdue purchase lane while the map is used for an investigation', () => {
+    const m = make(), lane = network.lanes.find(l => l.from === 'SP-1' && l.to === 'WH-1' && l.status === 'overdue')!
+    m.update(1 / 60, ctx())
+    const mesh = named(m.group, 'lanes') as Mesh, col = mesh.geometry.getAttribute('color')
+    const selected = laneRange(m, lane), other = laneRange(m, network.lanes.find(l => l.id !== lane.id)!)
+    const brightness = (i: number): number => col.getX(i) + col.getY(i) + col.getZ(i)
+    const selectedBefore = brightness(selected.start), otherBefore = brightness(other.start)
+    m.highlightLane(lane.id); m.hover('WH-1'); m.update(1 / 60, ctx())
+    expect(brightness(selected.start)).toBeGreaterThan(selectedBefore)
+    expect(brightness(other.start)).toBeLessThan(otherBefore)
+    m.highlightLane(null); m.hover(null); m.update(1 / 60, ctx())
+    expect(brightness(selected.start)).toBeCloseTo(selectedBefore, 5)
+    expect(() => m.highlightLane('LN-999')).toThrow(GlassUIError)
+  })
+
   it('the lanes: one arc a lane (a vertex range each), wider for more pieces, the two overdue purchases red (dimmed like every purchase)', () => {
     const m = make()
     m.update(1 / 60, ctx())
-    const lanes = named(m.group, 'lanes') as Mesh, col = lanes.geometry.getAttribute('color'), red = new Color('#ff5d73').multiplyScalar(LANES.dim.purchase)
+    const lanes = named(m.group, 'lanes') as Mesh, col = lanes.geometry.getAttribute('color'), red = new Color('#db7484').multiplyScalar(LANES.dim.purchase)
     const overdue = network.lanes.filter(l => l.status === 'overdue')
     expect(overdue).toHaveLength(2); expect(overdue.every(l => l.kind === 'purchase')).toBe(true)
     for (const l of overdue) {
@@ -513,7 +528,7 @@ describe('the network map', () => {
     expect(lanes.geometry).not.toBe(g1)
   })
 
-  it('the lanes stand out over the roads: at the opening zoom every city run is white and at least as wide as a motorway ribbon (Task 9P R2)', () => {
+  it('the lanes stand out over the roads: at the opening zoom every city run is lavender and at least as wide as a motorway ribbon (Task 9P R2)', () => {
     const m = make(), lanes = named(m.group, 'lanes') as Mesh, ground = named(m.group, 'ground')
     m.update(1 / 60, ctx({ width: 1520, height: 780 }))
     const motorway = 2 * halfKm(named(m.group, 'roads-motorway') as Mesh) * ground.scale.x, pos = lanes.geometry.getAttribute('position'), col = lanes.geometry.getAttribute('color')
@@ -527,7 +542,10 @@ describe('the network map', () => {
     for (const l of runs) {
       expect(diameter(l), l.id).toBeGreaterThanOrEqual(motorway)
       const i = laneRange(m, l).start
-      expect([col.getX(i), col.getY(i), col.getZ(i)]).toEqual([1, 1, 1])
+      const transferColor = new Color('#7167d9')
+      expect(col.getX(i)).toBeCloseTo(transferColor.r, 6)
+      expect(col.getY(i)).toBeCloseTo(transferColor.g, 6)
+      expect(col.getZ(i)).toBeCloseTo(transferColor.b, 6)
     }
     // the roads under them: a lace, dimmer than the lanes
     expect(((named(m.group, 'roads-motorway') as Mesh).material as Material).opacity).toBeLessThan(((lanes.material as Material).opacity))
@@ -559,9 +577,10 @@ describe('the network map', () => {
     const col = (): BufferAttributeLike => lanes.geometry.getAttribute('color') as unknown as BufferAttributeLike
     const purchase = network.lanes.find(l => l.kind === 'purchase' && l.status === 'transit')!, transfer = network.lanes.find(l => l.kind === 'transfer' && l.status === 'transit')!
     const avg = (lane: typeof purchase): number => { const r = laneRange(m, lane), c = col(); let s = 0; for (let i = r.start; i < r.start + r.count; i++) s += c.getX(i) + c.getY(i) + c.getZ(i); return s / r.count }
-    const want = new Color('#eaf4ff'), full = want.r + want.g + want.b
+    const want = new Color('#a28de5'), full = want.r + want.g + want.b
     expect(avg(purchase)).toBeCloseTo(full * LANES.dim.purchase, 4)
-    expect(avg(transfer)).toBeCloseTo(3, 4)                                         // a city run: white, at full strength
+    const city = new Color('#7167d9')
+    expect(avg(transfer)).toBeCloseTo(city.r + city.g + city.b, 4)
     m.hover(purchase.to); m.update(1 / 60, ctx())
     expect(avg(purchase)).toBeCloseTo(full, 4)
     // its tube is the thinnest: at the floor

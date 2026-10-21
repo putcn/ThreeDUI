@@ -1,9 +1,9 @@
 // Canvas-only Vue playground. ?scene=signup|world|both|gallery|perf|spatial; ?focus=<Block name> (gallery/spatial).
 // ?scheme=light|dark, ?motion=frozen|live, ?quality=high|medium|low|minimal|auto, ?webgl, ?hud=0.
-// Only world/both use OrbitControls; gallery/spatial give their camera to Space.
+// Signup uses OrbitControls for glass inspection; world/both orbit; gallery/spatial give their camera to Space.
 
 import { nextTick } from 'vue'
-import { Color, PerspectiveCamera, Raycaster, Scene, Vector2, type Mesh } from 'three'
+import { Color, MOUSE, PerspectiveCamera, Raycaster, Scene, Vector2, type Mesh } from 'three'
 import { WebGPURenderer } from 'three/webgpu'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { absoluteRect, type Node, type Rect } from '@glassui/core'
@@ -13,8 +13,9 @@ import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
 import Gallery from './gallery/Gallery.vue'
 import Spatial from './scenes/Spatial.vue'
-import { DOME, GRID, WALL, domeSpan } from './scenes/spatial-grid'
+import { BLOCK_NAMES, BLOCKS, DOME, GRID, SLOTS, SPATIAL_CAMERA_FAR, WALL, domeSpan } from './scenes/spatial-grid'
 import { createAuroraDome } from './aurora'
+import { createAuroraVolume, createSpatialFloor, createSpatialGroundShadows } from './spatial-environment'
 import { createCurvedWall, createHostLights, createWall } from './wall'
 import SignUp from './scenes/SignUp.vue'
 import World from './scenes/World.vue'
@@ -32,17 +33,17 @@ import { idlePacing } from './idle-pacing'
  * `overflow: hidden` ancestors is not considered: a node scrolled out of view still has a rect.
  */
 export interface NodeRect extends Rect { cx: number; cy: number }
-export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURenderer; root?: UIRoot; surfaces?: readonly Surface[]; rectOf(id: string): NodeRect | null; stats(): { frameMs: number; draws: number }; ime(): boolean; focus(): string | null; idle(): Promise<void> }
+export interface PlaygroundHandle { ready: Promise<UIRoot>; renderer: WebGPURenderer; camera: PerspectiveCamera; root?: UIRoot; surfaces?: readonly Surface[]; rectOf(id: string): NodeRect | null; stats(): { frameMs: number; draws: number }; ime(): boolean; focus(): string | null; idle(): Promise<void> }
 declare global { interface Window { __glassui?: PlaygroundHandle } }
 declare global { interface Window { __glassuiSpatialFocus?: () => string | null } }
 
 const SCENES = ['signup', 'world', 'both', 'gallery', 'perf', 'spatial'] as const
 type SceneMode = (typeof SCENES)[number]
 const params = new URLSearchParams(location.search)
-const scheme = params.get('scheme') === 'dark' ? 'dark' : 'light'
 const forceWebGL = params.has('webgl')
 const sceneParam = params.get('scene')
 const mode: SceneMode = SCENES.find(s => s === sceneParam) ?? 'both'
+const scheme = params.get('scheme') === 'dark' ? 'dark' : 'light'
 const motion = params.get('motion') === 'frozen' ? 'frozen' : 'live'
 const stageParam = params.get('stage'), initialStage = stageParam === 'login' || stageParam === 'overview' ? stageParam : undefined
 if (stageParam !== null && initialStage === undefined) console.warn(`[playground] unknown ?stage=${stageParam}; using the login flow`)
@@ -64,8 +65,10 @@ renderer.domElement.addEventListener('contextmenu', e => { e.preventDefault() })
 renderer.domElement.addEventListener('wheel', e => { if (e.ctrlKey) e.preventDefault() }, { passive: false })
 
 const hostScene = new Scene()
-hostScene.background = new Color(scheme === 'dark' ? 0x17161e : 0xd9d4d2)   // only seen past the wall's edges when orbiting far
-const camera = new PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 50)
+hostScene.background = new Color(scheme === 'dark' ? 0x07131e : 0xe7eaf2)   // only seen past the dome's edges when orbiting far
+// Portrait overview framing of six Blocks can place the camera beyond 50 world
+// units. Keep the spatial far plane past the framed UI and its environment.
+const camera = new PerspectiveCamera(38, innerWidth / innerHeight, 0.1, mode === 'spatial' ? SPATIAL_CAMERA_FAR : 50)
 camera.position.set(0, 0.55, 7.3)
 camera.lookAt(0, -0.05, 0)
 // the spatial scene's camera swings round its arc: its backdrop is a curved wall round the arc, added once the Blocks
@@ -73,7 +76,7 @@ camera.lookAt(0, -0.05, 0)
 if (mode !== 'spatial' && mode !== 'gallery') hostScene.add(createWall(scheme))
 hostScene.add(...createHostLights())
 
-const orbit = mode === 'world' || mode === 'both'
+const orbit = mode === 'signup' || mode === 'world' || mode === 'both'
 // No orbit controller in either Space scene: its Space's camera rig writes the camera pose every tick, and OrbitControls' update (its
 // `lookAt`) would fight it
 const controls = mode === 'spatial' || mode === 'gallery' ? null : new OrbitControls(camera, renderer.domElement)
@@ -81,6 +84,15 @@ if (controls) {
   controls.target.set(0, -0.05, 0)
   controls.enableDamping = true
   controls.enabled = orbit
+  if (mode === 'signup') {
+    controls.mouseButtons = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE }
+    controls.minDistance = 4
+    controls.maxDistance = 14
+    controls.minPolarAngle = 0.45
+    controls.maxPolarAngle = Math.PI - 0.45
+    controls.minAzimuthAngle = -1.35
+    controls.maxAzimuthAngle = 1.35
+  }
 }
 
 const hud = document.getElementById('hud')
@@ -95,7 +107,7 @@ const showError = (e: unknown): void => {
 // `handle` exists before `start()` runs, since `start()` writes `root` and `surfaces` into it; `ready` joins it after
 const frameStats = createFrameStats()
 let sceneHarness: ReturnType<typeof createSceneHarness> | undefined
-const handle: Omit<PlaygroundHandle, 'ready'> = { renderer, rectOf, stats: frameStats.read, ime: () => imeFocused(handle.root?.ime ?? null, document.activeElement), focus: () => mode === 'spatial' ? window.__glassuiSpatialFocus?.() ?? null : sceneHarness?.focus() ?? null, idle: async () => { await ready; await sceneHarness?.idle() } }
+const handle: Omit<PlaygroundHandle, 'ready'> = { renderer, camera, rectOf, stats: frameStats.read, ime: () => imeFocused(handle.root?.ime ?? null, document.activeElement), focus: () => mode === 'spatial' ? window.__glassuiSpatialFocus?.() ?? null : sceneHarness?.focus() ?? null, idle: async () => { await ready; await sceneHarness?.idle() } }
 const ready = start()
 window.__glassui = Object.assign(handle, { ready })
 ready.catch(showError)
@@ -112,11 +124,17 @@ async function start(): Promise<UIRoot> {
   root.setScheme(scheme)
   root.on('error', e => console.error('[glassui]', e.surface?.name ?? '(no Surface)', e.error))
   const scenes = { signup: SignUp, world: World, both: Both, gallery: Gallery, perf: Perf, spatial: Spatial }
-  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}) } : undefined).mount()
+  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}) } : mode === 'signup' ? { inspect: true } : undefined).mount()
   // Vue's initial post-flush effects register Blocks and send the camera rig to the requested focus.
   await nextTick()
-  const aurora = mode === 'spatial' ? createAuroraDome({ center: [0, 0, GRID.radius], radius: GRID.radius + DOME.out, ...domeSpan() }) : null
+  const aurora = mode === 'spatial' ? createAuroraDome({ center: [0, 0, GRID.radius], radius: GRID.radius + DOME.out, scheme, ...domeSpan() }) : null
   if (aurora) hostScene.add(aurora.mesh)
+  const atmosphere = mode === 'spatial' ? createAuroraVolume([0, 0, GRID.radius]) : null
+  if (mode === 'spatial') {
+    hostScene.add(createSpatialFloor([0, -5, GRID.radius]))
+    hostScene.add(createSpatialGroundShadows(SLOTS.map((slot, i) => ({ position: slot.position, width: BLOCKS[BLOCK_NAMES[i]!].width / 244 })), -5))
+  }
+  if (atmosphere) hostScene.add(atmosphere.group)
   if (mode === 'gallery') {
     const angles = root.surfaces.map(s => Math.atan2(s.restPose.position[0], 10 - s.restPose.position[2]))
     hostScene.add(createCurvedWall({ center: [0, 0, 10], radius: 10 + WALL.out, from: Math.min(...angles) - WALL.margin, to: Math.max(...angles) + WALL.margin, height: WALL.height, scheme }))
@@ -124,10 +142,11 @@ async function start(): Promise<UIRoot> {
   handle.root = root
   // A live getter: opening a Dialog adds panel/scrim Surfaces after startup.
   Object.defineProperty(handle, 'surfaces', { get: () => root.surfaces })
-  const names = mode === 'spatial' ? ['orders', 'dashboard', 'network', 'inbound', 'twin', 'settings'] : mode === 'gallery' ? ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers'] : []
+  const names = mode === 'spatial' ? [...BLOCK_NAMES] : mode === 'gallery' ? ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers'] : []
   sceneHarness = createSceneHarness(root, new Map(root.surfaces.flatMap((s, i) => names[i] ? [[s, names[i]!] as const] : [])))
   sceneHarness.focus()
   guardOrbit(root)
+  cancelSignupPressOnDrag(root)
 
   // The first frame is drawn here, not on the first animation frame: `ready` must not depend on rAF (a hidden or
   // occluded tab gets none), and it then resolves with shaders compiled and the first content passes drawn.
@@ -136,7 +155,7 @@ async function start(): Promise<UIRoot> {
   if (mode === 'spatial') for (const type of ['pointermove', 'pointerdown', 'wheel', 'keydown'] as const) renderer.domElement.addEventListener(type, noteInput)
   const step = (t: number): boolean => {
     if (controls) {
-      controls.enableZoom = !root.pointer?.hovered   // a wheel over a Surface is the UI's
+      controls.enableZoom = mode === 'signup' || !root.pointer?.hovered   // sign-up has no scroll region; its wheel inspects the glass
       controls.update()
     }
     const idle = mode === 'spatial' && root.idle
@@ -149,6 +168,7 @@ async function start(): Promise<UIRoot> {
     }
     const visualMode = motion === 'frozen' ? 'frozen' : root.anim.reducedMotion ? 'reduced' : 'live'
     aurora?.update(renderer as unknown as import('three/webgpu').Renderer, t / 1000, visualMode)
+    atmosphere?.update(t / 1000, visualMode !== 'live')
     if (paced) root.frame(t, { paced: true })
     else root.frame(t)                               // ticks the UI, draws the host scene, then the UI
     if (paced) { lastPaced = t; pacedActive = true }
@@ -181,7 +201,7 @@ async function start(): Promise<UIRoot> {
       const fps = (frames / acc).toFixed(0), draws = renderer.info.render.drawCalls
       stats.textContent = pacedActive
         ? `${root.backend} · idle 15 fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surfaces`
-        : `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surface${root.surfaces.length === 1 ? '' : 's'}${orbit ? ' · drag to orbit' : ''}`
+        : `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surface${root.surfaces.length === 1 ? '' : 's'}${mode === 'signup' ? ' · left pan · right rotate · wheel zoom' : orbit ? ' · drag to orbit' : ''}`
       frames = 0; acc = 0
     }
   })
@@ -230,7 +250,7 @@ function rectOf(id: string): NodeRect | null {
  * world Surface going.
  */
 function guardOrbit(root: UIRoot): void {
-  if (!orbit || !controls) return
+  if (!controls || (mode !== 'world' && mode !== 'both')) return
   const canvas = renderer.domElement, raycaster = new Raycaster(), ndc = new Vector2()
   addEventListener('pointerdown', e => {
     if (e.target !== canvas || !e.isPrimary) return
@@ -242,6 +262,25 @@ function guardOrbit(root: UIRoot): void {
   const release = (e: PointerEvent): void => { if (e.isPrimary) controls.enabled = true }
   addEventListener('pointerup', release)
   addEventListener('pointercancel', release)
+}
+
+/** OrbitControls and the form both receive mouse events. Once a left press becomes a pan, cancel its UI press so
+ * releasing over a button cannot submit the form. A click without a drag still belongs to the form. */
+function cancelSignupPressOnDrag(root: UIRoot): void {
+  if (mode !== 'signup') return
+  const canvas = renderer.domElement
+  let start: { id: number; x: number; y: number } | null = null
+  addEventListener('pointerdown', e => {
+    if (e.target === canvas && e.isPrimary && e.pointerType === 'mouse' && e.button === 0) start = { id: e.pointerId, x: e.clientX, y: e.clientY }
+  }, { capture: true })
+  addEventListener('pointermove', e => {
+    if (!start || e.pointerId !== start.id || Math.hypot(e.clientX - start.x, e.clientY - start.y) < 6) return
+    root.pointer?.handle('pointercancel', e)
+    start = null
+  }, { capture: true })
+  const clear = (e: PointerEvent): void => { if (start?.id === e.pointerId) start = null }
+  addEventListener('pointerup', clear, { capture: true })
+  addEventListener('pointercancel', clear, { capture: true })
 }
 
 addEventListener('resize', () => {

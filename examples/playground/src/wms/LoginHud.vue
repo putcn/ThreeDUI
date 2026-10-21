@@ -1,13 +1,21 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { GlassTransition, Surface } from '@glassui/vue'
+import { GlassTransition, Surface, useRoot } from '@glassui/vue'
 import SignUpForm from '../scenes/SignUpForm.vue'
 import { validateLogin } from './forms'
+import { loginScale, loginTilt } from './login-motion'
 const emit = defineEmits<{ success: [] }>()
+const root = useRoot()
 const viewport = ref({ width: typeof innerWidth === 'number' ? innerWidth : 1280, height: typeof innerHeight === 'number' ? innerHeight : 900 })
+const tilt = ref<[number, number, number]>([0, 0, 0])
 const resize = () => { viewport.value = { width: innerWidth, height: innerHeight } }
-onMounted(() => addEventListener('resize', resize)); onBeforeUnmount(() => { removeEventListener('resize', resize); clearTimeout(timer) })
-const scale = computed(() => Math.max(0.1, Math.min(1, (viewport.value.height - 40) / 1045, (viewport.value.width - 40) / 885)))
+const move = (event: PointerEvent) => {
+  if (event.pointerType !== 'mouse' || root.anim.reducedMotion || (typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches)) { tilt.value = [0, 0, 0]; return }
+  tilt.value = loginTilt(event.clientX / viewport.value.width * 2 - 1, event.clientY / viewport.value.height * 2 - 1)
+}
+onMounted(() => { addEventListener('resize', resize); addEventListener('pointermove', move, { passive: true }) })
+onBeforeUnmount(() => { removeEventListener('resize', resize); removeEventListener('pointermove', move); clearTimeout(timer) })
+const scale = computed(() => loginScale(viewport.value.width, viewport.value.height))
 const errors = ref<{ email?: string; password?: string }>({}), loading = ref(false)
 let timer: ReturnType<typeof setTimeout> | undefined
 function submit(value: { email: string; password: string }): void {
@@ -20,7 +28,7 @@ function submit(value: { email: string; password: string }): void {
 </script>
 <template>
   <GlassTransition preset="scale">
-    <Surface layer="screen" center :width="885" :height="1045" background="glass" :radius="48" :scale="scale">
+    <Surface layer="screen" center :width="885" :height="560" background="glass" :radius="40" :scale="scale" :rotation="tilt">
       <SignUpForm mode="login" :loading="loading" :errors="errors" submit-id="login-submit" submit-label="登录" @submit="submit" />
     </Surface>
   </GlassTransition>

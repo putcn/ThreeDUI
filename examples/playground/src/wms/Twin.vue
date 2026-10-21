@@ -2,7 +2,7 @@
 // The twin Block's content (spatial spec §4 step 3): the title, the overview line and the occupancy legend, then the
 // warehouse model in a Viewport3D filling the rest. Drag across it to turn the model; hover a bin to raise it, which
 // `hover` reports so Spatial.vue can float the info panel in front of the twin.
-import { markRaw, onBeforeUnmount, ref } from 'vue'
+import { markRaw, onBeforeUnmount, ref, watch } from 'vue'
 import { Box, Button, GlassContainer, Stack, Switch, Text, useMotion, useSurfaceRef, Viewport3D } from '@glassui/vue'
 import type { UIEvent } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
@@ -11,13 +11,19 @@ import { createWarehouse } from './warehouse'
 import Breadcrumb from './Breadcrumb.vue'
 
 /** `active`: this Block is the focus (Spatial.vue's); off it the model holds still (default true). */
-const props = withDefaults(defineProps<{ active?: boolean }>(), { active: true })
+const props = withDefaults(defineProps<{ active?: boolean; traceBinId?: string | null }>(), { active: true, traceBinId: null })
 const emit = defineEmits<{ hover: [bin: Bin | null]; navigate: [name: string | null] }>()
 
 // the model, made once (raw: three objects must not become reactive proxies). Under frozen motion (screenshots), and
 // while the Block is not the focus, it is as under reduced motion: the AGV parks, the yaw and the lift are there at
 // once, so the model asks for no frames it does not need
 const warehouse = markRaw(createWarehouse({ bins }))
+const traceIndex = (): number | null => {
+  if (props.traceBinId === null) return null
+  const index = bins.findIndex(bin => bin.id === props.traceBinId)
+  return index < 0 ? null : index
+}
+watch(() => props.traceBinId, () => warehouse.trace(traceIndex()), { immediate: true })
 const preset = ref<'top' | 'angled' | 'front'>('angled'), lowOnly = ref(false)
 function setPreset(value: 'top' | 'angled' | 'front'): void { preset.value = value; warehouse.setView(value) }
 function setLowOnly(value: boolean): void { lowOnly.value = value; warehouse.setLowOnly(value) }

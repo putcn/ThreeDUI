@@ -12,20 +12,20 @@ import { bins, heat, kpis, laneSummary, lanesOf, network, orders, stock } from '
 import { YAW_LIMIT } from '../src/wms/warehouse'
 import { LIMITS } from '../src/wms/map'
 import { arcPastel, createCurvedWall, MAX_U_LENGTH } from '../src/wall'
-import { GRID, arcAngleOf, BLOCKS, inFrameOf, NETWORK, PANEL, PLACE_PANEL, SLOTS, TWIN, WALL, wallSpan, wallSpanOf, domeSpan, DOME, type RestPose } from '../src/scenes/spatial-grid'
+import { GRID, arcAngleOf, BLOCKS, BLOCK_NAMES, BLOCK_SCALE, inFrameOf, NETWORK, PANEL, PLACE_PANEL, SLOTS, SPATIAL_CAMERA_FAR, TWIN, WALL, wallSpan, wallSpanOf, domeSpan, DOME, type RestPose } from '../src/scenes/spatial-grid'
 
 const FOV = 38
 function spatialPoses(aspect: number) {
-  const targets = SLOTS.map((slot, i) => ({ restPose: { position: [...slot.position], rotation: [...slot.rotation], scale: [1, 1, 1] }, parent: null, contentPlaneZ: 0, model: { width: BLOCKS[(['orders', 'dashboard', 'network', 'inbound', 'twin', 'settings'] as const)[i]!].width, height: BLOCKS[(['orders', 'dashboard', 'network', 'inbound', 'twin', 'settings'] as const)[i]!].height, ptPerUnit: PT } })) as never[]
+  const targets = SLOTS.map((slot, i) => ({ restPose: { position: [...slot.position], rotation: [...slot.rotation], scale: [BLOCK_SCALE[BLOCK_NAMES[i]!], BLOCK_SCALE[BLOCK_NAMES[i]!], BLOCK_SCALE[BLOCK_NAMES[i]!]] }, parent: null, contentPlaneZ: 0, model: { width: BLOCKS[BLOCK_NAMES[i]!].width, height: BLOCKS[BLOCK_NAMES[i]!].height, ptPerUnit: PT } })) as never[]
   const poses: { position: Vector3; quaternion: Quaternion }[] = []
   for (const distanceScale of [1, 1.25]) {
     const pose = { position: new Vector3(), quaternion: new Quaternion() }
-    framePose(targets as never, FOV, aspect, 0.08, distanceScale, pose)
+    framePose(targets as never, FOV, aspect, GRID.cameraMargin, distanceScale, pose)
     poses.push(pose)
   }
   for (const target of targets) {
     const pose = { position: new Vector3(), quaternion: new Quaternion() }
-    focusPose(target as never, FOV, aspect, 0.08, pose)
+    focusPose(target as never, FOV, aspect, GRID.cameraMargin, pose)
     poses.push(pose)
   }
   return poses
@@ -58,13 +58,18 @@ async function scene(focus: string, motion: 'live' | 'frozen' = 'live') {
   for (let i = 0; i < 3; i++) { await flush(); m.root.tick(); await nextTick() }
   await flush()
   const blocks = m.root.surfacesMade.filter(s => s.created.layer === 'world')
-  const [orders, dashboard, network, inbound, twin, settings] = blocks as [FakeSurface, FakeSurface, FakeSurface, FakeSurface, FakeSurface, FakeSurface]
+  const [orders, dashboard, network, twin, inventory, settings] = blocks as [FakeSurface, FakeSurface, FakeSurface, FakeSurface, FakeSurface, FakeSurface]
   const dock = m.root.surfacesMade.find(s => s.created.layer === 'screen')!
-  return { ...m, warn, blocks, orders, dashboard, network, inbound, twin, settings, dock }
+  return { ...m, warn, blocks, orders, dashboard, network, twin, inventory, settings, dock }
 }
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('the spatial aurora dome', () => {
+  it('keeps the portrait overview inside the spatial camera far plane', () => {
+    const overview = spatialPoses(561 / 938)[0]!
+    expect(Math.max(...SLOTS.map(slot => overview.position.distanceTo(new Vector3(...slot.position))))).toBeGreaterThan(50)
+    for (const slot of SLOTS) expect(overview.position.distanceTo(new Vector3(...slot.position))).toBeLessThan(SPATIAL_CAMERA_FAR)
+  })
   it('covers every view of the spatial scene at the supported aspects', () => {
     const span = domeSpan(), center = new Vector3(0, 0, GRID.radius), radius = GRID.radius + DOME.out
     for (const aspect of [4 / 3, 16 / 10, 16 / 9, 1512 / 808, 21 / 9]) {
@@ -94,12 +99,14 @@ function model(twin: FakeSurface) {
 const ctx = (node: Node, reducedMotion = true) => ({ width: node.layout.width, height: node.layout.height, reducedMotion, theme: defaultTheme, scheme: 'light' as const })
 
 describe('the WMS scene', () => {
-  it('mounts its six Blocks (orders, dashboard, network, inbound, twin, settings) with no error', async () => {
+  it('mounts six spatial Blocks; inbound is opened from the orders list, with no permanent panel', async () => {
     const s = await scene('dashboard')
     expect(s.errors).toEqual([])
     expect(s.warn).not.toHaveBeenCalled()
     expect(s.blocks).toHaveLength(6)
-    expect([s.orders, s.dashboard, s.network, s.inbound, s.twin, s.settings].map(x => [x.model.width, x.model.height])).toEqual([BLOCKS.orders, BLOCKS.dashboard, BLOCKS.network, BLOCKS.inbound, BLOCKS.twin, BLOCKS.settings].map(b => [b.width, b.height]))
+    expect([s.orders, s.dashboard, s.network, s.twin, s.inventory, s.settings].map(x => [x.model.width, x.model.height])).toEqual(BLOCK_NAMES.map(name => [BLOCKS[name].width, BLOCKS[name].height]))
+    expect(textOf(s.inventory.root)).toContain('库存台账')
+    expect(s.blocks.some(surface => { let found = false; surface.root.walk(n => { if (n.id === 'inbound-qty-0') found = true }); return found })).toBe(false)
     // the dashboard's content: the KPIs, and the two 3D charts, as tall as each other: the outbound heat surface (14
     // days × 24 hours) and the zone × category matrix coloured by its days of cover
     for (const k of kpis) expect(texts(s.dashboard.root, k.label)).toHaveLength(1)
@@ -129,6 +136,13 @@ describe('the WMS scene', () => {
     expect(s.twin.restPose.rotation[1]).toBeCloseTo(TWIN.rotation[1], 9)
     const o = await scene('dashboard')
     expect(o.root.rigs[0]!.focus.mock.lastCall![0]).toBe(o.dashboard)
+  })
+
+  it('fades neighboring views when a page is focused', async () => {
+    const s = await scene('settings', 'frozen')
+    for (const [i, block] of s.blocks.entries()) {
+      expect(block.opacity).toBe(i === 5 ? 1 : 0.32)
+    }
   })
 
   it('a tab or a breadcrumb focuses its Block', async () => {
@@ -497,7 +511,7 @@ describe('the curved wall', () => {
   const ASPECTS = [1512 / 808, 21 / 9, 16 / 9, 16 / 10, 4 / 3]
 
   it('every Block\'s focus view, at five aspects and every corner of the ±2.5° parallax, sees nothing but the wall main.ts builds, and wall the pastel covers at its full density', async () => {
-    const s = await scene('dashboard'), blocks = [s.orders, s.dashboard, s.network, s.inbound, s.twin, s.settings], names = ['orders', 'dashboard', 'network', 'inbound', 'twin', 'settings']
+    const s = await scene('dashboard'), blocks = [s.orders, s.dashboard, s.network, s.twin, s.inventory, s.settings], names = [...BLOCK_NAMES]
     // the span as main.ts makes it, from the rest poses as a real Surface reports them: its rotation an Euler read back
     // from its quaternion, so a yaw past 90° (the twin's −1.749) comes back as [π, −1.393, π]
     const readBack = (b: FakeSurface): RestPose => {
