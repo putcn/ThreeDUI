@@ -186,6 +186,8 @@ export interface NetworkMap {
 export interface NetworkMapOptions {
   /** Makes the label canvases (the root's: DOM canvases in a browser). */
   createCanvas: CanvasFactory
+  /** Localizes labels that are baked into the map's text planes. */
+  translate?: (text: string) => string
 }
 
 /** Every geometry, material and texture the map owns, for `dispose`. */
@@ -379,13 +381,14 @@ export function createNetworkMap(geo: GeoData, network: Network, opts: NetworkMa
   lanesGroup.add(laneMesh, dots)
 
   // ---- labels: each warehouse's and supplier's name and a second line on a light backdrop, facing the camera ----------
-  const sublabel = (l: Location): string => (l.kind === 'warehouse' ? `${l.district} · 在库 ${(l.onhand / 10_000).toFixed(1)} 万件` : `${l.district} · ${KINDS.supplier.label}`)
+  const translate = opts.translate ?? ((text: string) => text)
+  const sublabel = (l: Location): string => (l.kind === 'warehouse' ? `${translate(l.district)} · ${translate('在库')} ${(l.onhand / 10_000).toFixed(1)} ${translate('万件')}` : `${translate(l.district)} · ${translate(KINDS.supplier.label)}`)
   const backdropMaterial = basic({ color: COLORS.backdrop, opacity: LABELS.backdropAlpha, depthTest: false })
   const widthOf = (p: TextPlane): number => { p.geometry.computeBoundingBox(); const b = p.geometry.boundingBox!; return b.max.x - b.min.x }
   const heightOfPlane = (p: TextPlane): number => { p.geometry.computeBoundingBox(); const b = p.geometry.boundingBox!; return b.max.y - b.min.y }
   // warehouses first, the most stock first, then the suppliers: the order the decluttering keeps them in
   const tagged = [...ofKind.warehouse].sort((a, b) => b.onhand - a.onhand).concat(ofKind.supplier).map(l => {
-    const name = textPlane(l.name, { size: LABELS.name, color: COLORS.label, weight: 600, createCanvas: opts.createCanvas })
+    const name = textPlane(translate(l.name), { size: LABELS.name, color: COLORS.label, weight: 600, createCanvas: opts.createCanvas })
     const sub = textPlane(sublabel(l), { size: LABELS.sub, color: COLORS.sublabel, weight: 500, createCanvas: opts.createCanvas })
     for (const [p, n] of [[name, 'name'], [sub, 'sub']] as const) {
       owned.labels.push(p)

@@ -4,7 +4,7 @@
 // today's runs as arcs); the controls' hint and the map data's credit under it. Wheel to zoom, drag to pan, right-drag
 // or Shift-drag to turn; hover a place to light it and its runs, which `hover` reports (with the side of the map it
 // shows on) so Spatial.vue can float the place panel on the other side.
-import { markRaw, onBeforeUnmount, reactive, watch } from 'vue'
+import { computed, markRaw, onBeforeUnmount, reactive, watch } from 'vue'
 import { Box, Button, GlassContainer, Stack, Text, useCanvasFactory, useMotion, useSurfaceRef, Viewport3D } from '@glassui/vue'
 import type { UIEvent } from '@glassui/core'
 import type { Viewport3DContext } from '@glassui/render'
@@ -12,6 +12,8 @@ import geo from './geo/xuzhou.json'
 import { KINDS, network, STOCK_LEVELS, stockLevel } from './data'
 import { createNetworkMap, type GeoData, type PlaceHover } from './map'
 import Breadcrumb from './Breadcrumb.vue'
+import { useSpatialLocale } from './locale'
+const { t } = useSpatialLocale()
 
 /** `active`: this Block is the focus (Spatial.vue's); off it the map holds still (default true). */
 const props = withDefaults(defineProps<{ active?: boolean; traceWarehouseId?: string | null; traceLaneId?: string | null }>(), { active: true, traceWarehouseId: null, traceLaneId: null })
@@ -20,7 +22,7 @@ const emit = defineEmits<{ hover: [place: PlaceHover | null]; navigate: [name: s
 // the map, made once (raw: three objects must not become reactive proxies). Under frozen motion (screenshots), and
 // while the Block is not the focus, it is as under reduced motion: the view is where it is headed at once and the dots
 // park, so the map asks for no frames it does not need
-const map = markRaw(createNetworkMap(geo as GeoData, network, { createCanvas: useCanvasFactory() }))
+const map = markRaw(createNetworkMap(geo as GeoData, network, { createCanvas: useCanvasFactory(), translate: t }))
 watch(() => props.traceWarehouseId, id => map.hover(id), { immediate: true })
 watch(() => props.traceLaneId, id => map.highlightLane(id), { immediate: true })
 const layers = reactive({ store: true, warehouse: true, supplier: true })
@@ -34,18 +36,18 @@ const places = network.locations, lanes = network.lanes
 const count = (k: keyof typeof KINDS): number => places.filter(l => l.kind === k).length
 const moving = lanes.filter(l => l.status !== 'planned').length, overdue = lanes.filter(l => l.status === 'overdue').length
 const held = places.filter(l => l.kind !== 'supplier').reduce((s, l) => s + l.onhand, 0)
-const stats = [
-  { text: `${count('warehouse')} 个仓库 · ${count('store')} 家门店 · ${count('supplier')} 家供应商 · 在途 ${moving} 单 · ` },
-  { text: `逾期 ${overdue}`, color: 'danger', weight: 600 },
-  { text: ` · 在库 ${(held / 10_000).toFixed(1)} 万件` },
-]
+const stats = computed(() => [
+  { text: `${count('warehouse')} ${t('个仓库')} · ${count('store')} ${t('家门店')} · ${count('supplier')} ${t('家供应商')} · ${t('在途')} ${moving} ${t('单')} · ` },
+  { text: `${t('逾期')} ${overdue}`, color: 'danger', weight: 600 },
+  { text: ` · ${t('在库')} ${(held / 10_000).toFixed(1)} ${t('万件')}` },
+])
 const stores = places.filter(l => l.kind === 'store')
-const legend = [
-  { key: 'store', label: KINDS.store.label, color: KINDS.store.color, count: count('store') },
-  { key: 'warehouse', label: KINDS.warehouse.label, color: KINDS.warehouse.color, count: count('warehouse') },
-  { key: 'supplier', label: KINDS.supplier.label, color: KINDS.supplier.color, count: count('supplier') },
-  ...STOCK_LEVELS.map(s => ({ key: s.key, label: s.label, color: s.color, count: stores.filter(l => stockLevel(l).key === s.key).length })),
-]
+const legend = computed(() => [
+  { key: 'store', label: t(KINDS.store.label), color: KINDS.store.color, count: count('store') },
+  { key: 'warehouse', label: t(KINDS.warehouse.label), color: KINDS.warehouse.color, count: count('warehouse') },
+  { key: 'supplier', label: t(KINDS.supplier.label), color: KINDS.supplier.color, count: count('supplier') },
+  ...STOCK_LEVELS.map(s => ({ key: s.key, label: t(s.label), color: s.color, count: stores.filter(l => stockLevel(l).key === s.key).length })),
+])
 
 /** Radians the map turns a CSS px dragged sideways (yaw) and up (pitch); the wheel's zoom per unit of deltaY. */
 const TURN = 0.008, TILT = 0.005, WHEEL = 0.0015
@@ -122,8 +124,8 @@ onBeforeUnmount(() => {
 <template>
   <Stack direction="horizontal" justify="between" align="end" :style="{ flexShrink: 0 }">
     <Stack :gap="4">
-      <Breadcrumb id="crumb-overview-network" title="物流网络" @navigate="emit('navigate', null)" />
-      <Text value="物流网络 · 徐州" :size="24" :weight="700" />
+      <Breadcrumb id="crumb-overview-network" :title="t('物流网络')" @navigate="emit('navigate', null)" />
+      <Text :value="t('物流网络 · 徐州')" :size="24" :weight="700" />
       <Text :value="stats" :size="14" color="secondaryLabel" :wrap="false" />
     </Stack>
     <Stack direction="horizontal" :gap="8">
@@ -140,7 +142,7 @@ onBeforeUnmount(() => {
   <Stack direction="horizontal" justify="end" :style="{ flexShrink: 0 }">
     <GlassContainer>
       <Button shape="circle" leading-icon="plus" @press="map.zoomBy(1.25)"/><Button shape="circle" leading-icon="minus" @press="map.zoomBy(0.8)"/><Button shape="circle" leading-icon="refresh" @press="map.resetView()"/>
-      <Button v-for="kind in layerKinds" :key="kind" size="small" :label="{store:'门店',warehouse:'仓库',supplier:'供应商'}[kind]" :variant="layers[kind] ? 'tinted' : 'glass'" @press="toggleLayer(kind)"/>
+      <Button v-for="kind in layerKinds" :key="kind" size="small" :label="t({store:'门店',warehouse:'仓库',supplier:'供应商'}[kind])" :variant="layers[kind] ? 'tinted' : 'glass'" @press="toggleLayer(kind)"/>
     </GlassContainer>
   </Stack>
   <Viewport3D
@@ -149,7 +151,7 @@ onBeforeUnmount(() => {
   />
 
   <Stack direction="horizontal" justify="between" align="center" :style="{ flexShrink: 0 }">
-    <Text value="滚轮缩放 · 左键平移 · 右键/Shift 旋转 · 悬停查看地点" :size="13" color="tertiaryLabel" />
+    <Text :value="t('滚轮缩放 · 左键平移 · 右键/Shift 旋转 · 悬停查看地点')" :size="13" color="tertiaryLabel" />
     <Text value="© OpenStreetMap contributors · DataV" :size="12" color="tertiaryLabel" :wrap="false" />
   </Stack>
 </template>

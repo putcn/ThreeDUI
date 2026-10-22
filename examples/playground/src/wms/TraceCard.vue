@@ -4,8 +4,10 @@ import { Box, Button, Stack, Text, useMotion, useRoot, useScheme, useSurfaceRef 
 import type { ArcSlot } from '@glassui/vue'
 import type { Order } from './data'
 import { SHORT_PICK } from './data'
+import { useSpatialLocale } from './locale'
 
 const props = defineProps<{ order: Order; step: 'orders' | 'network' | 'twin'; target: ArcSlot }>()
+const { locale, t } = useSpatialLocale()
 const emit = defineEmits<{ next: []; close: [] }>()
 const surface = useSurfaceRef(), frozen = useMotion() === 'frozen'
 const root = useRoot(), scheme = useScheme()
@@ -13,13 +15,13 @@ const veil = computed(() => {
   const fill = root.theme.colors[scheme.value].fill ?? '#ffffff'
   return /^#[0-9a-f]{6}$/i.test(fill) ? `${fill}e0` : fill
 })
-const stepText = computed(() => props.step === 'orders' ? '订单异常' : props.step === 'network' ? '关联路线' : '异常库位')
+const stepText = computed(() => t(props.step === 'orders' ? '订单异常' : props.step === 'network' ? '关联路线' : '异常库位'))
 const detail = computed(() => props.step === 'orders'
-  ? `应拣 ${SHORT_PICK.wanted} 件，库位 ${SHORT_PICK.bin} 实际 ${SHORT_PICK.qty} 件。`
+  ? locale.value === 'zh' ? `应拣 ${SHORT_PICK.wanted} 件，库位 ${SHORT_PICK.bin} 实际 ${SHORT_PICK.qty} 件。` : `Pick requires ${SHORT_PICK.wanted} units; bin ${SHORT_PICK.bin} has ${SHORT_PICK.qty}.`
   : props.step === 'network'
-    ? '一条进入徐州一号仓的补货线路已逾期，可继续排查库位。'
-    : `${SHORT_PICK.bin} 当前 ${SHORT_PICK.qty} 件，少于订单所需 ${SHORT_PICK.wanted} 件。`)
-const action = computed(() => props.step === 'orders' ? '查看关联路线' : props.step === 'network' ? '定位异常库位' : '返回订单')
+    ? t('一条进入徐州一号仓的补货线路已逾期，可继续排查库位。')
+    : locale.value === 'zh' ? `${SHORT_PICK.bin} 当前 ${SHORT_PICK.qty} 件，少于订单所需 ${SHORT_PICK.wanted} 件。` : `${SHORT_PICK.bin} has ${SHORT_PICK.qty} units, below the ${SHORT_PICK.wanted} needed for this order.`)
+const action = computed(() => t(props.step === 'orders' ? '查看关联路线' : props.step === 'network' ? '定位异常库位' : '返回订单'))
 
 onMounted(() => {
   const s = surface.value

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, shallowRef } from 'vue'
 import { Block, Space, Surface } from '@glassui/vue'
+import { setDemoLocale, type DemoLocale } from '../demo-locale'
+import { provideSpatialLocale } from '../wms/locale'
 import Dashboard from '../wms/Dashboard.vue'
 import Network from '../wms/Network.vue'
 import Twin from '../wms/Twin.vue'
@@ -17,7 +19,10 @@ import type { PlaceHover } from '../wms/map'
 import { initialFlow, loginSucceeded, arrived, chose, autoZoom, loggedOut, type Flow } from '../wms/flow'
 import { BLOCKS, BLOCK_SCALE, GRID, inFrameOf, NETWORK, PANEL, PLACE_PANEL, SLOT_BY_NAME, TRACE_PANEL, TWIN } from './spatial-grid'
 
-const props = defineProps<{ initialFocus?: string; initialStage?: 'login' | 'overview'; onCameraMove?: () => void; onCameraArrive?: (name: string | null) => void }>()
+const props = defineProps<{ initialFocus?: string; initialStage?: 'login' | 'overview'; initialLocale?: DemoLocale; onCameraMove?: () => void; onCameraArrive?: (name: string | null) => void }>()
+const locale = ref<DemoLocale>(props.initialLocale ?? 'zh')
+provideSpatialLocale(locale)
+function toggleLocale(): void { locale.value = locale.value === 'zh' ? 'en' : 'zh'; setDemoLocale(locale.value) }
 const flow = ref<Flow>(initialFlow({ ...(props.initialStage ? { stage: props.initialStage } : {}), ...(props.initialFocus ? { focus: props.initialFocus } : {}) }))
 const focus = computed(() => flow.value.focus)
 const cameraEnabled = ref(true)
@@ -55,13 +60,13 @@ onBeforeUnmount(() => { clearTimeout(autoTimer); if (typeof window !== 'undefine
   <Space :focus="focus" :radius="GRID.radius" :gap="GRID.gap" :camera-margin="GRID.cameraMargin" :camera="cameraEnabled" :parallax="false" layout="grid" :columns="GRID.columns" overview :standby="flow.stage === 'login'" @update:focus="onChoose" @arrive="onArrive">
     <Block name="orders" :width="BLOCKS.orders.width" :height="BLOCKS.orders.height" :position="SLOT_BY_NAME.orders.position" :rotation="SLOT_BY_NAME.orders.rotation" :unfocused-opacity="0.32"><Orders @navigate="go" @trace="startTrace"/></Block>
     <Block name="dashboard" :width="BLOCKS.dashboard.width" :height="BLOCKS.dashboard.height" :position="SLOT_BY_NAME.dashboard.position" :rotation="SLOT_BY_NAME.dashboard.rotation" :scale="BLOCK_SCALE.dashboard" :unfocused-opacity="0.32"><Dashboard @navigate="go"/></Block>
-    <Block name="network" :width="BLOCKS.network.width" :height="BLOCKS.network.height" :position="NETWORK.position" :rotation="NETWORK.rotation" :unfocused-opacity="0.32"><Network :active="focus === 'network'" :trace-warehouse-id="traceOrder ? 'WH-1' : null" :trace-lane-id="traceOrder ? traceLane : null" @hover="p => (place = p)" @navigate="go"/></Block>
+    <Block name="network" :width="BLOCKS.network.width" :height="BLOCKS.network.height" :position="NETWORK.position" :rotation="NETWORK.rotation" :unfocused-opacity="0.32"><Network :key="locale" :active="focus === 'network'" :trace-warehouse-id="traceOrder ? 'WH-1' : null" :trace-lane-id="traceOrder ? traceLane : null" @hover="p => (place = p)" @navigate="go"/></Block>
     <Block name="twin" :width="BLOCKS.twin.width" :height="BLOCKS.twin.height" :position="TWIN.position" :rotation="TWIN.rotation" :unfocused-opacity="0.32"><Twin :active="focus === 'twin'" :trace-bin-id="traceOrder ? SHORT_PICK.bin : null" @hover="b => (hovered = b)" @navigate="go"/></Block>
     <Block name="inventory" :width="BLOCKS.inventory.width" :height="BLOCKS.inventory.height" :position="SLOT_BY_NAME.inventory.position" :rotation="SLOT_BY_NAME.inventory.rotation" :unfocused-opacity="0.32"><Inventory @navigate="go" @inspect="inspectShortPick"/></Block>
     <Block name="settings" :width="BLOCKS.settings.width" :height="BLOCKS.settings.height" :position="SLOT_BY_NAME.settings.position" :rotation="SLOT_BY_NAME.settings.rotation" :unfocused-opacity="0.32"><Settings @navigate="go" @logout="logout"/></Block>
   </Space>
-  <LoginHud v-if="flow.stage === 'login'" @success="login" />
-  <Dock v-if="flow.stage === 'operating'" :current="flow.focus" @go="go" />
+  <LoginHud v-if="flow.stage === 'login'" @success="login" @toggle-language="toggleLocale" />
+  <Dock v-if="flow.stage === 'operating'" :current="flow.focus" @go="go" @toggle-language="toggleLocale" />
   <Surface v-if="traceOrder" :width="TRACE_PANEL.width" :height="TRACE_PANEL.height" :pt-per-unit="TRACE_PANEL.ptPerUnit" :position="tracePoses.orders.position" :rotation="tracePoses.orders.rotation" background="glass" :radius="28" :cast-shadows="false"><TraceCard :order="traceOrder" :step="traceStep" :target="tracePoses[traceStep]" @next="advanceTrace" @close="traceOrder = null"/></Surface>
   <Surface v-if="hovered && !traceOrder && focus === 'twin'" :width="PANEL.width" :height="PANEL.height" :pt-per-unit="PANEL.ptPerUnit" :position="panel.position" :rotation="panel.rotation" background="glass" :radius="28" :interactive="false" :cast-shadows="false"><BinPanel :bin="hovered"/></Surface>
   <Surface v-if="place && !traceOrder && focus === 'network'" :key="place.side" :width="PLACE_PANEL.width" :height="PLACE_PANEL.height" :pt-per-unit="PLACE_PANEL.ptPerUnit" :position="placePanel[place.side].position" :rotation="placePanel[place.side].rotation" background="glass" :radius="28" :interactive="false" :cast-shadows="false"><LocationPanel :place="place.location"/></Surface>

@@ -45,7 +45,7 @@ const params = new URLSearchParams(location.search)
 const forceWebGL = params.has('webgl')
 const sceneParam = params.get('scene')
 const mode: SceneMode = SCENES.find(s => s === sceneParam) ?? 'both'
-const demoLocale = mode === 'gallery' ? getDemoLocale() : undefined
+const demoLocale = mode === 'gallery' || mode === 'spatial' ? getDemoLocale() : undefined
 if (demoLocale) document.documentElement.lang = demoLocale === 'zh' ? 'zh-CN' : 'en'
 const scheme = params.get('scheme') === 'dark' ? 'dark' : 'light'
 const motion = params.get('motion') === 'frozen' ? 'frozen' : 'live'
@@ -160,7 +160,7 @@ async function start(): Promise<UIRoot> {
     controls.update()
   }
   const scenes = { signup: SignUp, world: World, both: Both, gallery: Gallery, perf: Perf, spatial: Spatial }
-  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined, initialLocale: demoLocale, onNavigate: navigateGallery } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}), onCameraMove: moveSpatialCamera, onCameraArrive: arriveSpatialCamera } : mode === 'signup' ? { inspect: true } : undefined).mount()
+  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined, initialLocale: demoLocale, onNavigate: navigateGallery } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}), initialLocale: demoLocale, onCameraMove: moveSpatialCamera, onCameraArrive: arriveSpatialCamera } : mode === 'signup' ? { inspect: true } : undefined).mount()
   // Vue's initial post-flush effects register Blocks and send the camera rig to the requested focus.
   await nextTick()
   if (mode === 'gallery') navigateGallery(GALLERY_SECTIONS.find(section => section === params.get('focus')) ?? 'primitives', true)

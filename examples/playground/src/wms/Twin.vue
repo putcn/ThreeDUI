@@ -9,6 +9,8 @@ import type { Viewport3DContext } from '@glassui/render'
 import { BIN_LEVELS, binLevel, bins, RACKS, utilisation, type Bin } from './data'
 import { createWarehouse } from './warehouse'
 import Breadcrumb from './Breadcrumb.vue'
+import { useSpatialLocale } from './locale'
+const { t } = useSpatialLocale()
 
 /** `active`: this Block is the focus (Spatial.vue's); off it the model holds still (default true). */
 const props = withDefaults(defineProps<{ active?: boolean; traceBinId?: string | null }>(), { active: true, traceBinId: null })
@@ -89,21 +91,21 @@ onBeforeUnmount(() => {
 <template>
   <Stack direction="horizontal" justify="between" align="end" :style="{ flexShrink: 0 }">
     <Stack :gap="4">
-      <Breadcrumb id="crumb-overview-twin" title="仓储孪生" @navigate="emit('navigate', null)" />
-      <Text value="仓储孪生 · 徐州一号仓" :size="24" :weight="700" />
-      <Text :value="`${RACKS.rows} 排 · ${bins.length} 个库位 · 利用率 ${percent}%`" :size="14" color="secondaryLabel" />
+      <Breadcrumb id="crumb-overview-twin" :title="t('仓储孪生')" @navigate="emit('navigate', null)" />
+      <Text :value="t('仓储孪生 · 徐州一号仓')" :size="24" :weight="700" />
+      <Text :value="`${RACKS.rows} ${t('排')} · ${bins.length} ${t('个库位')} · ${t('利用率')} ${percent}%`" :size="14" color="secondaryLabel" />
     </Stack>
     <Stack direction="horizontal" :gap="8">
       <GlassContainer>
-        <Button v-for="v in [{key:'top',label:'俯视'},{key:'angled',label:'斜视'},{key:'front',label:'正视'}] as const" :key="v.key" :label="v.label" size="small" :variant="preset === v.key ? 'glassProminent' : 'glass'" @press="setPreset(v.key)"/>
+        <Button v-for="v in [{key:'top',label:'俯视'},{key:'angled',label:'斜视'},{key:'front',label:'正视'}] as const" :key="v.key" :label="t(v.label)" size="small" :variant="preset === v.key ? 'glassProminent' : 'glass'" @press="setPreset(v.key)"/>
       </GlassContainer>
-      <Switch :checked="lowOnly" label="只显示低库存" @update:checked="setLowOnly"/>
+      <Switch :checked="lowOnly" :label="t('只显示低库存')" @update:checked="setLowOnly"/>
       <Stack
         v-for="l in counts" :key="l.key" direction="horizontal" align="center" :gap="6"
         :style="{ paddingX: 12, height: 30, radius: 'capsule', bg: '#ffffff73', border: { width: 1, color: 'separator' } }"
       >
         <Box :style="{ width: 10, height: 10, radius: 3, bg: l.color }" />
-        <Text :value="[{ text: l.label }, { text: ` ${l.count}`, color: 'tertiaryLabel' }]" :size="13" :wrap="false" />
+        <Text :value="[{ text: t(l.label) }, { text: ` ${l.count}`, color: 'tertiaryLabel' }]" :size="13" :wrap="false" />
       </Stack>
     </Stack>
   </Stack>
@@ -114,10 +116,10 @@ onBeforeUnmount(() => {
   />
 
   <Stack direction="horizontal" justify="between" align="center" :style="{ flexShrink: 0 }">
-    <Text value="拖动旋转 · 悬停查看库位" :size="13" color="tertiaryLabel" />
+    <Text :value="t('拖动旋转 · 悬停查看库位')" :size="13" color="tertiaryLabel" />
     <Stack direction="horizontal" align="center" :gap="6">
       <Box :style="{ width: 8, height: 8, radius: 4, bg: 'success' }" />
-      <Text :value="[{ text: 'AGV-01 运行中' }, { text: ' · 今日搬运 412 次', color: 'tertiaryLabel' }]" :size="13" :wrap="false" />
+      <Text :value="[{ text: t('AGV-01 运行中') }, { text: t(' · 今日搬运 412 次'), color: 'tertiaryLabel' }]" :size="13" :wrap="false" />
     </Stack>
   </Stack>
 </template>

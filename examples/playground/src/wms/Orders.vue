@@ -7,6 +7,8 @@ import Breadcrumb from './Breadcrumb.vue'
 import OrderDialog from './OrderDialog.vue'
 import { filterOrders } from './forms'
 import Inbound from './Inbound.vue'
+import { useSpatialLocale } from './locale'
+const { t } = useSpatialLocale()
 
 const emit = defineEmits<{ navigate: [name: string | null]; trace: [order: Order] }>()
 
@@ -21,7 +23,7 @@ const STATUS: Record<OrderStatus, { color: string; bg: string }> = {
 const COL = { no: 150, items: 64, status: 92, time: 48 } as const
 const orders = ref(sourceOrders.map(o => ({ ...o })))
 const query = ref(''), overdueOnly = ref(false), todayOnly = ref(false), selected = ref<Order | null>(null), dialog = ref(false), inboundDialog = ref(false), exporting = ref(false), exported = ref(false)
-const rows = computed(() => filterOrders(orders.value, { query: query.value, overdueOnly: overdueOnly.value, todayOnly: todayOnly.value }))
+const rows = computed(() => filterOrders(orders.value, { query: '', overdueOnly: overdueOnly.value, todayOnly: todayOnly.value }).filter(order => !query.value.trim() || `${order.no} ${order.customer} ${t(order.customer)}`.toLowerCase().includes(query.value.trim().toLowerCase())))
 const pending = computed(() => orders.value.filter(o => o.status === '待拣货' || o.status === '拣货中').length)
 const today = grouped(outboundToday)
 let exportTimer: ReturnType<typeof setTimeout> | undefined, exportedTimer: ReturnType<typeof setTimeout> | undefined
@@ -33,32 +35,32 @@ onBeforeUnmount(() => { clearTimeout(exportTimer); clearTimeout(exportedTimer) }
 
 <template>
   <Stack :gap="2" :style="{ flexShrink: 0 }">
-    <Breadcrumb id="crumb-overview-orders" title="订单" @navigate="emit('navigate', null)" />
+    <Breadcrumb id="crumb-overview-orders" :title="t('订单')" @navigate="emit('navigate', null)" />
     <Stack direction="horizontal" justify="between" align="end">
-      <Text value="最近订单" :size="24" :weight="700" />
-      <Stack direction="horizontal" align="center" :gap="14"><Text :value="[{ text: `今日 ${today} 单` }, { text: `  ·  待处理 ${pending}`, color: 'accent', weight: 600 }]" :size="14" color="secondaryLabel" :wrap="false" /><Button id="orders-new-inbound" variant="glassProminent" leading-icon="plus" label="新建入库" @press="inboundDialog = true" /></Stack>
+      <Text :value="t('最近订单')" :size="24" :weight="700" />
+      <Stack direction="horizontal" align="center" :gap="14"><Text :value="[{ text: `${t('今日')} ${today} ${t('单')}` }, { text: `  ·  ${t('待处理')} ${pending}`, color: 'accent', weight: 600 }]" :size="14" color="secondaryLabel" :wrap="false" /><Button id="orders-new-inbound" variant="glassProminent" leading-icon="plus" :label="t('新建入库')" @press="inboundDialog = true" /></Stack>
     </Stack>
-    <Stack direction="horizontal" align="center" :gap="12"><Input v-model="query" leading-icon="search" placeholder="搜索单号或客户"/><Checkbox v-model:checked="overdueOnly" label="只看逾期"/><Checkbox v-model:checked="todayOnly" label="只看今日"/><Button variant="glass" :label="exported ? '已导出' : '导出'" :loading="exporting" @press="exportOrders"/></Stack>
+    <Stack direction="horizontal" align="center" :gap="12"><Input v-model="query" leading-icon="search" :placeholder="t('搜索单号或客户')"/><Checkbox v-model:checked="overdueOnly" :label="t('只看逾期')"/><Checkbox v-model:checked="todayOnly" :label="t('只看今日')"/><Button variant="glass" :label="t(exported ? '已导出' : '导出')" :loading="exporting" @press="exportOrders"/></Stack>
   </Stack>
 
   <Card :style="{ gap: 0, paddingY: 14, flexShrink: 0 }">
     <Stack direction="horizontal" align="center" :gap="12" :style="{ height: 32 }">
-      <Text value="单号" :size="13" color="tertiaryLabel" :style="{ width: COL.no }" />
-      <Text value="客户" :size="13" color="tertiaryLabel" :style="{ flexGrow: 1, flexBasis: 0 }" />
-      <Text value="件数" :size="13" color="tertiaryLabel" align="right" :style="{ width: COL.items }" />
-      <Text value="状态" :size="13" color="tertiaryLabel" :style="{ width: COL.status, paddingLeft: 12 }" />
-      <Text value="时间" :size="13" color="tertiaryLabel" align="right" :style="{ width: COL.time }" />
+      <Text :value="t('单号')" :size="13" color="tertiaryLabel" :style="{ width: COL.no }" />
+      <Text :value="t('客户')" :size="13" color="tertiaryLabel" :style="{ flexGrow: 1, flexBasis: 0 }" />
+      <Text :value="t('件数')" :size="13" color="tertiaryLabel" align="right" :style="{ width: COL.items }" />
+      <Text :value="t('状态')" :size="13" color="tertiaryLabel" :style="{ width: COL.status, paddingLeft: 12 }" />
+      <Text :value="t('时间')" :size="13" color="tertiaryLabel" align="right" :style="{ width: COL.time }" />
     </Stack>
     <template v-for="(o, rowIndex) in rows" :key="o.no">
       <Box :style="{ height: 1, bg: 'separator' }" />
       <Box :id="`order-row-${rowIndex}`" :style="{ flexDirection: 'row', alignItems: 'center', gap: 12, height: 40, hover: { opacity: 0.76 } }" @click="selected = o; dialog = true">
         <Text :value="o.no" :size="14" :style="{ width: COL.no, font: 'Menlo' }" :wrap="false" />
-        <Text :value="o.customer" :size="15" :max-lines="1" :style="{ flexGrow: 1, flexBasis: 0 }" />
-        <Text :value="`${grouped(o.items)} 件`" :size="14" color="secondaryLabel" align="right" :style="{ width: COL.items }" :wrap="false" />
+        <Text :value="t(o.customer)" :size="15" :max-lines="1" :style="{ flexGrow: 1, flexBasis: 0 }" />
+        <Text :value="`${grouped(o.items)} ${t('件')}`" :size="14" color="secondaryLabel" align="right" :style="{ width: COL.items }" :wrap="false" />
         <Box :style="{ width: COL.status, paddingLeft: 12, alignItems: 'flex-start' }">
           <Stack direction="horizontal" align="center" :gap="5" :style="{ paddingX: 9, height: 24, radius: 'capsule', bg: STATUS[o.status].bg }">
             <Box :style="{ width: 6, height: 6, radius: 3, bg: STATUS[o.status].color }" />
-            <Text :value="o.status" :size="13" :weight="600" :color="STATUS[o.status].color" :wrap="false" />
+            <Text :value="t(o.status)" :size="13" :weight="600" :color="STATUS[o.status].color" :wrap="false" />
           </Stack>
         </Box>
         <Text :value="o.time" :size="14" color="tertiaryLabel" align="right" :style="{ width: COL.time }" :wrap="false" />
@@ -67,14 +69,14 @@ onBeforeUnmount(() => { clearTimeout(exportTimer); clearTimeout(exportedTimer) }
   </Card>
 
   <OrderDialog v-model:open="dialog" :order="selected" @ship="ship" @trace="trace" />
-  <Dialog v-model:open="inboundDialog" title="新建入库单" :width="850">
+  <Dialog v-model:open="inboundDialog" :title="t('新建入库单')" :width="850">
     <Inbound embedded @close="inboundDialog = false" />
   </Dialog>
 
   <Card :style="{ flexShrink: 0 }">
     <Stack direction="horizontal" align="center" :gap="8">
       <Icon name="warning" :size="20" color="danger" />
-      <Text value="异常告警" :size="17" :weight="600" />
+      <Text :value="t('异常告警')" :size="17" :weight="600" />
       <Box :style="{ paddingX: 8, height: 20, radius: 'capsule', bg: '#ff3b301a', justifyContent: 'center' }">
         <Text :value="String(alerts.length)" :size="12" :weight="700" color="danger" />
       </Box>
@@ -82,10 +84,10 @@ onBeforeUnmount(() => { clearTimeout(exportTimer); clearTimeout(exportedTimer) }
     <Stack v-for="a in alerts" :key="a.title" direction="horizontal" align="start" :gap="12" :style="{ paddingY: 4 }">
       <Box :style="{ width: 8, height: 8, radius: 4, marginTop: 7, bg: a.level === 'danger' ? 'danger' : '#ff9f0a' }" />
       <Stack :gap="2" :style="{ flexGrow: 1, flexBasis: 0 }">
-        <Text :value="a.title" :size="15" :weight="600" />
-        <Text :value="a.detail" :size="13" color="secondaryLabel" :max-lines="1" />
+        <Text :value="t(a.title)" :size="15" :weight="600" />
+        <Text :value="t(a.detail)" :size="13" color="secondaryLabel" :max-lines="1" />
       </Stack>
-      <Button v-if="a.level === 'warning'" id="orders-trace-anomaly" size="small" variant="glass" label="追踪" @press="trace(orders.find(o => o.status === '异常')!)" />
+      <Button v-if="a.level === 'warning'" id="orders-trace-anomaly" size="small" variant="glass" :label="t('追踪')" @press="trace(orders.find(o => o.status === '异常')!)" />
       <Text :value="a.time" :size="13" color="tertiaryLabel" :wrap="false" />
     </Stack>
   </Card>

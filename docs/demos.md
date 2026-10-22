@@ -2,7 +2,7 @@
 
 Run `pnpm install && pnpm playground` from the repository root. The server listens on `http://127.0.0.1:5176`; the [demo index](http://127.0.0.1:5176/demos.html) is the easiest entry point. These demos run from source and use local sample data.
 
-The demo index and component gallery have a visible 中文 / EN switch. The choice follows the gallery link and is saved for the next visit. To pick a language directly, add `?lang=zh` or `?lang=en` to `demos.html`, or `&lang=zh|en` to the gallery URL. The gallery keeps its current section and control state when you switch.
+The demo index, component gallery, and spatial application have a visible 中文 / EN switch. The choice follows demo links and is saved for the next visit. To pick a language directly, add `?lang=zh` or `?lang=en` to `demos.html`, or `&lang=zh|en` to the gallery or spatial URL. Switching language keeps the current view and input state.
 
 The canvas scenes are designed for a desktop-sized browser window. In a narrow sidebar pane, the fixed-size gallery Blocks shrink to fit; open the demo in a full browser window to inspect controls and text.
 
@@ -15,7 +15,7 @@ The canvas scenes are designed for a desktop-sized browser window. In a narrow s
 | World surface | [`?scene=world`](http://127.0.0.1:5176/?scene=world) | [`World.vue`](../examples/playground/src/scenes/World.vue) |
 | Screen + world | [`?scene=both`](http://127.0.0.1:5176/?scene=both) | [`Both.vue`](../examples/playground/src/scenes/Both.vue) |
 
-The spatial app has six named Blocks: `orders`, `dashboard`, `network`, `twin`, `inventory`, and `settings`. It starts with a prefilled, valid sample login; click **登录** to enter. In empty scene space, **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Dragging or scrolling a view still operates its table or map. Add `&focus=<name>` to jump into one without the login step when developing locally. The gallery's sections are `primitives`, `buttons`, `toggles`, `inputs`, `dialog`, and `containers`; add `&focus=<section>` to open one directly. In the gallery, **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Its fixed bottom navigation reframes the camera; the component examples remain interactive, including text entry, dialogs, and fused glass.
+The spatial app has six named Blocks: `orders`, `dashboard`, `network`, `twin`, `inventory`, and `settings`. It starts with a prefilled, valid sample login; click **登录** or **Sign in** to enter. The language switch appears on the login card and in the fixed bottom navigation afterward. In empty scene space, **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Dragging or scrolling a view still operates its table or map. Add `&focus=<name>` to jump into one without the login step when developing locally. The gallery's sections are `primitives`, `buttons`, `toggles`, `inputs`, `dialog`, and `containers`; add `&focus=<section>` to open one directly. In the gallery, **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Its fixed bottom navigation reframes the camera; the component examples remain interactive, including text entry, dialogs, and fused glass.
 
 The standalone sign-up demo places its glass form in world space so you can inspect its thickness: **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Click without dragging to use the form controls. The combined screen + world scene still uses a screen-layer sign-up form.
 
