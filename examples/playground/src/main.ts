@@ -1,13 +1,13 @@
 // Canvas-only Vue playground. ?scene=signup|world|both|gallery|perf|spatial; ?focus=<Block name> (gallery/spatial).
 // ?scheme=light|dark, ?motion=frozen|live, ?quality=high|medium|low|minimal|auto, ?webgl, ?hud=0.
-// Signup uses OrbitControls for glass inspection; world/both orbit; gallery/spatial give their camera to Space.
+// Signup and gallery use OrbitControls for inspection; gallery navigation briefly uses a camera rig.
 
 import { nextTick } from 'vue'
-import { Color, MOUSE, PerspectiveCamera, Raycaster, Scene, Vector2, type Mesh } from 'three'
+import { Color, MOUSE, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, type Mesh } from 'three'
 import { WebGPURenderer } from 'three/webgpu'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { absoluteRect, type Node, type Rect } from '@glassui/core'
-import { createUIRoot, QUALITY, type QualityTier, type Surface, type UIRoot } from '@glassui/render'
+import { createUIRoot, QUALITY, type CameraRig, type QualityTier, type Surface, type UIRoot } from '@glassui/render'
 // the orbit guard's own raycast and the host scene's studio environment: no public equivalents
 import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
@@ -39,6 +39,7 @@ declare global { interface Window { __glassui?: PlaygroundHandle } }
 declare global { interface Window { __glassuiSpatialFocus?: () => string | null } }
 
 const SCENES = ['signup', 'world', 'both', 'gallery', 'perf', 'spatial'] as const
+const GALLERY_SECTIONS = ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers'] as const
 type SceneMode = (typeof SCENES)[number]
 const params = new URLSearchParams(location.search)
 const forceWebGL = params.has('webgl')
@@ -79,18 +80,18 @@ camera.lookAt(0, -0.05, 0)
 if (mode !== 'spatial' && mode !== 'gallery') hostScene.add(createWall(scheme))
 hostScene.add(...createHostLights())
 
-const orbit = mode === 'signup' || mode === 'world' || mode === 'both'
-// No orbit controller in either Space scene: its Space's camera rig writes the camera pose every tick, and OrbitControls' update (its
-// `lookAt`) would fight it
-const controls = mode === 'spatial' || mode === 'gallery' ? null : new OrbitControls(camera, renderer.domElement)
+const orbit = mode === 'signup' || mode === 'world' || mode === 'both' || mode === 'gallery'
+// Spatial's Space owns its camera. Gallery's Space only manages layout/focus; its host hands the camera between a
+// short-lived navigation rig and OrbitControls so both never write the pose in one frame.
+const controls = mode === 'spatial' ? null : new OrbitControls(camera, renderer.domElement)
 if (controls) {
   controls.target.set(0, -0.05, 0)
   controls.enableDamping = true
   controls.enabled = orbit
-  if (mode === 'signup') {
+  if (mode === 'signup' || mode === 'gallery') {
     controls.mouseButtons = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE }
-    controls.minDistance = 4
-    controls.maxDistance = 14
+    controls.minDistance = mode === 'gallery' ? 3 : 4
+    controls.maxDistance = mode === 'gallery' ? 22 : 14
     controls.minPolarAngle = 0.45
     controls.maxPolarAngle = Math.PI - 0.45
     controls.minAzimuthAngle = -1.35
@@ -126,10 +127,31 @@ async function start(): Promise<UIRoot> {
   // Set scheme before Vue components read their first tokens.
   root.setScheme(scheme)
   root.on('error', e => console.error('[glassui]', e.surface?.name ?? '(no Surface)', e.error))
+  let galleryRig: CameraRig | null = null, galleryFlight = 0
+  const navigateGallery = (name: string, immediate = false): void => {
+    const index = GALLERY_SECTIONS.findIndex(section => section === name)
+    const surface = root.surfaces[index]
+    if (!controls || index < 0 || !surface) return
+    const flight = ++galleryFlight
+    controls.enabled = false
+    galleryRig?.dispose()
+    const rig = root.createCameraRig()
+    galleryRig = rig
+    rig.parallax = false
+    void rig.focus(surface, { immediate }).then(ok => {
+      if (galleryFlight !== flight || !ok) return
+      rig.dispose()
+      galleryRig = null
+      controls.target.copy(surface.getWorldPosition(new Vector3()))
+      controls.enabled = true
+      controls.update()
+    })
+  }
   const scenes = { signup: SignUp, world: World, both: Both, gallery: Gallery, perf: Perf, spatial: Spatial }
-  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined, initialLocale: demoLocale } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}) } : mode === 'signup' ? { inspect: true } : undefined).mount()
+  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined, initialLocale: demoLocale, onNavigate: navigateGallery } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}) } : mode === 'signup' ? { inspect: true } : undefined).mount()
   // Vue's initial post-flush effects register Blocks and send the camera rig to the requested focus.
   await nextTick()
+  if (mode === 'gallery') navigateGallery(GALLERY_SECTIONS.find(section => section === params.get('focus')) ?? 'primitives', true)
   const aurora = mode === 'spatial' ? createAuroraDome({ center: [0, 0, GRID.radius], radius: GRID.radius + DOME.out, scheme, ...domeSpan() }) : null
   if (aurora) hostScene.add(aurora.mesh)
   const atmosphere = mode === 'spatial' ? createAuroraVolume([0, 0, GRID.radius]) : null
@@ -145,11 +167,11 @@ async function start(): Promise<UIRoot> {
   handle.root = root
   // A live getter: opening a Dialog adds panel/scrim Surfaces after startup.
   Object.defineProperty(handle, 'surfaces', { get: () => root.surfaces })
-  const names = mode === 'spatial' ? [...BLOCK_NAMES] : mode === 'gallery' ? ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers'] : []
+  const names = mode === 'spatial' ? [...BLOCK_NAMES] : mode === 'gallery' ? [...GALLERY_SECTIONS] : []
   sceneHarness = createSceneHarness(root, new Map(root.surfaces.flatMap((s, i) => names[i] ? [[s, names[i]!] as const] : [])))
   sceneHarness.focus()
   guardOrbit(root)
-  cancelSignupPressOnDrag(root)
+  cancelInspectPressOnDrag(root)
 
   // The first frame is drawn here, not on the first animation frame: `ready` must not depend on rAF (a hidden or
   // occluded tab gets none), and it then resolves with shaders compiled and the first content passes drawn.
@@ -158,8 +180,8 @@ async function start(): Promise<UIRoot> {
   if (mode === 'spatial') for (const type of ['pointermove', 'pointerdown', 'wheel', 'keydown'] as const) renderer.domElement.addEventListener(type, noteInput)
   const step = (t: number): boolean => {
     if (controls) {
-      controls.enableZoom = mode === 'signup' || !root.pointer?.hovered   // sign-up has no scroll region; its wheel inspects the glass
-      controls.update()
+      controls.enableZoom = mode === 'signup' || mode === 'gallery' || !root.pointer?.hovered
+      if (controls.enabled) controls.update()
     }
     const idle = mode === 'spatial' && root.idle
     const pacing = idlePacing(t, idle, lastInput, idleSince)
@@ -204,7 +226,7 @@ async function start(): Promise<UIRoot> {
       const fps = (frames / acc).toFixed(0), draws = renderer.info.render.drawCalls
       stats.textContent = pacedActive
         ? `${root.backend} · idle 15 fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surfaces`
-        : `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surface${root.surfaces.length === 1 ? '' : 's'}${mode === 'signup' ? ' · left pan · right rotate · wheel zoom' : orbit ? ' · drag to orbit' : ''}`
+        : `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surface${root.surfaces.length === 1 ? '' : 's'}${mode === 'signup' || mode === 'gallery' ? ' · left pan · right rotate · wheel zoom' : orbit ? ' · drag to orbit' : ''}`
       frames = 0; acc = 0
     }
   })
@@ -269,8 +291,8 @@ function guardOrbit(root: UIRoot): void {
 
 /** OrbitControls and the form both receive mouse events. Once a left press becomes a pan, cancel its UI press so
  * releasing over a button cannot submit the form. A click without a drag still belongs to the form. */
-function cancelSignupPressOnDrag(root: UIRoot): void {
-  if (mode !== 'signup') return
+function cancelInspectPressOnDrag(root: UIRoot): void {
+  if (mode !== 'signup' && mode !== 'gallery') return
   const canvas = renderer.domElement
   let start: { id: number; x: number; y: number } | null = null
   addEventListener('pointerdown', e => {

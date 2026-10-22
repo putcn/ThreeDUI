@@ -15,7 +15,7 @@ The canvas scenes are designed for a desktop-sized browser window. In a narrow s
 | World surface | [`?scene=world`](http://127.0.0.1:5176/?scene=world) | [`World.vue`](../examples/playground/src/scenes/World.vue) |
 | Screen + world | [`?scene=both`](http://127.0.0.1:5176/?scene=both) | [`Both.vue`](../examples/playground/src/scenes/Both.vue) |
 
-The spatial app has six named Blocks: `orders`, `dashboard`, `network`, `twin`, `inventory`, and `settings`. Add `&focus=<name>` to jump into one without the login step. The gallery's sections are `primitives`, `buttons`, `toggles`, `inputs`, `dialog`, and `containers`; add `&focus=<section>` to open one directly. The gallery controls are interactive: try buttons, switches, text entry, dialogs, and the fused glass toolbar.
+The spatial app has six named Blocks: `orders`, `dashboard`, `network`, `twin`, `inventory`, and `settings`. Add `&focus=<name>` to jump into one without the login step. The gallery's sections are `primitives`, `buttons`, `toggles`, `inputs`, `dialog`, and `containers`; add `&focus=<section>` to open one directly. In the gallery, **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Its section buttons reframe the camera; the component examples remain interactive, including text entry, dialogs, and fused glass.
 
 The standalone sign-up demo places its glass form in world space so you can inspect its thickness: **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Click without dragging to use the form controls. The combined screen + world scene still uses a screen-layer sign-up form.
 

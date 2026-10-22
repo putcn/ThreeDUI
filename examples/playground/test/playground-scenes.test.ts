@@ -163,16 +163,19 @@ describe('Vue playground scenes', () => {
 
   it('makes six fixed gallery Blocks, honors initial focus and navigates with visible controls', async () => {
     const warn = vi.spyOn(console, 'warn')
-    const m = mountGlass(() => h(Gallery, { initialFocus: 'inputs' }), { motion: 'frozen', root: createFakeRoot({ scheme: 'dark' }) }); await settle(m)
+    const onNavigate = vi.fn()
+    const m = mountGlass(() => h(Gallery, { initialFocus: 'inputs', onNavigate }), { motion: 'frozen', root: createFakeRoot({ scheme: 'dark' }) }); await settle(m)
     const ids = ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers']
     expect(m.root.surfacesMade).toHaveLength(6)
     expect(m.root.surfacesMade.every(s => s.created.background === 'glass')).toBe(true)
     const inputs = m.root.surfacesMade.find(s => { let yes = false; s.root.walk(n => { if (n.id === 'inputs') yes = true }); return yes })!
-    expect(m.root.rigs[0]!.focus.mock.lastCall![0]).toBe(inputs)
+    expect(m.root.rigs).toHaveLength(0)
+    expect(m.root.pointer?.active).toBe(inputs)
     for (const id of ids) expect(m.root.surfacesMade.some(s => { let yes = false; s.root.walk(n => { if (n.id === id) yes = true }); return yes })).toBe(true)
     fire(find(inputs.root, 'gallery-inputs-to-dialog'), 'click'); await settle(m)
     const dialog = m.root.surfacesMade.find(s => { let yes = false; s.root.walk(n => { if (n.id === 'dialog') yes = true }); return yes })!
-    expect(m.root.rigs[0]!.focus.mock.lastCall![0]).toBe(dialog)
+    expect(onNavigate).toHaveBeenCalledExactlyOnceWith('dialog')
+    expect(m.root.pointer?.active).toBe(dialog)
     fire(find(dialog.root, 'open-dialog'), 'click'); await settle(m)
     expect(m.root.surfaces.length).toBeGreaterThan(6)
     expect(m.errors).toEqual([]); expect(warn).not.toHaveBeenCalled()
@@ -206,7 +209,8 @@ describe('Vue playground scenes', () => {
         expect(text(surface.root)).toContain(chinese)
         expect(text(surface.root)).not.toContain(english)
       }
-      expect(m.root.rigs[0]!.focus.mock.lastCall![0]).toBe(inputs)
+      expect(m.root.pointer?.active).toBe(inputs)
+      expect(m.root.rigs).toHaveLength(0)
       expect(replaceState.mock.lastCall![2].toString()).toContain('lang=zh')
       expect(m.errors).toEqual([])
       m.app.unmount()
