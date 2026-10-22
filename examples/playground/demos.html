@@ -18,6 +18,10 @@
     nav { display: flex; gap: 26px; align-items: center; font-size: 13px; font-weight: 600; color: #58617b; }
     nav a { text-decoration: none; }
     nav a:hover, nav a:focus-visible { color: #474bc4; }
+    .lang-toggle { flex: none; border: 1px solid #aab3ca; border-radius: 10px; background: #ffffffaa; color: #464d90; padding: 8px 11px; font: inherit; white-space: nowrap; cursor: pointer; }
+    .lang-toggle:hover { background: #fff; }
+    .lang-toggle:focus-visible { outline: 3px solid #6264d6; outline-offset: 3px; }
+    html[lang="en"] [lang="zh-CN"], html[lang="zh-CN"] [lang="en"] { display: none; }
     .intro { padding: clamp(52px, 7vw, 92px) 0 48px; display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(250px, .55fr); align-items: end; gap: 56px; }
     h1 { font-size: clamp(44px, 5.7vw, 78px); line-height: .99; font-weight: 660; letter-spacing: -.075em; max-width: 850px; margin: 0; }
     .intro p { font-size: clamp(16px, 1.4vw, 19px); line-height: 1.5; letter-spacing: -.015em; color: #59637d; margin: 0 0 6px; max-width: 360px; }
@@ -41,7 +45,7 @@
     .signup-preview { width: 100%; height: 155px; margin-top: auto; border-radius: 17px; object-fit: cover; object-position: center 49%; box-shadow: inset 0 0 0 1px #ffffffab; }
     footer { display: flex; flex-wrap: wrap; gap: 18px; padding-top: 35px; color: #69728b; font-size: 13px; }
     footer a { text-decoration: none; color: #505ba0; }
-    @media (max-width: 760px) { .intro, .feature, .tiles { grid-template-columns: 1fr; } .intro { gap: 20px; } .feature img { height: 260px; } .feature { min-height: 0; } .feature-copy { min-height: 360px; } nav { gap: 14px; } nav a:last-child { display: none; } .page { padding-bottom: 48px; } }
+    @media (max-width: 760px) { .intro, .feature, .tiles { grid-template-columns: 1fr; } .intro { gap: 20px; } .feature img { height: 260px; } .feature { min-height: 0; } .feature-copy { min-height: 360px; } nav { gap: 12px; } nav a.project { display: none; } .page { padding-bottom: 48px; } }
     @media (prefers-reduced-motion: no-preference) { .button, .tile a { transition: background-color .15s ease, color .15s ease; } }
   </style>
 </head>
@@ -49,40 +53,73 @@
   <div class="page">
     <header>
       <a class="brand" href="./demos.html"><span class="mark" aria-hidden="true"></span>GlassUI</a>
-      <nav><a href="./?scene=spatial">Spatial demo</a><a href="./?scene=gallery">Components</a><a href="https://github.com/putcn/ThreeDUI">Project</a></nav>
+      <nav>
+        <a data-demo-link href="./?scene=spatial"><span lang="en">Spatial demo</span><span lang="zh-CN">空间演示</span></a>
+        <a data-demo-link href="./?scene=gallery"><span lang="en">Components</span><span lang="zh-CN">组件库</span></a>
+        <a class="project" href="https://github.com/putcn/ThreeDUI"><span lang="en">Project</span><span lang="zh-CN">开源项目</span></a>
+        <button id="lang-toggle" class="lang-toggle" type="button" aria-label="切换到中文">中文</button>
+      </nav>
     </header>
     <main>
       <div class="intro">
-        <h1>Interfaces belong<br>in space.</h1>
-        <p>Build with Vue components, then let controls, data, and 3D content share the same scene. Explore the complete app or inspect the pieces.</p>
+        <h1><span lang="en">Interfaces belong<br>in space.</span><span lang="zh-CN">让界面<br>进入空间。</span></h1>
+        <p><span lang="en">Build with Vue components, then let controls, data, and 3D content share the same scene. Explore the complete app or inspect the pieces.</span><span lang="zh-CN">用 Vue 组件搭建界面，让控件、数据和 3D 内容共享同一个场景。先体验完整应用，再查看每个组件。</span></p>
       </div>
       <section class="feature" aria-labelledby="spatial-title">
         <div class="feature-copy">
-          <span class="kicker">Comprehensive demo</span>
-          <h2 id="spatial-title">A workspace with depth and purpose.</h2>
-          <p>Move between six connected operations views. Follow an exception from its order to the route and warehouse location; inspect charts, a map, and a spatial twin.</p>
-          <div class="actions"><a class="button" href="./?scene=spatial">Start with login</a><a class="button secondary" href="./?scene=spatial&amp;stage=overview">See all views</a></div>
+          <span class="kicker"><span lang="en">Comprehensive demo</span><span lang="zh-CN">综合演示</span></span>
+          <h2 id="spatial-title"><span lang="en">A workspace with depth and purpose.</span><span lang="zh-CN">有深度，也有清晰的工作动线。</span></h2>
+          <p><span lang="en">Move between six connected operations views. Follow an exception from its order to the route and warehouse location; inspect charts, a map, and a spatial twin.</span><span lang="zh-CN">在六个关联的业务视图间移动，从异常订单追溯到路线与库位，查看图表、地图和仓储空间模型。</span></p>
+          <div class="actions"><a class="button" data-demo-link href="./?scene=spatial"><span lang="en">Start with login</span><span lang="zh-CN">从登录开始</span></a><a class="button secondary" data-demo-link href="./?scene=spatial&amp;stage=overview"><span lang="en">See all views</span><span lang="zh-CN">查看六视图总览</span></a></div>
         </div>
-        <img src="./images/spatial-overview.jpg" alt="Six connected application views floating over a shared spatial background" />
+        <img src="./images/spatial-overview.jpg" alt="Six connected application views / 六个相连的空间业务视图" />
       </section>
       <div class="tiles">
         <section class="tile" aria-labelledby="gallery-title">
-          <span class="kicker">Component library</span>
-          <h3 id="gallery-title">See every control work.</h3>
-          <p>Primitives, button variants, toggles, text entry, dialogs, and fused glass containers. Each example is a live Vue component.</p>
-          <img class="gallery-preview" src="./images/gallery.jpg" alt="Live GlassUI gallery showing text, color tokens, icons, and layout components" />
-          <a href="./?scene=gallery">Open component gallery <span aria-hidden="true">↗</span></a>
+          <span class="kicker"><span lang="en">Component library</span><span lang="zh-CN">组件库</span></span>
+          <h3 id="gallery-title"><span lang="en">See every control work.</span><span lang="zh-CN">亲手试用每个控件。</span></h3>
+          <p><span lang="en">Primitives, button variants, toggles, text entry, dialogs, and fused glass containers. Each example is a live Vue component.</span><span lang="zh-CN">基础元件、按钮、开关、文字输入、对话框与融合玻璃容器，都是可交互的 Vue 组件。</span></p>
+          <img class="gallery-preview" src="./images/gallery.jpg" alt="Live GlassUI component gallery / 可交互的 GlassUI 组件库" />
+          <a data-demo-link href="./?scene=gallery"><span lang="en">Open component gallery</span><span lang="zh-CN">打开组件库</span> <span aria-hidden="true">↗</span></a>
         </section>
         <section class="tile" aria-labelledby="signup-title">
-          <span class="kicker">Focused example</span>
-          <h3 id="signup-title">Look closer at glass.</h3>
-          <p>A sign-up form shows how thickness, lighting, shadows, and input work together. Left-drag to pan, right-drag to rotate, and scroll to zoom.</p>
-          <img class="signup-preview" src="./images/signup-depth.jpg" alt="Close view of the glass sign-up form" />
-          <a href="./?scene=signup">Open sign-up demo <span aria-hidden="true">↗</span></a>
+          <span class="kicker"><span lang="en">Focused example</span><span lang="zh-CN">单独体验</span></span>
+          <h3 id="signup-title"><span lang="en">Look closer at glass.</span><span lang="zh-CN">从不同角度看玻璃。</span></h3>
+          <p><span lang="en">A sign-up form shows how thickness, lighting, shadows, and input work together. Left-drag to pan, right-drag to rotate, and scroll to zoom.</span><span lang="zh-CN">注册表单展示厚度、光照、投影和输入如何协同工作。左键拖动平移，右键旋转，滚轮缩放。</span></p>
+          <img class="signup-preview" src="./images/signup-depth.jpg" alt="Glass sign-up form / 玻璃注册表单" />
+          <a data-demo-link href="./?scene=signup"><span lang="en">Open sign-up demo</span><span lang="zh-CN">打开注册演示</span> <span aria-hidden="true">↗</span></a>
         </section>
       </div>
     </main>
-    <footer><span>Local playground · sample data</span><a href="https://github.com/putcn/ThreeDUI">Source on GitHub</a></footer>
+    <footer><span lang="en">Local playground · sample data · no live service</span><span lang="zh-CN">本地演示 · 示例数据 · 不连接线上服务</span><a href="https://github.com/putcn/ThreeDUI"><span lang="en">Source on GitHub</span><span lang="zh-CN">GitHub 源码</span></a></footer>
   </div>
+  <script>
+    const toggle = document.getElementById('lang-toggle')
+    const requested = new URLSearchParams(location.search).get('lang')
+    let saved = null
+    try { saved = localStorage.getItem('glassui-demo-language') } catch { /* URL and browser language still work. */ }
+    let locale = ['zh', 'en'].includes(requested) ? requested
+      : ['zh', 'en'].includes(saved) ? saved : navigator.language.toLowerCase().startsWith('zh') ? 'zh' : 'en'
+    function applyLanguage() {
+      try { localStorage.setItem('glassui-demo-language', locale) } catch { /* Keep the choice in the URL. */ }
+      const current = new URL(location.href)
+      current.searchParams.set('lang', locale)
+      history.replaceState(null, '', current)
+      document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en'
+      toggle.textContent = locale === 'zh' ? 'EN' : '中文'
+      toggle.setAttribute('aria-label', locale === 'zh' ? 'Switch to English' : '切换到中文')
+      document.title = locale === 'zh' ? 'GlassUI · 演示导航' : 'GlassUI · Explore the demos'
+      document.querySelector('meta[name="description"]').content = locale === 'zh'
+        ? '探索 GlassUI：六视图空间应用、可交互的 Vue 组件库和玻璃注册表单。'
+        : 'Explore GlassUI: a spatial application, an interactive Vue component gallery, and a focused glass form demo.'
+      for (const link of document.querySelectorAll('[data-demo-link]')) {
+        const url = new URL(link.href)
+        url.searchParams.set('lang', locale)
+        link.href = url.href
+      }
+    }
+    toggle.addEventListener('click', () => { locale = locale === 'zh' ? 'en' : 'zh'; applyLanguage() })
+    applyLanguage()
+  </script>
 </body>
 </html>

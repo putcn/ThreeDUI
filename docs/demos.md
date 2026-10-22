@@ -2,6 +2,8 @@
 
 Run `pnpm install && pnpm playground` from the repository root. The server listens on `http://127.0.0.1:5176`; the [demo index](http://127.0.0.1:5176/demos.html) is the easiest entry point. These demos run from source and use local sample data.
 
+The demo index and component gallery have a visible 中文 / EN switch. The choice follows the gallery link and is saved for the next visit. To pick a language directly, add `?lang=zh` or `?lang=en` to `demos.html`, or `&lang=zh|en` to the gallery URL. The gallery keeps its current section and control state when you switch.
+
 The canvas scenes are designed for a desktop-sized browser window. In a narrow sidebar pane, the fixed-size gallery Blocks shrink to fit; open the demo in a full browser window to inspect controls and text.
 
 | Scene | URL | Source |

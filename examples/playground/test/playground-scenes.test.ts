@@ -178,4 +178,40 @@ describe('Vue playground scenes', () => {
     expect(m.errors).toEqual([]); expect(warn).not.toHaveBeenCalled()
     m.app.unmount(); warn.mockRestore()
   })
+
+  it('switches gallery copy without leaving the current section', async () => {
+    const replaceState = vi.fn()
+    vi.stubGlobal('location', { href: 'http://localhost/?scene=gallery&focus=inputs&lang=en' })
+    vi.stubGlobal('history', { replaceState })
+    vi.stubGlobal('document', { documentElement: { lang: 'en' } })
+    vi.stubGlobal('localStorage', { setItem: vi.fn() })
+    try {
+      const m = mountGlass(() => h(Gallery, { initialFocus: 'inputs', initialLocale: 'en' }), { motion: 'frozen' }); await settle(m)
+      const inputs = m.root.surfacesMade.find(s => { let yes = false; s.root.walk(n => { if (n.id === 'inputs') yes = true }); return yes })!
+      const localized = [
+        ['primitives', 'TEXT · type scale', '文字 TEXT'],
+        ['buttons', 'Five variants', '五种外观'],
+        ['toggles', 'click, Enter', '点按、Enter'],
+        ['inputs', 'native input proxy', '输入法、复制粘贴'],
+        ['dialog', 'dimmed backdrop', '暗化背景'],
+        ['containers', 'Nearby glass', '相距小于 spacing'],
+      ] as const
+      for (const [id, english] of localized) {
+        const surface = m.root.surfacesMade.find(s => { let yes = false; s.root.walk(n => { if (n.id === id) yes = true }); return yes })!
+        expect(text(surface.root)).toContain(english)
+      }
+      fire(find(inputs.root, 'gallery-inputs-language'), 'click'); await settle(m)
+      for (const [id, english, chinese] of localized) {
+        const surface = m.root.surfacesMade.find(s => { let yes = false; s.root.walk(n => { if (n.id === id) yes = true }); return yes })!
+        expect(text(surface.root)).toContain(chinese)
+        expect(text(surface.root)).not.toContain(english)
+      }
+      expect(m.root.rigs[0]!.focus.mock.lastCall![0]).toBe(inputs)
+      expect(replaceState.mock.lastCall![2].toString()).toContain('lang=zh')
+      expect(m.errors).toEqual([])
+      m.app.unmount()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

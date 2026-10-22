@@ -12,6 +12,7 @@ import { createUIRoot, QUALITY, type QualityTier, type Surface, type UIRoot } fr
 import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
 import Gallery from './gallery/Gallery.vue'
+import { getDemoLocale } from './demo-locale'
 import Spatial from './scenes/Spatial.vue'
 import { BLOCK_NAMES, BLOCKS, DOME, GRID, SLOTS, SPATIAL_CAMERA_FAR, WALL, domeSpan } from './scenes/spatial-grid'
 import { createAuroraDome } from './aurora'
@@ -43,6 +44,8 @@ const params = new URLSearchParams(location.search)
 const forceWebGL = params.has('webgl')
 const sceneParam = params.get('scene')
 const mode: SceneMode = SCENES.find(s => s === sceneParam) ?? 'both'
+const demoLocale = mode === 'gallery' ? getDemoLocale() : undefined
+if (demoLocale) document.documentElement.lang = demoLocale === 'zh' ? 'zh-CN' : 'en'
 const scheme = params.get('scheme') === 'dark' ? 'dark' : 'light'
 const motion = params.get('motion') === 'frozen' ? 'frozen' : 'live'
 const stageParam = params.get('stage'), initialStage = stageParam === 'login' || stageParam === 'overview' ? stageParam : undefined
@@ -124,7 +127,7 @@ async function start(): Promise<UIRoot> {
   root.setScheme(scheme)
   root.on('error', e => console.error('[glassui]', e.surface?.name ?? '(no Surface)', e.error))
   const scenes = { signup: SignUp, world: World, both: Both, gallery: Gallery, perf: Perf, spatial: Spatial }
-  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}) } : mode === 'signup' ? { inspect: true } : undefined).mount()
+  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined, initialLocale: demoLocale } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}) } : mode === 'signup' ? { inspect: true } : undefined).mount()
   // Vue's initial post-flush effects register Blocks and send the camera rig to the requested focus.
   await nextTick()
   const aurora = mode === 'spatial' ? createAuroraDome({ center: [0, 0, GRID.radius], radius: GRID.radius + DOME.out, scheme, ...domeSpan() }) : null
