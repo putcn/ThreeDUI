@@ -15,7 +15,7 @@ The canvas scenes are designed for a desktop-sized browser window. In a narrow s
 | World surface | [`?scene=world`](http://127.0.0.1:5176/?scene=world) | [`World.vue`](../examples/playground/src/scenes/World.vue) |
 | Screen + world | [`?scene=both`](http://127.0.0.1:5176/?scene=both) | [`Both.vue`](../examples/playground/src/scenes/Both.vue) |
 
-The spatial app has six named Blocks: `orders`, `dashboard`, `network`, `twin`, `inventory`, and `settings`. Add `&focus=<name>` to jump into one without the login step. The gallery's sections are `primitives`, `buttons`, `toggles`, `inputs`, `dialog`, and `containers`; add `&focus=<section>` to open one directly. In the gallery, **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Its section buttons reframe the camera; the component examples remain interactive, including text entry, dialogs, and fused glass.
+The spatial app has six named Blocks: `orders`, `dashboard`, `network`, `twin`, `inventory`, and `settings`. It starts with a prefilled, valid sample login; click **登录** to enter. In empty scene space, **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Dragging or scrolling a view still operates its table or map. Add `&focus=<name>` to jump into one without the login step when developing locally. The gallery's sections are `primitives`, `buttons`, `toggles`, `inputs`, `dialog`, and `containers`; add `&focus=<section>` to open one directly. In the gallery, **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Its fixed bottom navigation reframes the camera; the component examples remain interactive, including text entry, dialogs, and fused glass.
 
 The standalone sign-up demo places its glass form in world space so you can inspect its thickness: **left-drag pans**, **right-drag rotates**, and **the wheel zooms**. Click without dragging to use the form controls. The combined screen + world scene still uses a screen-layer sign-up form.
 
@@ -29,4 +29,4 @@ Useful shared parameters:
 | `webgl` | Force the WebGL2 backend instead of WebGPU detection. |
 | `hud=0` | Hide the performance HUD. |
 
-`pnpm playground:build` writes a static multi-page build to `examples/playground/dist`, including `demos.html` and the canvas demo. The public [sign-up concept](https://fortbrain.ai/concepts/glassui-signup/) uses the same interactive playground build, with editable fields and camera controls. The [six-view concept](https://fortbrain.ai/concepts/glassui-spatial/) opens its spatial overview.
+`pnpm playground:build` writes a static multi-page build to `examples/playground/dist`, including `demos.html` and the canvas demo. The public [sign-up concept](https://fortbrain.ai/concepts/glassui-signup/) uses the same interactive playground build, with editable fields and camera controls. The public [six-view concept](https://fortbrain.ai/concepts/glassui-spatial/) always starts at its prefilled demo login.

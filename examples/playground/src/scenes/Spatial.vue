@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef } from 'vue'
 import { Block, Space, Surface } from '@glassui/vue'
 import Dashboard from '../wms/Dashboard.vue'
 import Network from '../wms/Network.vue'
@@ -17,19 +17,23 @@ import type { PlaceHover } from '../wms/map'
 import { initialFlow, loginSucceeded, arrived, chose, autoZoom, loggedOut, type Flow } from '../wms/flow'
 import { BLOCKS, BLOCK_SCALE, GRID, inFrameOf, NETWORK, PANEL, PLACE_PANEL, SLOT_BY_NAME, TRACE_PANEL, TWIN } from './spatial-grid'
 
-const props = defineProps<{ initialFocus?: string; initialStage?: 'login' | 'overview' }>()
+const props = defineProps<{ initialFocus?: string; initialStage?: 'login' | 'overview'; onCameraMove?: () => void; onCameraArrive?: (name: string | null) => void }>()
 const flow = ref<Flow>(initialFlow({ ...(props.initialStage ? { stage: props.initialStage } : {}), ...(props.initialFocus ? { focus: props.initialFocus } : {}) }))
 const focus = computed(() => flow.value.focus)
+const cameraEnabled = ref(true)
+function moveCamera(): void { props.onCameraMove?.(); cameraEnabled.value = true }
 if (typeof window !== 'undefined') (window as Window & { __glassuiSpatialFocus?: () => string | null }).__glassuiSpatialFocus = () => flow.value.focus
 let autoTimer: ReturnType<typeof setTimeout> | undefined
-function onChoose(name: string | null): void { clearTimeout(autoTimer); flow.value = chose(flow.value, name) }
+function onChoose(name: string | null): void { clearTimeout(autoTimer); moveCamera(); flow.value = chose(flow.value, name) }
 function onArrive(name: string | null): void {
+  cameraEnabled.value = false
+  void nextTick(() => props.onCameraArrive?.(name))
   const result = arrived(flow.value, name)
   flow.value = result.flow
-  if (result.autoZoomIn !== null) { clearTimeout(autoTimer); autoTimer = setTimeout(() => { flow.value = autoZoom(flow.value) }, result.autoZoomIn) }
+  if (result.autoZoomIn !== null) { clearTimeout(autoTimer); autoTimer = setTimeout(() => { moveCamera(); flow.value = autoZoom(flow.value) }, result.autoZoomIn) }
 }
-function login(): void { clearTimeout(autoTimer); flow.value = loginSucceeded(flow.value) }
-function logout(): void { clearTimeout(autoTimer); flow.value = loggedOut(flow.value); hovered.value = null; place.value = null; traceOrder.value = null }
+function login(): void { clearTimeout(autoTimer); moveCamera(); flow.value = loginSucceeded(flow.value) }
+function logout(): void { clearTimeout(autoTimer); moveCamera(); flow.value = loggedOut(flow.value); hovered.value = null; place.value = null; traceOrder.value = null }
 const hovered = shallowRef<Bin | null>(null), place = shallowRef<PlaceHover | null>(null)
 const panel = inFrameOf(TWIN, PANEL.offset), placePanel = { left: inFrameOf(NETWORK, PLACE_PANEL.offset.left), right: inFrameOf(NETWORK, PLACE_PANEL.offset.right) }
 const traceOrder = shallowRef<Order | null>(null)
@@ -48,7 +52,7 @@ onBeforeUnmount(() => { clearTimeout(autoTimer); if (typeof window !== 'undefine
 </script>
 
 <template>
-  <Space :focus="focus" :radius="GRID.radius" :gap="GRID.gap" :camera-margin="GRID.cameraMargin" layout="grid" :columns="GRID.columns" overview :standby="flow.stage === 'login'" @update:focus="onChoose" @arrive="onArrive">
+  <Space :focus="focus" :radius="GRID.radius" :gap="GRID.gap" :camera-margin="GRID.cameraMargin" :camera="cameraEnabled" :parallax="false" layout="grid" :columns="GRID.columns" overview :standby="flow.stage === 'login'" @update:focus="onChoose" @arrive="onArrive">
     <Block name="orders" :width="BLOCKS.orders.width" :height="BLOCKS.orders.height" :position="SLOT_BY_NAME.orders.position" :rotation="SLOT_BY_NAME.orders.rotation" :unfocused-opacity="0.32"><Orders @navigate="go" @trace="startTrace"/></Block>
     <Block name="dashboard" :width="BLOCKS.dashboard.width" :height="BLOCKS.dashboard.height" :position="SLOT_BY_NAME.dashboard.position" :rotation="SLOT_BY_NAME.dashboard.rotation" :scale="BLOCK_SCALE.dashboard" :unfocused-opacity="0.32"><Dashboard @navigate="go"/></Block>
     <Block name="network" :width="BLOCKS.network.width" :height="BLOCKS.network.height" :position="NETWORK.position" :rotation="NETWORK.rotation" :unfocused-opacity="0.32"><Network :active="focus === 'network'" :trace-warehouse-id="traceOrder ? 'WH-1' : null" :trace-lane-id="traceOrder ? traceLane : null" @hover="p => (place = p)" @navigate="go"/></Block>

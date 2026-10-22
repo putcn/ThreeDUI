@@ -152,11 +152,11 @@ describe('the WMS scene', () => {
       surface.events.dispatch(t!, 'click', {}); await nextTick(); await flush()
     }
     await click(s.dock, '订单')
-    expect(s.root.rigs[0]!.focus.mock.lastCall![0]).toBe(s.orders)
+    expect(s.root.rigs.at(-1)!.focus.mock.lastCall![0]).toBe(s.orders)
     await click(s.dock, '仓储孪生')
-    expect(s.root.rigs[0]!.focus.mock.lastCall![0]).toBe(s.twin)
+    expect(s.root.rigs.at(-1)!.focus.mock.lastCall![0]).toBe(s.twin)
     await click(s.twin, '总览')
-    expect(s.root.rigs[0]!.frame).toHaveBeenCalled()
+    expect(s.root.rigs.at(-1)!.frame).toHaveBeenCalled()
   })
 
   it('hovering a bin floats the glass info panel in front of the twin, showing the bin; leaving the model hides it', async () => {
@@ -323,7 +323,7 @@ describe('the network Block', () => {
     expect(s.network.restPose.position.map(v => +v.toFixed(9))).toEqual(NETWORK.position.map(v => +v.toFixed(9)))
     expect(s.network.restPose.rotation[1]).toBeCloseTo(NETWORK.rotation[1], 9)
     expect(s.network.restPose.position).toEqual(SLOTS[2]!.position)
-    expect(s.root.rigs[0]!.focus.mock.lastCall![0]).toBe(s.network)
+    expect(s.root.rigs.at(-1)!.focus.mock.lastCall![0]).toBe(s.network)
     const t = await scene('twin')
     expect(t.twin.restPose.position).toEqual(TWIN.position)
   })

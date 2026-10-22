@@ -28,7 +28,7 @@ test('gallery supports pan, rotate, zoom, and section navigation', async ({ page
   await page.mouse.up({ button: 'right' })
   await expect.poll(async () => distance((await pose()).quaternion, zoomed.quaternion)).toBeGreaterThan(0.02)
 
-  const nav = await page.evaluate(() => (window.__glassui as unknown as { rectOf(id: string): { cx: number; cy: number } | null }).rectOf('gallery-primitives-to-buttons'))
+  const nav = await page.evaluate(() => (window.__glassui as unknown as { rectOf(id: string): { cx: number; cy: number } | null }).rectOf('gallery-nav-to-buttons'))
   expect(nav).not.toBeNull()
   await page.mouse.click(nav!.cx, nav!.cy)
   await expect.poll(() => page.evaluate(() => (window.__glassui as unknown as { focus(): string | null }).focus())).toBe('buttons')
@@ -40,4 +40,15 @@ test('gallery supports pan, rotate, zoom, and section navigation', async ({ page
   await page.mouse.move(730, 110, { steps: 8 })
   await page.mouse.up({ button: 'left' })
   await expect.poll(async () => distance((await pose()).position, reframed.position)).toBeGreaterThan(0.1)
+
+  const navAfterPan = await page.evaluate(() => (window.__glassui as unknown as { rectOf(id: string): { cx: number; cy: number } | null }).rectOf('gallery-nav-to-buttons'))
+  expect(navAfterPan).not.toBeNull()
+  expect(Math.hypot(navAfterPan!.cx - nav!.cx, navAfterPan!.cy - nav!.cy)).toBeLessThan(1)
+  for (const section of ['containers', 'primitives', 'containers', 'inputs']) {
+    const button = await page.evaluate(name => (window.__glassui as unknown as { rectOf(id: string): { cx: number; cy: number } | null }).rectOf(`gallery-nav-to-${name}`), section)
+    expect(button).not.toBeNull()
+    await page.mouse.click(button!.cx, button!.cy)
+    await expect.poll(() => page.evaluate(() => (window.__glassui as unknown as { focus(): string | null }).focus())).toBe(section)
+    if (section === 'containers') await expect.poll(() => page.evaluate(() => (window.__glassui as unknown as { rectOf(id: string): unknown }).rectOf('containers-tabs'))).not.toBeNull()
+  }
 })

@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { GlassTransition, Surface, useRoot } from '@glassui/vue'
 import SignUpForm from '../scenes/SignUpForm.vue'
-import { validateLogin } from './forms'
+import { DEMO_LOGIN, validateLogin } from './forms'
 import { loginScale, loginTilt } from './login-motion'
 const emit = defineEmits<{ success: [] }>()
 const root = useRoot()
@@ -29,7 +29,7 @@ function submit(value: { email: string; password: string }): void {
 <template>
   <GlassTransition preset="scale">
     <Surface layer="screen" center :width="885" :height="560" background="glass" :radius="40" :scale="scale" :rotation="tilt">
-      <SignUpForm mode="login" :loading="loading" :errors="errors" submit-id="login-submit" submit-label="登录" @submit="submit" />
+      <SignUpForm mode="login" :initial-email="DEMO_LOGIN.email" :initial-password="DEMO_LOGIN.password" :loading="loading" :errors="errors" submit-id="login-submit" submit-label="登录" @submit="submit" />
     </Surface>
   </GlassTransition>
 </template>

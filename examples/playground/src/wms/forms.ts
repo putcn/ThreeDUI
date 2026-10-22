@@ -1,5 +1,8 @@
 import type { Order } from './data'
 
+/** Local sample credentials only; the demo has no account service. */
+export const DEMO_LOGIN = { email: 'demo@fortbrain.ai', password: 'Demo2026!' } as const
+
 export interface InboundForm {
   supplier: string; poNumber: string
   sku0: string; qty0: string; sku1: string; qty1: string; sku2: string; qty2: string

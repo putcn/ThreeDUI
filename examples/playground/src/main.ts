@@ -1,13 +1,13 @@
 // Canvas-only Vue playground. ?scene=signup|world|both|gallery|perf|spatial; ?focus=<Block name> (gallery/spatial).
 // ?scheme=light|dark, ?motion=frozen|live, ?quality=high|medium|low|minimal|auto, ?webgl, ?hud=0.
-// Signup and gallery use OrbitControls for inspection; gallery navigation briefly uses a camera rig.
+// Signup, gallery and spatial use OrbitControls for inspection; gallery/spatial navigation uses a camera rig.
 
 import { nextTick } from 'vue'
 import { Color, MOUSE, PerspectiveCamera, Raycaster, Scene, Vector2, Vector3, type Mesh } from 'three'
 import { WebGPURenderer } from 'three/webgpu'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { absoluteRect, type Node, type Rect } from '@glassui/core'
-import { createUIRoot, QUALITY, type CameraRig, type QualityTier, type Surface, type UIRoot } from '@glassui/render'
+import { createUIRoot, framePose, QUALITY, type CameraRig, type QualityTier, type Surface, type UIRoot } from '@glassui/render'
 // the orbit guard's own raycast and the host scene's studio environment: no public equivalents
 import { createStudioEnvironment, hitSurfaces } from '@glassui/render/internal'
 import { createGlassApp } from '@glassui/vue'
@@ -80,22 +80,21 @@ camera.lookAt(0, -0.05, 0)
 if (mode !== 'spatial' && mode !== 'gallery') hostScene.add(createWall(scheme))
 hostScene.add(...createHostLights())
 
-const orbit = mode === 'signup' || mode === 'world' || mode === 'both' || mode === 'gallery'
-// Spatial's Space owns its camera. Gallery's Space only manages layout/focus; its host hands the camera between a
-// short-lived navigation rig and OrbitControls so both never write the pose in one frame.
-const controls = mode === 'spatial' ? null : new OrbitControls(camera, renderer.domElement)
+const orbit = mode === 'signup' || mode === 'world' || mode === 'both' || mode === 'gallery' || mode === 'spatial'
+// Gallery's host rig and Spatial's Space rig hand the camera to OrbitControls after navigation settles.
+const controls = new OrbitControls(camera, renderer.domElement)
+let spatialOrbitReady = false
 if (controls) {
   controls.target.set(0, -0.05, 0)
   controls.enableDamping = true
-  controls.enabled = orbit
-  if (mode === 'signup' || mode === 'gallery') {
+  controls.enabled = orbit && mode !== 'spatial'
+  if (mode === 'signup' || mode === 'gallery' || mode === 'spatial') {
     controls.mouseButtons = { LEFT: MOUSE.PAN, MIDDLE: MOUSE.DOLLY, RIGHT: MOUSE.ROTATE }
-    controls.minDistance = mode === 'gallery' ? 3 : 4
-    controls.maxDistance = mode === 'gallery' ? 22 : 14
+    controls.minDistance = mode === 'spatial' ? 4 : mode === 'gallery' ? 3 : 4
+    controls.maxDistance = mode === 'spatial' ? 130 : mode === 'gallery' ? 22 : 14
     controls.minPolarAngle = 0.45
     controls.maxPolarAngle = Math.PI - 0.45
-    controls.minAzimuthAngle = -1.35
-    controls.maxAzimuthAngle = 1.35
+    if (mode === 'signup') { controls.minAzimuthAngle = -1.35; controls.maxAzimuthAngle = 1.35 }
   }
 }
 
@@ -142,13 +141,26 @@ async function start(): Promise<UIRoot> {
       if (galleryFlight !== flight || !ok) return
       rig.dispose()
       galleryRig = null
-      controls.target.copy(surface.getWorldPosition(new Vector3()))
+      controls.target.copy(surface.localToWorld(new Vector3(0, 0, surface.contentPlaneZ)))
       controls.enabled = true
       controls.update()
     })
   }
+  const moveSpatialCamera = (): void => { spatialOrbitReady = false; controls.enabled = false }
+  const arriveSpatialCamera = (name: string | null): void => {
+    const surface = name ? root.surfaces[BLOCK_NAMES.findIndex(block => block === name)] : null
+    if (surface) controls.target.copy(surface.localToWorld(new Vector3(0, 0, surface.contentPlaneZ)))
+    else {
+      const blocks = root.surfaces.slice(0, BLOCK_NAMES.length)
+      if (blocks.length !== BLOCK_NAMES.length) return
+      controls.target.copy(framePose(blocks, camera.getEffectiveFOV(), camera.aspect, GRID.cameraMargin, 1, { position: new Vector3(), quaternion: camera.quaternion.clone() }))
+    }
+    controls.enabled = true
+    spatialOrbitReady = true
+    controls.update()
+  }
   const scenes = { signup: SignUp, world: World, both: Both, gallery: Gallery, perf: Perf, spatial: Spatial }
-  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined, initialLocale: demoLocale, onNavigate: navigateGallery } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}) } : mode === 'signup' ? { inspect: true } : undefined).mount()
+  createGlassApp(scenes[mode], { root, motion }, mode === 'gallery' ? { initialFocus: params.get('focus') ?? undefined, initialLocale: demoLocale, onNavigate: navigateGallery } : mode === 'spatial' ? { ...(params.has('focus') ? { initialFocus: params.get('focus')! } : {}), ...(initialStage ? { initialStage } : {}), onCameraMove: moveSpatialCamera, onCameraArrive: arriveSpatialCamera } : mode === 'signup' ? { inspect: true } : undefined).mount()
   // Vue's initial post-flush effects register Blocks and send the camera rig to the requested focus.
   await nextTick()
   if (mode === 'gallery') navigateGallery(GALLERY_SECTIONS.find(section => section === params.get('focus')) ?? 'primitives', true)
@@ -161,7 +173,7 @@ async function start(): Promise<UIRoot> {
   }
   if (atmosphere) hostScene.add(atmosphere.group)
   if (mode === 'gallery') {
-    const angles = root.surfaces.map(s => Math.atan2(s.restPose.position[0], 10 - s.restPose.position[2]))
+    const angles = root.surfaces.filter(s => s.model.placement === 'world').map(s => Math.atan2(s.restPose.position[0], 10 - s.restPose.position[2]))
     hostScene.add(createCurvedWall({ center: [0, 0, 10], radius: 10 + WALL.out, from: Math.min(...angles) - WALL.margin, to: Math.max(...angles) + WALL.margin, height: WALL.height, scheme }))
   }
   handle.root = root
@@ -226,7 +238,7 @@ async function start(): Promise<UIRoot> {
       const fps = (frames / acc).toFixed(0), draws = renderer.info.render.drawCalls
       stats.textContent = pacedActive
         ? `${root.backend} · idle 15 fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surfaces`
-        : `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surface${root.surfaces.length === 1 ? '' : 's'}${mode === 'signup' || mode === 'gallery' ? ' · left pan · right rotate · wheel zoom' : orbit ? ' · drag to orbit' : ''}`
+        : `${root.backend} · ${fps} fps · ${draws} draws · ${root.quality.tier} · ${root.surfaces.length} surface${root.surfaces.length === 1 ? '' : 's'}${mode === 'signup' || mode === 'gallery' ? ' · left pan · right rotate · wheel zoom' : mode === 'spatial' ? ' · drag empty space to pan/rotate · wheel zoom' : orbit ? ' · drag to orbit' : ''}`
       frames = 0; acc = 0
     }
   })
@@ -275,16 +287,17 @@ function rectOf(id: string): NodeRect | null {
  * world Surface going.
  */
 function guardOrbit(root: UIRoot): void {
-  if (!controls || (mode !== 'world' && mode !== 'both')) return
+  if (mode !== 'world' && mode !== 'both' && mode !== 'spatial') return
   const canvas = renderer.domElement, raycaster = new Raycaster(), ndc = new Vector2()
   addEventListener('pointerdown', e => {
     if (e.target !== canvas || !e.isPrimary) return
+    if (mode === 'spatial' && !spatialOrbitReady) return
     const r = canvas.getBoundingClientRect()
     ndc.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1)
     raycaster.setFromCamera(ndc, camera)
     controls.enabled = !hitSurfaces(raycaster, root.surfaces)
   }, { capture: true })
-  const release = (e: PointerEvent): void => { if (e.isPrimary) controls.enabled = true }
+  const release = (e: PointerEvent): void => { if (e.isPrimary) controls.enabled = mode !== 'spatial' || spatialOrbitReady }
   addEventListener('pointerup', release)
   addEventListener('pointercancel', release)
 }

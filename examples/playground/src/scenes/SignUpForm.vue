@@ -2,11 +2,11 @@
 import { computed, ref } from 'vue'
 import { Box, Button, Checkbox, Icon, Input, Stack, Switch, Text, useScheme } from '@glassui/vue'
 
-const props = defineProps<{ loading?: boolean; errors?: { email?: string; password?: string }; submitId?: string; submitLabel?: string; mode?: 'signup' | 'login' }>()
+const props = defineProps<{ loading?: boolean; errors?: { email?: string; password?: string }; submitId?: string; submitLabel?: string; mode?: 'signup' | 'login'; initialEmail?: string; initialPassword?: string }>()
 const emit = defineEmits<{ submit: [value: { name: string; email: string; password: string; terms: boolean; remember: boolean }] }>()
 const scheme = useScheme()
 const body = computed(() => scheme.value === 'dark' ? 'label' : '#3a3a48')
-const name = ref(''), email = ref(''), password = ref(''), terms = ref(true), remember = ref(true)
+const name = ref(''), email = ref(props.mode === 'login' ? props.initialEmail ?? '' : ''), password = ref(props.mode === 'login' ? props.initialPassword ?? '' : ''), terms = ref(true), remember = ref(true)
 const submit = () => { if (!props.loading) emit('submit', { name: name.value, email: email.value, password: password.value, terms: terms.value, remember: remember.value }) }
 const errorStyle = { position: 'absolute' as const, top: 85, left: 26, height: 22 }
 </script>
@@ -16,7 +16,7 @@ const errorStyle = { position: 'absolute' as const, top: 85, left: 26, height: 2
   <Stack id="signup-form" :gap="0" :style="{ width: 885, height: props.mode === 'login' ? 560 : 1045, paddingLeft: 52, paddingRight: 73, paddingTop: props.mode === 'login' ? 28 : 44 }">
     <Stack :gap="6">
       <Text id="title" :value="props.mode === 'login' ? '云仓 WMS' : 'Create your account'" :size="44" :weight="700" color="label" :style="{ height: 56 }" />
-      <Text id="subtitle" :value="props.mode === 'login' ? '欢迎回来，请登录您的仓储管理账户。' : '开始 14 天免费试用，无需信用卡。'" :size="22" :weight="500" color="secondaryLabel" :style="{ height: 32 }" />
+      <Text id="subtitle" :value="props.mode === 'login' ? '示例账号已填写，点击登录进入工作区。' : '开始 14 天免费试用，无需信用卡。'" :size="22" :weight="500" color="secondaryLabel" :style="{ height: 32 }" />
     </Stack>
     <Button id="close" shape="circle" :style="{ position: 'absolute', left: 782, top: 54, width: 52, height: 52, glass: { scatter: 0.5 } }"><Icon name="x" :size="24" color="secondaryLabel" /></Button>
     <Box :style="{ height: props.mode === 'login' ? 18 : 45, flexShrink: 0 }" />

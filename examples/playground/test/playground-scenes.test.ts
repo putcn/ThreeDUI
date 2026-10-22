@@ -74,6 +74,14 @@ describe('Vue playground scenes', () => {
     m.app.unmount()
   })
 
+  it('submits the prefilled demo login without typing', () => {
+    const submit = vi.fn()
+    const m = mountInSurface(() => h(SignUpForm, { mode: 'login', initialEmail: 'demo@fortbrain.ai', initialPassword: 'Demo2026!', onSubmit: submit }), { motion: 'frozen' })
+    fire(find(m.c, 'submit'), 'click')
+    expect(submit.mock.calls[0]?.[0]).toMatchObject({ email: 'demo@fortbrain.ai', password: 'Demo2026!' })
+    m.app.unmount()
+  })
+
   it('keeps the remember ID on an actionable 136 × 62 target and its separate label toggles too', async () => {
     const submit = vi.fn()
     const m = mountInSurface(() => h(SignUpForm, { onSubmit: submit }), { motion: 'frozen' })
@@ -166,18 +174,24 @@ describe('Vue playground scenes', () => {
     const onNavigate = vi.fn()
     const m = mountGlass(() => h(Gallery, { initialFocus: 'inputs', onNavigate }), { motion: 'frozen', root: createFakeRoot({ scheme: 'dark' }) }); await settle(m)
     const ids = ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'containers']
-    expect(m.root.surfacesMade).toHaveLength(6)
+    expect(m.root.surfacesMade).toHaveLength(7)
     expect(m.root.surfacesMade.every(s => s.created.background === 'glass')).toBe(true)
+    const nav = m.root.surfacesMade.find(s => s.created.layer === 'screen')!
+    expect(nav.created).toMatchObject({ left: 250, top: 812, width: 780, height: 64 })
     const inputs = m.root.surfacesMade.find(s => { let yes = false; s.root.walk(n => { if (n.id === 'inputs') yes = true }); return yes })!
     expect(m.root.rigs).toHaveLength(0)
     expect(m.root.pointer?.active).toBe(inputs)
     for (const id of ids) expect(m.root.surfacesMade.some(s => { let yes = false; s.root.walk(n => { if (n.id === id) yes = true }); return yes })).toBe(true)
-    fire(find(inputs.root, 'gallery-inputs-to-dialog'), 'click'); await settle(m)
+    expect(() => find(inputs.root, 'gallery-nav-to-dialog')).toThrow(/missing/)
+    fire(find(nav.root, 'gallery-nav-to-dialog'), 'click'); await settle(m)
     const dialog = m.root.surfacesMade.find(s => { let yes = false; s.root.walk(n => { if (n.id === 'dialog') yes = true }); return yes })!
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith('dialog')
     expect(m.root.pointer?.active).toBe(dialog)
+    fire(find(nav.root, 'gallery-nav-to-containers'), 'click'); await settle(m)
+    fire(find(nav.root, 'gallery-nav-to-primitives'), 'click'); await settle(m)
+    expect(onNavigate.mock.calls.map(call => call[0])).toEqual(['dialog', 'containers', 'primitives'])
     fire(find(dialog.root, 'open-dialog'), 'click'); await settle(m)
-    expect(m.root.surfaces.length).toBeGreaterThan(6)
+    expect(m.root.surfaces.length).toBeGreaterThan(7)
     expect(m.errors).toEqual([]); expect(warn).not.toHaveBeenCalled()
     m.app.unmount(); warn.mockRestore()
   })
@@ -203,7 +217,8 @@ describe('Vue playground scenes', () => {
         const surface = m.root.surfacesMade.find(s => { let yes = false; s.root.walk(n => { if (n.id === id) yes = true }); return yes })!
         expect(text(surface.root)).toContain(english)
       }
-      fire(find(inputs.root, 'gallery-inputs-language'), 'click'); await settle(m)
+      const nav = m.root.surfacesMade.find(s => s.created.layer === 'screen')!
+      fire(find(nav.root, 'gallery-nav-language'), 'click'); await settle(m)
       for (const [id, english, chinese] of localized) {
         const surface = m.root.surfacesMade.find(s => { let yes = false; s.root.walk(n => { if (n.id === id) yes = true }); return yes })!
         expect(text(surface.root)).toContain(chinese)

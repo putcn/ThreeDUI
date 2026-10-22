@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // Six navigable Blocks on one arc; all controls remain real Vue components.
-import { computed, h, onBeforeUnmount, ref, type FunctionalComponent } from 'vue'
-import { Box, Button, Checkbox, Dialog, GlassContainer, Icon, ICON_NAMES, Input, Stack, Block, Space, Switch, Text, useScheme } from '@glassui/vue'
+import { computed, h, onBeforeUnmount, onMounted, ref, type FunctionalComponent } from 'vue'
+import { Box, Button, Checkbox, Dialog, GlassContainer, Icon, ICON_NAMES, Input, Stack, Block, Space, Surface, Switch, Text, useScheme } from '@glassui/vue'
 import { setDemoLocale, type DemoLocale } from '../demo-locale'
 
 const scheme = useScheme()
@@ -11,6 +11,13 @@ const sections = ['primitives', 'buttons', 'toggles', 'inputs', 'dialog', 'conta
 const props = defineProps<{ initialFocus?: string; initialLocale?: DemoLocale; onNavigate?: (section: string) => void }>()
 const focus = ref(sections.find(s => s === props.initialFocus) ?? 'primitives')
 const navigate = (section: (typeof sections)[number]) => { if (section !== focus.value) { focus.value = section; props.onNavigate?.(section) } }
+const viewport = ref({ width: typeof window === 'undefined' ? 1280 : window.innerWidth, height: typeof window === 'undefined' ? 900 : window.innerHeight })
+const onResize = () => { viewport.value = { width: window.innerWidth, height: window.innerHeight } }
+onMounted(() => { if (typeof window !== 'undefined') window.addEventListener('resize', onResize) })
+onBeforeUnmount(() => { if (typeof window !== 'undefined') window.removeEventListener('resize', onResize) })
+const navWidth = computed(() => Math.min(780, Math.max(296, viewport.value.width - 24)))
+const navLeft = computed(() => Math.round((viewport.value.width - navWidth.value) / 2))
+const navTop = computed(() => Math.max(12, viewport.value.height - 88))
 const locale = ref<DemoLocale>(props.initialLocale ?? 'en')
 const tr = (zh: string, en: string) => locale.value === 'zh' ? zh : en
 const sectionNames: Record<(typeof sections)[number], { zh: string; en: string }> = {
@@ -111,12 +118,7 @@ const cancelRename = () => { outcome.value = tr('已取消', 'Cancelled'); renam
 <template>
   <Space v-model:focus="focus" :radius="10" :gap="0.3" :camera="false">
     <Block name="primitives" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
-      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
-        <Text :value="tr('组件库', 'Gallery')" :size="20" :weight="700" :style="{ marginRight: 16 }" />
-        <Button v-for="section in sections" :id="`gallery-primitives-to-${section}`" :key="section" :label="sectionLabel(section)" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="navigate(section)" />
-        <Button id="gallery-primitives-language" :label="locale === 'zh' ? 'EN' : '中文'" size="small" variant="plain" @press="toggleLocale" />
-      </Stack>
-      <scroll id="gallery-primitives-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+      <scroll id="gallery-primitives-scroll" :style="{ height: 920, flexShrink: 0, overflow: 'scroll' }">
         <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
           <Stack id="primitives" :gap="24">
         <Stack :gap="12">
@@ -236,12 +238,7 @@ const cancelRename = () => { outcome.value = tr('已取消', 'Cancelled'); renam
       </scroll>
     </Block>
     <Block name="buttons" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
-      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
-        <Text :value="tr('组件库', 'Gallery')" :size="20" :weight="700" :style="{ marginRight: 16 }" />
-        <Button v-for="section in sections" :id="`gallery-buttons-to-${section}`" :key="section" :label="sectionLabel(section)" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="navigate(section)" />
-        <Button id="gallery-buttons-language" :label="locale === 'zh' ? 'EN' : '中文'" size="small" variant="plain" @press="toggleLocale" />
-      </Stack>
-      <scroll id="gallery-buttons-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+      <scroll id="gallery-buttons-scroll" :style="{ height: 920, flexShrink: 0, overflow: 'scroll' }">
         <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
           <Stack id="buttons" :gap="24">
         <Stack :gap="12">
@@ -308,12 +305,7 @@ const cancelRename = () => { outcome.value = tr('已取消', 'Cancelled'); renam
       </scroll>
     </Block>
     <Block name="toggles" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
-      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
-        <Text :value="tr('组件库', 'Gallery')" :size="20" :weight="700" :style="{ marginRight: 16 }" />
-        <Button v-for="section in sections" :id="`gallery-toggles-to-${section}`" :key="section" :label="sectionLabel(section)" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="navigate(section)" />
-        <Button id="gallery-toggles-language" :label="locale === 'zh' ? 'EN' : '中文'" size="small" variant="plain" @press="toggleLocale" />
-      </Stack>
-      <scroll id="gallery-toggles-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+      <scroll id="gallery-toggles-scroll" :style="{ height: 920, flexShrink: 0, overflow: 'scroll' }">
         <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
           <Stack id="toggles" :gap="24">
         <Stack :gap="12">
@@ -377,12 +369,7 @@ const cancelRename = () => { outcome.value = tr('已取消', 'Cancelled'); renam
       </scroll>
     </Block>
     <Block name="inputs" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
-      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
-        <Text :value="tr('组件库', 'Gallery')" :size="20" :weight="700" :style="{ marginRight: 16 }" />
-        <Button v-for="section in sections" :id="`gallery-inputs-to-${section}`" :key="section" :label="sectionLabel(section)" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="navigate(section)" />
-        <Button id="gallery-inputs-language" :label="locale === 'zh' ? 'EN' : '中文'" size="small" variant="plain" @press="toggleLocale" />
-      </Stack>
-      <scroll id="gallery-inputs-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+      <scroll id="gallery-inputs-scroll" :style="{ height: 920, flexShrink: 0, overflow: 'scroll' }">
         <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
           <Stack id="inputs" :gap="24">
         <Stack :gap="12">
@@ -444,12 +431,7 @@ const cancelRename = () => { outcome.value = tr('已取消', 'Cancelled'); renam
       </scroll>
     </Block>
     <Block name="dialog" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
-      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
-        <Text :value="tr('组件库', 'Gallery')" :size="20" :weight="700" :style="{ marginRight: 16 }" />
-        <Button v-for="section in sections" :id="`gallery-dialog-to-${section}`" :key="section" :label="sectionLabel(section)" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="navigate(section)" />
-        <Button id="gallery-dialog-language" :label="locale === 'zh' ? 'EN' : '中文'" size="small" variant="plain" @press="toggleLocale" />
-      </Stack>
-      <scroll id="gallery-dialog-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+      <scroll id="gallery-dialog-scroll" :style="{ height: 920, flexShrink: 0, overflow: 'scroll' }">
         <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
           <Stack id="dialog" :gap="24">
         <Stack :gap="12">
@@ -481,12 +463,7 @@ const cancelRename = () => { outcome.value = tr('已取消', 'Cancelled'); renam
       </scroll>
     </Block>
     <Block name="containers" :width="1440" :height="1000" :style="{ padding: 40, gap: 20, height: 1000 }">
-      <Stack direction="horizontal" :gap="10" align="center" :style="{ height: 44, flexShrink: 0 }">
-        <Text :value="tr('组件库', 'Gallery')" :size="20" :weight="700" :style="{ marginRight: 16 }" />
-        <Button v-for="section in sections" :id="`gallery-containers-to-${section}`" :key="section" :label="sectionLabel(section)" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="navigate(section)" />
-        <Button id="gallery-containers-language" :label="locale === 'zh' ? 'EN' : '中文'" size="small" variant="plain" @press="toggleLocale" />
-      </Stack>
-      <scroll id="gallery-containers-scroll" :style="{ height: 856, flexShrink: 0, overflow: 'scroll' }">
+      <scroll id="gallery-containers-scroll" :style="{ height: 920, flexShrink: 0, overflow: 'scroll' }">
         <Box :style="{ flexShrink: 0, paddingBottom: 32 }">
           <Stack id="containers" :gap="24">
         <Stack :gap="12">
@@ -542,4 +519,12 @@ const cancelRename = () => { outcome.value = tr('已取消', 'Cancelled'); renam
       </scroll>
     </Block>
   </Space>
+  <Surface layer="screen" :left="navLeft" :top="navTop" :width="navWidth" :height="64" background="glass" :radius="32" :cast-shadows="false">
+    <scroll id="gallery-nav-scroll" :style="{ width: navWidth, height: 64, overflow: 'scroll' }">
+      <Stack direction="horizontal" :gap="8" align="center" justify="center" :style="{ width: 760, height: 64, padding: 8 }">
+        <Button v-for="section in sections" :id="`gallery-nav-to-${section}`" :key="section" :label="sectionLabel(section)" size="small" :variant="focus === section ? 'glassProminent' : 'glass'" @press="navigate(section)" />
+        <Button id="gallery-nav-language" :label="locale === 'zh' ? 'EN' : '中文'" size="small" variant="plain" @press="toggleLocale" />
+      </Stack>
+    </scroll>
+  </Surface>
 </template>

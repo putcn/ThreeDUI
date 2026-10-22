@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { filterOrders, inboundNumber, validateInbound, validateLogin, type InboundForm } from '../src/wms/forms'
+import { DEMO_LOGIN, filterOrders, inboundNumber, validateInbound, validateLogin, type InboundForm } from '../src/wms/forms'
 import { orders } from '../src/wms/data'
 
 const blank: InboundForm = {
@@ -11,6 +11,7 @@ describe('WMS form helpers', () => {
   it('validates login email and password', () => {
     expect(validateLogin({ email: 'a@b', password: '12345' })).toEqual({ email: '请输入有效的邮箱地址', password: '密码至少 6 位' })
     expect(validateLogin({ email: 'li@yuncang.cn', password: '123456' })).toEqual({})
+    expect(validateLogin(DEMO_LOGIN)).toEqual({})
   })
 
   it('validates inbound fields and each SKU row', () => {
