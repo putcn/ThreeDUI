@@ -32,6 +32,7 @@ const EN: Record<string, string> = {
   '单': 'orders', '件': 'units', '天': 'days', '单/时': 'orders/h', '单位：单/时': 'Unit: orders/h', '至': 'to', '2026年10月15日 周四': 'Thu, Oct 15, 2026',
   '个仓库': 'warehouses', '家门店': 'stores', '家供应商': 'suppliers', '在途': 'in transit', '逾期': 'overdue', '万件': '×10k units',
   '排': 'rows', '利用率': 'utilization', '占用率': 'Occupancy', '应拣': 'Required', '实际': 'actual', '当前': 'currently', '少于订单所需': 'below order requirement', '邮箱地址': 'Email address', '密码': 'Password',
+  '指向曲面查看数值': 'Hover over the surface to inspect values', '指向柱子查看数值': 'Hover over a bar to inspect values',
   '王敏': 'Min Wang', '徐州': 'Xuzhou', '上海': 'Shanghai', '浙江': 'Zhejiang',
   '禾谷生鲜': 'Hegu Fresh', '星河超市·黄楼店': 'Xinghe Market · Huanglou', '青禾母婴': 'Qinghe Baby', '优格家居旗舰店': 'Youge Home Flagship', '蓝鲸日化': 'Blue Whale Care', '鹿野咖啡': 'Luye Coffee', '北辰数码': 'Beichen Digital', '木子文具': 'Muzi Stationery',
   '贾汪中转仓': 'Jiawang Transit Warehouse', '禾丰供应链': 'Hefeng Supply Chain', '鼎沃贸易': 'Dingwo Trading',

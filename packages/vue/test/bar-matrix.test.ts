@@ -73,6 +73,10 @@ it('BarMatrix3D colours by colorValues over their own min..max: the least cell t
   await mounted(two, { rows: ROWS, cols: COLS, values: V, colorValues: [[5, 5, 5], [5, 5, 5]], colorRamp: ['#000000', '#ffffff'] })
   expect(two.barMatrices[0]!.set.mock.lastCall![0].colors[0]![0]).toEqual([0.5, 0.5, 0.5, 1])
 })
+it('BarMatrix3D accepts a readout hint for localized interfaces', async () => {
+  const root = createFakeRoot(), s = await mounted(root, { rows: ROWS, cols: COLS, values: V, hint: 'Hover over a bar' })
+  expect(readout(s.attached[0]!.node)).toBe('Hover over a bar')
+})
 it('BarMatrix3D: colorRamp takes tokens, resolved for the scheme and again when it changes', async () => {
   const root = createFakeRoot()
   await mounted(root, { rows: ROWS, cols: COLS, values: V, colorValues: D, colorRamp: ['success', 'danger'] })
@@ -227,7 +231,7 @@ it('BarMatrix3D is registered with complete manifest metadata', () => {
   expect(c).toBeDefined()
   expect(c.glass.description.length).toBeGreaterThan(40); expect(c.glass.examples.length).toBeGreaterThanOrEqual(2); expect(c.glass.examples.length).toBeLessThanOrEqual(3)
   const shape = c.glass.props.shape as Record<string, { description?: string }>
-  expect(Object.keys(shape).sort()).toEqual(['colorFormat', 'colorLabel', 'colorRamp', 'colorValues', 'cols', 'format', 'height', 'max', 'rows', 'values'])
+  expect(Object.keys(shape).sort()).toEqual(['colorFormat', 'colorLabel', 'colorRamp', 'colorValues', 'cols', 'format', 'height', 'hint', 'max', 'rows', 'values'])
   for (const [k, s] of Object.entries(shape)) expect(s.description, `BarMatrix3D.${k}`).toMatch(/[一-鿿]/)
   expect(shape.max!.description).toMatch(/封顶/)
   expect(shape.colorRamp!.description).toContain('#34c759')

@@ -54,6 +54,15 @@ it('SurfaceChart3D: an explicit max and ramp are used; a max no nice step reache
   await mounted(odd, { xLabels: X, yLabels: Y, values: V, max: 245 })
   expect(odd.surfaceCharts[0]!.labels).toHaveBeenLastCalledWith({ x: X, y: Y, ticks: ['0', '122.5', '245'] })
 })
+it('SurfaceChart3D accepts a reactive readout hint for localized interfaces', async () => {
+  const root = createFakeRoot(), hint = ref('Hover to inspect values')
+  mountGlass(() => inBlock(() => h(SurfaceChart3D, { xLabels: X, yLabels: Y, values: V, hint: hint.value })), { root })
+  await flush(); root.tick(); await flush()
+  const vp = root.surfacesMade[0]!.attached[0]!.node
+  expect(readout(vp)).toBe('Hover to inspect values')
+  hint.value = '指向曲面查看数值'; await nextTick(); await flush()
+  expect(readout(vp)).toBe('指向曲面查看数值')
+})
 it('SurfaceChart3D attaches the chart to a box of its height; depth is the chart\'s own rise at any width; update is the chart\'s', async () => {
   const root = createFakeRoot()
   const s = await mounted(root, { xLabels: X, yLabels: Y, values: V, height: 300 })

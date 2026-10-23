@@ -73,7 +73,7 @@ const figure = (k: (typeof kpis)[number], index: number) => [
         <Text :value="t('近 14 天出库热力')" :size="17" :weight="600" />
         <Text :value="`${t('单位：单/时')} · ${heat.days[0]} ${t('至')} ${heat.days.at(-1)}`" :size="13" color="tertiaryLabel" />
       </Stack>
-      <SurfaceChart3D :x-labels="heat.hours.map(t)" :y-labels="heat.days" :values="heat.values" :format="orders" :height="CHART" />
+      <SurfaceChart3D :x-labels="heat.hours.map(t)" :y-labels="heat.days" :values="heat.values" :format="orders" :hint="t('指向曲面查看数值')" :height="CHART" />
       <Stack direction="horizontal" :gap="12" :style="{ height: 26, alignItems: 'center' }">
         <Stack v-for="s in heatSummary" :key="s.label" direction="horizontal" align="center" :gap="8" :style="{ flexGrow: 1, flexBasis: 0, justifyContent: 'center' }">
           <Text :value="s.label" :size="13" color="secondaryLabel" :wrap="false" />
@@ -88,7 +88,7 @@ const figure = (k: (typeof kpis)[number], index: number) => [
       </Stack>
       <BarMatrix3D
         :rows="stock.rows.map(t)" :cols="stock.cols.map(t)" :values="stock.values" :color-values="stock.cover"
-        :color-label="t('周转')" :color-format="days" :format="pieces" :height="CHART"
+        :color-label="t('周转')" :color-format="days" :format="pieces" :hint="t('指向柱子查看数值')" :height="CHART"
       />
     </Card>
   </Stack>

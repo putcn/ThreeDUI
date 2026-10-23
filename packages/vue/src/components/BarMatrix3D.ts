@@ -37,6 +37,7 @@ const BarMatrix3DProps = z.object({
   max: z.number().positive().finite().optional().describe('满高对应的数值；默认把最大值向上取到好看的刻度顶（4580 → 5000、17 → 20；全为 0 时取 1）。比它大的数值按它封顶（柱子不会更高，读数仍显示原值）'),
   format: formatFn.optional().describe('读数里数值的写法 (v: number) => string，如 v => `${v.toLocaleString()} 件`；默认最多两位小数（1.5、2、0.33）'),
   colorFormat: formatFn.optional().describe('读数与图例里 colorValues 的写法 (v: number) => string，如 v => `${v} 天`；默认最多两位小数'),
+  hint: z.string().optional().describe('未悬停柱子时读数行的提示；默认“指向柱子查看数值”'),
   height: z.number().positive().default(280).describe('图表区高度，pt（不含下方 20 pt 的读数行与有 colorValues 时 28 pt 的图例）；宽度撑满'),
 }).superRefine((x, ctx) => {
   const shape = (key: 'values' | 'colorValues', m: number[][], rows: number, why: string): void => {
@@ -106,10 +107,10 @@ export const BarMatrix3D = defineGlassComponent({
   /** The readout under the matrix: "row · col · value · colorLabel colour value" for the hovered bar, else the hint. */
   const readout = (x: Props): VNode => {
     const c = hovered.value, r = c && reading(c)
-    if (!r) return readoutRow(null, HINT)
+    if (!r) return readoutRow(null, x.hint ?? HINT)
     const parts = [{ text: r.rowLabel, color: 'secondaryLabel' }, { text: r.colLabel, color: 'secondaryLabel' }, { text: (x.format ?? formatValue)(r.value), weight: 600 }]
     if (r.colorValue !== undefined) parts.push({ text: `${x.colorLabel ? `${x.colorLabel} ` : ''}${(x.colorFormat ?? formatValue)(r.colorValue)}`, color: 'secondaryLabel' })
-    return readoutRow(parts, HINT)
+    return readoutRow(parts, x.hint ?? HINT)
   }
 
   /**

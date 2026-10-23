@@ -197,6 +197,15 @@
           "description": "读数与图例里 colorValues 的写法 (v: number) => string，如 v => `${v} 天`；默认最多两位小数"
         },
         {
+          "name": "hint",
+          "type": {
+            "description": "未悬停柱子时读数行的提示；默认“指向柱子查看数值”",
+            "type": "string"
+          },
+          "required": false,
+          "description": "未悬停柱子时读数行的提示；默认“指向柱子查看数值”"
+        },
+        {
           "name": "height",
           "type": {
             "default": 280,
@@ -2268,6 +2277,15 @@
           },
           "required": false,
           "description": "刻度与读数里数值的写法 (v: number) => string，如 v => `${v} 单`；默认最多两位小数（1.5、2、0.33）"
+        },
+        {
+          "name": "hint",
+          "type": {
+            "description": "未悬停数据点时读数行的提示；默认“指向曲面查看数值”",
+            "type": "string"
+          },
+          "required": false,
+          "description": "未悬停数据点时读数行的提示；默认“指向曲面查看数值”"
         },
         {
           "name": "height",

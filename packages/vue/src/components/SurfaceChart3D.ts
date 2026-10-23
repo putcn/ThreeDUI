@@ -23,6 +23,7 @@ const SurfaceChart3DProps = z.object({
   ramp: z.array(z.string()).min(2).max(6).optional().describe(
     '色带：2–6 个颜色 token 或 #hex，从低到高；曲面每个点按 数值 / max 在色带上取色。默认 ["#cfd8ff", "#a59bff", "accent", "#c2185b"]（淡蓝紫 → 主题色 → 深品红）'),
   format: formatFn.optional().describe('刻度与读数里数值的写法 (v: number) => string，如 v => `${v} 单`；默认最多两位小数（1.5、2、0.33）'),
+  hint: z.string().optional().describe('未悬停数据点时读数行的提示；默认“指向曲面查看数值”'),
   height: z.number().positive().default(280).describe('图表区高度，pt（不含下方 20 pt 的读数行）；宽度撑满'),
 }).superRefine((x, ctx) => {
   if (x.values.length === 0) return
@@ -78,7 +79,7 @@ export const SurfaceChart3D = defineGlassComponent({
   /** The readout under the chart: "y · x · value" for the hovered cell, else the hint. */
   const readout = (x: Props): VNode => {
     const c = hovered.value, r = c && reading(c)
-    return readoutRow(r && [{ text: r.y, color: 'secondaryLabel' }, { text: r.x, color: 'secondaryLabel' }, { text: (x.format ?? formatValue)(r.value), weight: 600 }], HINT)
+    return readoutRow(r && [{ text: r.y, color: 'secondaryLabel' }, { text: r.x, color: 'secondaryLabel' }, { text: (x.format ?? formatValue)(r.value), weight: 600 }], x.hint ?? HINT)
   }
 
   return () => {
